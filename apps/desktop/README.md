@@ -23,16 +23,19 @@ apps/desktop/
 │   ├── main.ts     # Electron 主进程入口
 │   └── renderer.ts # 页面交互和服务端 API 调用
 ├── package.json
+├── pnpm-lock.yaml
+├── pnpm-workspace.yaml # 仅用于 pnpm 11 allowBuilds，不连接 server
 └── tsconfig.json
 ```
 
 ## 开发命令
 
 ```bash
+pnpm install
 pnpm dev
 ```
 
-启动 Electron 客户端。
+安装依赖并启动 Electron 客户端。
 
 ```bash
 pnpm build

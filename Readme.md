@@ -1,18 +1,16 @@
 # DogeBot
 
-DogeBot 是一个基于 pnpm workspace 管理的 monorepo，当前包含一个 Node.js 服务端和一个 Electron 桌面客户端。服务端负责用户登录、SQLite 数据持久化、飞书机器人绑定，以及为每个已绑定机器人维护独立的飞书长连接；桌面客户端用于登录服务端并管理飞书机器人绑定。
+DogeBot 仓库当前包含一个 Node.js 服务端和一个 Electron 桌面客户端。两者按独立项目管理，各自有自己的 `package.json`、`pnpm-lock.yaml` 和 `node_modules`；服务端负责用户登录、SQLite 数据持久化、飞书机器人绑定，以及为每个已绑定机器人维护独立的飞书长连接；桌面客户端用于登录服务端并管理飞书机器人绑定。
 
 ## 项目结构
 
 ```text
 DogeBot/
 ├── apps/
-│   ├── server/    # Node.js 服务端
-│   └── desktop/   # Electron 桌面客户端
+│   ├── server/    # Node.js 服务端，独立 pnpm 项目
+│   └── desktop/   # Electron 桌面客户端，独立 pnpm 项目
 ├── common/        # 保留的 Rush 配置
 ├── package.json
-├── pnpm-lock.yaml
-├── pnpm-workspace.yaml
 └── rush.json
 ```
 
@@ -23,43 +21,26 @@ DogeBot/
 
 ## 快速开始
 
-安装依赖：
+安装并启动服务端：
 
 ```bash
-cd /Users/bytedance/flux2/DogeBot
+cd /Users/bytedance/flux2/DogeBot/apps/server
 pnpm install
+pnpm add-user admin 'change-me'
+pnpm dev
 ```
 
-构建全部应用：
+安装并启动桌面客户端：
 
 ```bash
-pnpm build
+cd /Users/bytedance/flux2/DogeBot/apps/desktop
+pnpm install
+pnpm dev
 ```
 
-注意：Rush 配置仍保留，但日常开发默认使用 pnpm workspace。请先在仓库根目录执行 `pnpm install`，之后可以在 `apps/server` 或 `apps/desktop` 目录直接执行 `pnpm dev`、`pnpm build` 等脚本。
+注意：日常不要在根目录执行 `pnpm install`。`apps/server` 和 `apps/desktop` 是两个独立 pnpm 项目，分别在各自目录安装依赖和运行脚本。
 
 如果需要临时使用保留的 Rush 配置，可以在根目录执行 `pnpm rush:update` 或 `pnpm rush:build`。
-
-创建服务端用户：
-
-```bash
-cd apps/server
-pnpm add-user admin 'change-me'
-```
-
-启动服务端：
-
-```bash
-cd apps/server
-pnpm dev
-```
-
-启动桌面客户端：
-
-```bash
-cd apps/desktop
-pnpm dev
-```
 
 ## 服务端能力
 
@@ -141,12 +122,13 @@ pnpm dev
 ```bash
 cd /www/wwwroot
 git clone <your-repo-url> DogeBot
-cd DogeBot
-pnpm install --filter @dogebot/server --prod
+cd DogeBot/apps/server
+pnpm install
 pnpm build
+pnpm prune --prod
 ```
 
-如果服务器也需要构建桌面端或完整开发环境，可以改用 `pnpm install` 安装整个 workspace。
+`pnpm prune --prod` 会在构建后移除 `typescript`、`tsx` 等开发依赖，减少服务端长期运行时的磁盘占用。如果你在本地构建后只上传 `dist`，服务器上也可以只执行 `pnpm install --prod`。
 
 创建固定数据目录。SQLite 数据库建议放在项目目录外，避免后续更新代码时误删：
 
@@ -185,14 +167,16 @@ pm2 save
 ```bash
 cd /www/wwwroot/DogeBot
 git pull
-pnpm install --filter @dogebot/server --prod
+cd apps/server
+pnpm install
 pnpm build
+pnpm prune --prod
 pm2 restart dogebot-server --update-env
 ```
 
 注意事项：
 
-- 不要在 `apps/server` 目录里执行 `npm install` 或让宝塔自动用 npm 安装依赖；本项目依赖由 pnpm workspace 在根目录统一管理，服务器只运行服务端时推荐使用 `pnpm install --filter @dogebot/server --prod` 减少磁盘占用。
+- 不要在根目录执行 `pnpm install`，也不要让宝塔自动用 npm 安装依赖；服务端是独立项目，应在 `apps/server` 目录执行 `pnpm install`。构建完成后可执行 `pnpm prune --prod` 减少磁盘占用。
 - `better-sqlite3` 是 native 依赖，首次 `pnpm install` 需要服务器具备基础编译环境；如果安装失败，先在宝塔/系统里安装 `python3`、`make`、`gcc/g++`。
 - 如果只给桌面客户端内网访问，可以不配置宝塔反向代理；如果需要公网访问登录 API，再在宝塔里反向代理到 `http://127.0.0.1:3000`，并配置 HTTPS。
 - 飞书长连接只需要服务器能主动访问公网，不需要配置公网 webhook URL。
@@ -200,8 +184,8 @@ pm2 restart dogebot-server --update-env
 ## 常用命令
 
 ```bash
-pnpm install      # 安装/更新依赖并刷新 lockfile
-pnpm build        # 构建所有 app
+cd apps/server && pnpm install   # 安装服务端依赖
+cd apps/desktop && pnpm install  # 安装桌面端依赖
 ```
 
 在 `apps/server` 中：

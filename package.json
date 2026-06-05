@@ -3,13 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@11.3.0",
-  "description": "pnpm workspace for DogeBot server and Electron desktop client.",
+  "description": "DogeBot repository root. Server and desktop apps are installed independently.",
   "scripts": {
-    "build": "pnpm --filter @dogebot/server --filter @dogebot/desktop build",
-    "server:dev": "pnpm --filter @dogebot/server dev",
-    "server:start": "pnpm --filter @dogebot/server start",
-    "server:add-user": "pnpm --filter @dogebot/server add-user",
-    "desktop:dev": "pnpm --filter @dogebot/desktop dev",
     "rush": "rush",
     "rush:update": "rush update",
     "rush:build": "rush build"

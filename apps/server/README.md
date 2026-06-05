@@ -26,6 +26,8 @@ apps/server/
 │   ├── feishuOnboard.ts    # 飞书扫码创建机器人注册流程
 │   └── index.ts           # Express 服务入口
 ├── package.json
+├── pnpm-lock.yaml
+├── pnpm-workspace.yaml  # 仅用于 pnpm 11 allowBuilds，不连接 desktop
 └── tsconfig.json
 ```
 
@@ -53,7 +55,7 @@ pnpm start
 pnpm add-user <用户名> <密码>
 ```
 
-创建本地登录用户。请先在仓库根目录执行 `pnpm install`，之后可在 `apps/server` 目录直接运行该命令。
+创建本地登录用户。请先在 `apps/server` 目录执行 `pnpm install`，之后直接运行该命令。
 
 ## 环境变量
 
@@ -70,12 +72,13 @@ pnpm add-user <用户名> <密码>
 ```bash
 cd /www/wwwroot
 git clone <your-repo-url> DogeBot
-cd DogeBot
-pnpm install --filter @dogebot/server --prod
+cd DogeBot/apps/server
+pnpm install
 pnpm build
+pnpm prune --prod
 ```
 
-如果服务器也需要构建桌面端或完整开发环境，可以改用 `pnpm install` 安装整个 workspace。
+`pnpm prune --prod` 会在构建后移除 `typescript`、`tsx` 等开发依赖，减少服务端长期运行时的磁盘占用。如果你在本地构建后只上传 `dist`，服务器上也可以只执行 `pnpm install --prod`。
 
 创建固定数据目录和管理员用户：
 
@@ -114,14 +117,16 @@ pm2 save
 ```bash
 cd /www/wwwroot/DogeBot
 git pull
-pnpm install --filter @dogebot/server --prod
+cd apps/server
+pnpm install
 pnpm build
+pnpm prune --prod
 pm2 restart dogebot-server --update-env
 ```
 
 部署注意事项：
 
-- 不要在 `apps/server` 下执行 `npm install`，也不要让宝塔对 app 目录自动用 npm 安装依赖；依赖必须在仓库根目录通过 pnpm 管理，服务器只运行服务端时推荐使用 `pnpm install --filter @dogebot/server --prod` 减少磁盘占用。
+- 不要在仓库根目录执行 `pnpm install`，也不要让宝塔自动用 npm 安装依赖；服务端是独立项目，依赖必须在 `apps/server` 目录通过 `pnpm install` 管理。构建完成后可执行 `pnpm prune --prod` 减少磁盘占用。
 - SQLite 数据目录建议固定为项目外的 `/www/wwwroot/DogeBot-data`，这样更新或重建项目不会丢数据库。
 - 飞书长连接是服务端主动连接飞书，不要求服务器有公网入口；但桌面客户端需要能访问 `PORT` 对应的 HTTP API。
 - 如果桌面客户端走公网访问，建议在宝塔里配置反向代理到 `http://127.0.0.1:3000` 并开启 HTTPS。
