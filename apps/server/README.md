@@ -20,7 +20,7 @@ apps/server/
 │   └── add-user.ts        # 创建本地登录用户
 ├── src/
 │   ├── auth.ts            # 密码哈希、登录鉴权、token 生成和校验
-│   ├── db.ts              # SQLite 初始化、表结构和轻量迁移
+│   ├── db.ts              # SQLite 初始化和表结构
 │   ├── feishu.ts          # 飞书 bot API、消息处理、/users 命令
 │   ├── feishuConnection.ts # 飞书 WebSocket 长连接管理
 │   ├── feishuOnboard.ts    # 飞书扫码创建机器人注册流程
@@ -32,28 +32,28 @@ apps/server/
 ## 开发命令
 
 ```bash
-npx rushx dev
+pnpm dev
 ```
 
 以 watch 模式启动服务端。
 
 ```bash
-npx rushx build
+pnpm build
 ```
 
 执行 TypeScript 编译。
 
 ```bash
-npx rushx start
+pnpm start
 ```
 
 运行编译后的服务端。
 
 ```bash
-npx rushx add-user <用户名> <密码>
+pnpm add-user <用户名> <密码>
 ```
 
-创建本地登录用户。不要直接使用 `pnpm add-user`，它会触发 pnpm 自身的依赖检查流程；Rush 项目里应通过 `npx rushx` 运行项目脚本。
+创建本地登录用户。请先在仓库根目录执行 `pnpm install`，之后可在 `apps/server` 目录直接运行该命令。
 
 ## 环境变量
 
@@ -71,16 +71,18 @@ npx rushx add-user <用户名> <密码>
 cd /www/wwwroot
 git clone <your-repo-url> DogeBot
 cd DogeBot
-npx rush update
-npx rush build
+pnpm install --filter @dogebot/server --prod
+pnpm build
 ```
+
+如果服务器也需要构建桌面端或完整开发环境，可以改用 `pnpm install` 安装整个 workspace。
 
 创建固定数据目录和管理员用户：
 
 ```bash
 mkdir -p /www/wwwroot/DogeBot-data
 cd /www/wwwroot/DogeBot/apps/server
-DOGEBOT_DATA_DIR=/www/wwwroot/DogeBot-data npx rushx add-user admin 'change-me'
+DOGEBOT_DATA_DIR=/www/wwwroot/DogeBot-data pnpm add-user admin 'change-me'
 ```
 
 宝塔 Node 项目建议配置：
@@ -112,14 +114,14 @@ pm2 save
 ```bash
 cd /www/wwwroot/DogeBot
 git pull
-npx rush update
-npx rush build
+pnpm install --filter @dogebot/server --prod
+pnpm build
 pm2 restart dogebot-server --update-env
 ```
 
 部署注意事项：
 
-- 不要在 `apps/server` 下执行 `npm install`、`pnpm install`、`pnpm dev`，也不要让宝塔对 app 目录自动安装依赖；依赖必须在仓库根目录通过 `npx rush update` 管理。
+- 不要在 `apps/server` 下执行 `npm install`，也不要让宝塔对 app 目录自动用 npm 安装依赖；依赖必须在仓库根目录通过 pnpm 管理，服务器只运行服务端时推荐使用 `pnpm install --filter @dogebot/server --prod` 减少磁盘占用。
 - SQLite 数据目录建议固定为项目外的 `/www/wwwroot/DogeBot-data`，这样更新或重建项目不会丢数据库。
 - 飞书长连接是服务端主动连接飞书，不要求服务器有公网入口；但桌面客户端需要能访问 `PORT` 对应的 HTTP API。
 - 如果桌面客户端走公网访问，建议在宝塔里配置反向代理到 `http://127.0.0.1:3000` 并开启 HTTPS。

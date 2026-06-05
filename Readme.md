@@ -1,6 +1,6 @@
 # DogeBot
 
-DogeBot 是一个基于 Rush 管理的 monorepo，当前包含一个 Node.js 服务端和一个 Electron 桌面客户端。服务端负责用户登录、SQLite 数据持久化、飞书机器人绑定，以及为每个已绑定机器人维护独立的飞书长连接；桌面客户端用于登录服务端并管理飞书机器人绑定。
+DogeBot 是一个基于 pnpm workspace 管理的 monorepo，当前包含一个 Node.js 服务端和一个 Electron 桌面客户端。服务端负责用户登录、SQLite 数据持久化、飞书机器人绑定，以及为每个已绑定机器人维护独立的飞书长连接；桌面客户端用于登录服务端并管理飞书机器人绑定。
 
 ## 项目结构
 
@@ -9,8 +9,10 @@ DogeBot/
 ├── apps/
 │   ├── server/    # Node.js 服务端
 │   └── desktop/   # Electron 桌面客户端
-├── common/        # Rush 生成和维护的公共配置
+├── common/        # 保留的 Rush 配置
 ├── package.json
+├── pnpm-lock.yaml
+├── pnpm-workspace.yaml
 └── rush.json
 ```
 
@@ -25,36 +27,38 @@ DogeBot/
 
 ```bash
 cd /Users/bytedance/flux2/DogeBot
-npx rush update
+pnpm install
 ```
 
 构建全部应用：
 
 ```bash
-npx rush build
+pnpm build
 ```
 
-注意：不要在 `apps/server` 或 `apps/desktop` 目录里直接执行 `pnpm dev`、`pnpm build`、`pnpm add-user` 等命令。Rush 项目应使用 `npx rushx <script>` 执行 app 内脚本，否则 pnpm 会尝试在 app 目录执行本地安装和依赖检查，可能触发 `ERR_PNPM_IGNORED_BUILDS`。
+注意：Rush 配置仍保留，但日常开发默认使用 pnpm workspace。请先在仓库根目录执行 `pnpm install`，之后可以在 `apps/server` 或 `apps/desktop` 目录直接执行 `pnpm dev`、`pnpm build` 等脚本。
+
+如果需要临时使用保留的 Rush 配置，可以在根目录执行 `pnpm rush:update` 或 `pnpm rush:build`。
 
 创建服务端用户：
 
 ```bash
 cd apps/server
-npx rushx add-user admin 'change-me'
+pnpm add-user admin 'change-me'
 ```
 
 启动服务端：
 
 ```bash
 cd apps/server
-npx rushx dev
+pnpm dev
 ```
 
 启动桌面客户端：
 
 ```bash
 cd apps/desktop
-npx rushx dev
+pnpm dev
 ```
 
 ## 服务端能力
@@ -138,16 +142,18 @@ npx rushx dev
 cd /www/wwwroot
 git clone <your-repo-url> DogeBot
 cd DogeBot
-npx rush update
-npx rush build
+pnpm install --filter @dogebot/server --prod
+pnpm build
 ```
+
+如果服务器也需要构建桌面端或完整开发环境，可以改用 `pnpm install` 安装整个 workspace。
 
 创建固定数据目录。SQLite 数据库建议放在项目目录外，避免后续更新代码时误删：
 
 ```bash
 mkdir -p /www/wwwroot/DogeBot-data
 cd /www/wwwroot/DogeBot/apps/server
-DOGEBOT_DATA_DIR=/www/wwwroot/DogeBot-data npx rushx add-user admin 'change-me'
+DOGEBOT_DATA_DIR=/www/wwwroot/DogeBot-data pnpm add-user admin 'change-me'
 ```
 
 宝塔 Node 项目配置：
@@ -179,37 +185,37 @@ pm2 save
 ```bash
 cd /www/wwwroot/DogeBot
 git pull
-npx rush update
-npx rush build
+pnpm install --filter @dogebot/server --prod
+pnpm build
 pm2 restart dogebot-server --update-env
 ```
 
 注意事项：
 
-- 不要在 `apps/server` 目录里执行 `npm install`、`pnpm install`、`pnpm dev` 或宝塔自动安装依赖；本项目依赖由 Rush 在根目录统一管理。
-- `better-sqlite3` 是 native 依赖，首次 `npx rush update` 需要服务器具备基础编译环境；如果安装失败，先在宝塔/系统里安装 `python3`、`make`、`gcc/g++`。
+- 不要在 `apps/server` 目录里执行 `npm install` 或让宝塔自动用 npm 安装依赖；本项目依赖由 pnpm workspace 在根目录统一管理，服务器只运行服务端时推荐使用 `pnpm install --filter @dogebot/server --prod` 减少磁盘占用。
+- `better-sqlite3` 是 native 依赖，首次 `pnpm install` 需要服务器具备基础编译环境；如果安装失败，先在宝塔/系统里安装 `python3`、`make`、`gcc/g++`。
 - 如果只给桌面客户端内网访问，可以不配置宝塔反向代理；如果需要公网访问登录 API，再在宝塔里反向代理到 `http://127.0.0.1:3000`，并配置 HTTPS。
 - 飞书长连接只需要服务器能主动访问公网，不需要配置公网 webhook URL。
 
 ## 常用命令
 
 ```bash
-npx rush update   # 安装/更新依赖并刷新 lockfile
-npx rush build    # 构建所有 app
+pnpm install      # 安装/更新依赖并刷新 lockfile
+pnpm build        # 构建所有 app
 ```
 
 在 `apps/server` 中：
 
 ```bash
-npx rushx dev             # 开发模式启动服务端
-npx rushx build           # 编译服务端
-npx rushx start           # 运行编译后的服务端
-npx rushx add-user <用户名> <密码> # 创建登录用户
+pnpm dev                  # 开发模式启动服务端
+pnpm build                # 编译服务端
+pnpm start                # 运行编译后的服务端
+pnpm add-user <用户名> <密码> # 创建登录用户
 ```
 
 在 `apps/desktop` 中：
 
 ```bash
-npx rushx dev    # 开发模式启动 Electron 客户端
-npx rushx build  # 编译 Electron 客户端
+pnpm dev    # 开发模式启动 Electron 客户端
+pnpm build  # 编译 Electron 客户端
 ```

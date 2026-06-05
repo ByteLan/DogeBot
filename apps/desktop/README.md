@@ -29,13 +29,13 @@ apps/desktop/
 ## 开发命令
 
 ```bash
-npx rushx dev
+pnpm dev
 ```
 
 启动 Electron 客户端。
 
 ```bash
-npx rushx build
+pnpm build
 ```
 
 编译 TypeScript，并复制 `src/index.html` 到 `dist/index.html`。
@@ -46,20 +46,20 @@ npx rushx build
 
 ```bash
 cd ../server
-npx rushx dev
+pnpm dev
 ```
 
 再启动桌面客户端：
 
 ```bash
 cd ../desktop
-npx rushx dev
+pnpm dev
 ```
 
 客户端启动后填写：
 
 - 服务端 URL：默认 `http://127.0.0.1:3000`。
-- 用户名：通过服务端 `npx rushx add-user` 创建。
+- 用户名：通过服务端 `pnpm add-user` 创建。
 - 密码：创建用户时设置的密码。
 
 登录成功后，可以在页面中绑定飞书 bot。
