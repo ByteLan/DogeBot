@@ -133,29 +133,29 @@ pnpm prune --prod
 创建固定数据目录。SQLite 数据库建议放在项目目录外，避免后续更新代码时误删：
 
 ```bash
-mkdir -p /www/wwwroot/DogeBot-data
-cd /www/wwwroot/DogeBot/apps/server
-DOGEBOT_DATA_DIR=/www/wwwroot/DogeBot-data pnpm add-user admin 'change-me'
+mkdir -p /home/Code/DogeBot-data
+cd /home/Code/DogeBot/apps/server
+DOGEBOT_DATA_DIR=/home/Code/DogeBot-data pnpm add-user admin 'change-me'
 ```
 
 宝塔 Node 项目配置：
 
-- 项目目录：`/www/wwwroot/DogeBot/apps/server`
+- 项目目录：`/home/Code/DogeBot/apps/server`
 - 启动文件：`dist/index.js`
 - 启动命令：`node dist/index.js`
 - 运行端口：`3000`，或自定义后同步设置 `PORT`
 - Node 版本：建议 `22.x`
 - 环境变量：`PORT=3000`
-- 环境变量：`DOGEBOT_DATA_DIR=/www/wwwroot/DogeBot-data`
+- 环境变量：`DOGEBOT_DATA_DIR=/home/Code/DogeBot-data`
 - 环境变量：`DOGEBOT_AUTH_SECRET=<一段足够长的随机字符串>`
 - 环境变量：`DOGEBOT_FEISHU_DEBUG=0`
 
 如果用 PM2 命令启动：
 
 ```bash
-cd /www/wwwroot/DogeBot/apps/server
+cd /home/Code/DogeBot/apps/server
 PORT=3000 \
-DOGEBOT_DATA_DIR=/www/wwwroot/DogeBot-data \
+DOGEBOT_DATA_DIR=/home/Code/DogeBot-data \
 DOGEBOT_AUTH_SECRET='<一段足够长的随机字符串>' \
 DOGEBOT_FEISHU_DEBUG=0 \
 pm2 start dist/index.js --name dogebot-server --update-env
@@ -165,7 +165,7 @@ pm2 save
 更新代码后重新构建并重启：
 
 ```bash
-cd /www/wwwroot/DogeBot
+cd /home/Code/DogeBot
 git pull
 cd apps/server
 pnpm install
