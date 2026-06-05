@@ -1,0 +1,14 @@
+{
+  "name": "dogebot-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Rush monorepo for DogeBot server and Electron desktop client.",
+  "scripts": {
+    "rush": "rush",
+    "install:repo": "rush update",
+    "build": "rush build"
+  },
+  "devDependencies": {
+    "@microsoft/rush": "5.150.0"
+  }
+}

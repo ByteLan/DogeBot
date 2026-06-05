@@ -1,0 +1,17 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/rush/v5/rush.schema.json",
+  "rushVersion": "5.150.0",
+  "pnpmVersion": "9.15.4",
+  "nodeSupportedVersionRange": ">=20.0.0",
+  "ensureConsistentVersions": true,
+  "projects": [
+    {
+      "packageName": "@dogebot/server",
+      "projectFolder": "apps/server"
+    },
+    {
+      "packageName": "@dogebot/desktop",
+      "projectFolder": "apps/desktop"
+    }
+  ]
+}

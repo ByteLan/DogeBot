@@ -1,0 +1,20 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/rush/v5/command-line.schema.json",
+  "commands": [
+    {
+      "commandKind": "bulk",
+      "name": "build",
+      "summary": "Build all projects",
+      "description": "Build all projects in the monorepo.",
+      "enableParallelism": true
+    },
+    {
+      "commandKind": "bulk",
+      "name": "dev",
+      "summary": "Run project dev scripts",
+      "description": "Run dev scripts for selected projects.",
+      "enableParallelism": true
+    }
+  ],
+  "parameters": []
+}

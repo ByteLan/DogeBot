@@ -1,0 +1,15 @@
+{
+  "files": {
+    "apps/desktop/.rush/temp/chunked-rush-logs/desktop.build.chunks.jsonl": "e899b01a4d627aa99941f5b6a321993e2e1705b3",
+    "apps/desktop/.rush/temp/package-deps_build.json": "54fb1923df727fc9421f7ea8580c684913aeae29",
+    "apps/desktop/.rush/temp/shrinkwrap-deps.json": "51fa1088bf9adad05ba3d3daf6932206ec60aaa0",
+    "apps/desktop/README.md": "5beac80550040da13ea8dfaecb674310ea316767",
+    "apps/desktop/package.json": "5388d4ac70a1656b979c128f3e3b5632ba84ec09",
+    "apps/desktop/rush-logs/desktop.build.log": "b08360a13f1deac6296e0c62397ea06e65f9545e",
+    "apps/desktop/src/index.html": "0ea927e06f89f844a671153a37448e92ef19db95",
+    "apps/desktop/src/main.ts": "94d45bf0724005f60e8036060c99445c0fef3b97",
+    "apps/desktop/src/renderer.ts": "ff07f7b4ac608ca17b68f6c68a53d5267fad4197",
+    "apps/desktop/tsconfig.json": "298be0a1389a6323e410cfc114c6394962498c88"
+  },
+  "arguments": "tsc -p tsconfig.json && cp src/index.html dist/index.html "
+}

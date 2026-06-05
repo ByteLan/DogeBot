@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DogeBot</title>
+    <style>
+      :root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      body { margin: 0; background: #111827; color: #f9fafb; }
+      main { max-width: 920px; margin: 0 auto; padding: 28px; }
+      section { background: #1f2937; border: 1px solid #374151; border-radius: 14px; padding: 20px; margin-bottom: 18px; }
+      h1, h2 { margin-top: 0; }
+      label { display: block; margin: 12px 0 6px; color: #d1d5db; }
+      input, select { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #4b5563; border-radius: 8px; background: #111827; color: #f9fafb; }
+      button { margin-top: 14px; padding: 10px 14px; border: 0; border-radius: 8px; background: #f59e0b; color: #111827; font-weight: 700; cursor: pointer; }
+      button.secondary { background: #374151; color: #f9fafb; margin-left: 8px; }
+      button.danger { background: #ef4444; color: white; }
+      .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .hidden { display: none; }
+      .muted { color: #9ca3af; }
+      .bot { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid #374151; padding: 12px 0; }
+      .bot:first-child { border-top: 0; }
+      code { color: #fbbf24; }
+      #message { min-height: 24px; color: #93c5fd; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>DogeBot</h1>
+      <p id="message" class="muted"></p>
+
+      <section id="loginSection">
+        <h2>登录服务端</h2>
+        <label>服务端 URL</label>
+        <input id="serverUrl" value="http://127.0.0.1:3000" />
+        <div class="row">
+          <div>
+            <label>用户名</label>
+            <input id="username" autocomplete="username" />
+          </div>
+          <div>
+            <label>密码</label>
+            <input id="password" type="password" autocomplete="current-password" />
+          </div>
+        </div>
+        <button id="loginBtn">登录</button>
+      </section>
+
+      <section id="appSection" class="hidden">
+        <h2>飞书机器人绑定</h2>
+        <p class="muted">绑定后，在飞书开放平台配置事件回调地址为对应 webhook URL。当前机器人会把用户发来的文本原样回复。</p>
+        <div class="row">
+          <div>
+            <label>名称</label>
+            <input id="botName" placeholder="Doge Echo Bot" />
+          </div>
+          <div>
+            <label>域名</label>
+            <select id="botDomain"><option value="feishu">feishu</option><option value="lark">lark</option></select>
+          </div>
+        </div>
+        <label>App ID</label>
+        <input id="appId" />
+        <label>App Secret</label>
+        <input id="appSecret" type="password" />
+        <div class="row">
+          <div>
+            <label>Verification Token</label>
+            <input id="verificationToken" />
+          </div>
+          <div>
+            <label>Encrypt Key</label>
+            <input id="encryptKey" />
+          </div>
+        </div>
+        <button id="createBotBtn">绑定机器人</button>
+        <button id="qrRegisterBtn" class="secondary">扫码创建并绑定</button>
+        <button id="logoutBtn" class="secondary">退出登录</button>
+        <div id="qrRegisterBox" class="hidden">
+          <p class="muted">请在飞书中打开下面链接并扫码授权，授权完成后会自动绑定 bot。</p>
+          <a id="qrRegisterLink" href="#" target="_blank" rel="noreferrer">打开扫码链接</a>
+        </div>
+        <h2>已绑定</h2>
+        <div id="botList" class="muted">暂无</div>
+      </section>
+    </main>
+    <script type="module" src="./renderer.js"></script>
+  </body>
+</html>

@@ -1,0 +1,179 @@
+# @dogebot/server
+
+`@dogebot/server` 是 DogeBot 的 Node.js 服务端应用，负责用户认证、SQLite 数据存储、飞书机器人绑定，以及为每个已启用 bot 维护独立飞书 WebSocket 长连接。
+
+## 主要能力
+
+- 本地用户登录：通过用户名和密码登录，返回 Bearer token。
+- 用户维度隔离：每个用户只能管理自己绑定的飞书 bot。
+- 多 bot 支持：一个用户可以绑定多个飞书 bot。
+- 扫码创建绑定：通过飞书 `/oauth/v1/app/registration` 注册流程创建新机器人，并自动绑定到当前用户。
+- 飞书长连接：每个 bot 对应一个独立 `WSClient`，服务启动后自动恢复已有连接。
+- `/users` 命令：记录某个 bot 下用户 at 过的人，并用飞书消息卡片返回历史列表。
+- SQLite 存储：用户、bot 绑定、at 用户记录都持久化到本地 SQLite。
+
+## 目录结构
+
+```text
+apps/server/
+├── scripts/
+│   └── add-user.ts        # 创建本地登录用户
+├── src/
+│   ├── auth.ts            # 密码哈希、登录鉴权、token 生成和校验
+│   ├── db.ts              # SQLite 初始化、表结构和轻量迁移
+│   ├── feishu.ts          # 飞书 bot API、消息处理、/users 命令
+│   ├── feishuConnection.ts # 飞书 WebSocket 长连接管理
+│   ├── feishuOnboard.ts    # 飞书扫码创建机器人注册流程
+│   └── index.ts           # Express 服务入口
+├── package.json
+└── tsconfig.json
+```
+
+## 开发命令
+
+```bash
+npx rushx dev
+```
+
+以 watch 模式启动服务端。
+
+```bash
+npx rushx build
+```
+
+执行 TypeScript 编译。
+
+```bash
+npx rushx start
+```
+
+运行编译后的服务端。
+
+```bash
+npx rushx add-user <用户名> <密码>
+```
+
+创建本地登录用户。不要直接使用 `pnpm add-user`，它会触发 pnpm 自身的依赖检查流程；Rush 项目里应通过 `npx rushx` 运行项目脚本。
+
+## 环境变量
+
+- `PORT`：HTTP 服务端口，默认 `3000`。
+- `DOGEBOT_DATA_DIR`：SQLite 数据目录，默认 `apps/server/data`。
+- `DOGEBOT_AUTH_SECRET`：登录 token 签名密钥；开发环境有默认值，生产环境建议显式配置。
+
+## 宝塔面板长期运行
+
+推荐在宝塔里用 Node 项目或 PM2 管理器运行编译后的 `dist/index.js`，不要直接运行 TypeScript 开发命令。
+
+首次部署：
+
+```bash
+cd /www/wwwroot
+git clone <your-repo-url> DogeBot
+cd DogeBot
+npx rush update
+npx rush build
+```
+
+创建固定数据目录和管理员用户：
+
+```bash
+mkdir -p /www/wwwroot/DogeBot-data
+cd /www/wwwroot/DogeBot/apps/server
+DOGEBOT_DATA_DIR=/www/wwwroot/DogeBot-data npx rushx add-user admin 'change-me'
+```
+
+宝塔 Node 项目建议配置：
+
+- 项目目录：`/www/wwwroot/DogeBot/apps/server`
+- 启动文件：`dist/index.js`
+- 启动命令：`node dist/index.js`
+- 端口：`3000`
+- Node 版本：建议 `22.x`
+- 环境变量：`PORT=3000`
+- 环境变量：`DOGEBOT_DATA_DIR=/www/wwwroot/DogeBot-data`
+- 环境变量：`DOGEBOT_AUTH_SECRET=<一段足够长的随机字符串>`
+- 环境变量：`DOGEBOT_FEISHU_DEBUG=0`
+
+如果直接使用 PM2：
+
+```bash
+cd /www/wwwroot/DogeBot/apps/server
+PORT=3000 \
+DOGEBOT_DATA_DIR=/www/wwwroot/DogeBot-data \
+DOGEBOT_AUTH_SECRET='<一段足够长的随机字符串>' \
+DOGEBOT_FEISHU_DEBUG=0 \
+pm2 start dist/index.js --name dogebot-server --update-env
+pm2 save
+```
+
+更新代码：
+
+```bash
+cd /www/wwwroot/DogeBot
+git pull
+npx rush update
+npx rush build
+pm2 restart dogebot-server --update-env
+```
+
+部署注意事项：
+
+- 不要在 `apps/server` 下执行 `npm install`、`pnpm install`、`pnpm dev`，也不要让宝塔对 app 目录自动安装依赖；依赖必须在仓库根目录通过 `npx rush update` 管理。
+- SQLite 数据目录建议固定为项目外的 `/www/wwwroot/DogeBot-data`，这样更新或重建项目不会丢数据库。
+- 飞书长连接是服务端主动连接飞书，不要求服务器有公网入口；但桌面客户端需要能访问 `PORT` 对应的 HTTP API。
+- 如果桌面客户端走公网访问，建议在宝塔里配置反向代理到 `http://127.0.0.1:3000` 并开启 HTTPS。
+- `better-sqlite3` 是 native 依赖，首次安装失败时，先安装 `python3`、`make`、`gcc/g++` 等基础编译工具。
+
+## 数据表
+
+- `users`：本地登录用户。
+- `feishu_bots`：飞书 bot 绑定信息，包含 `user_id`，用于隔离不同用户的 bot。
+- `at_users_record`：`/users` 命令记录，按 `bot_id + at_by + at_who` 唯一记录，支持 `sort_order` 排序和 `deleted_at` 软删除。
+
+## REST API
+
+- `POST /api/login`：登录，入参为 `{ "username": "...", "password": "..." }`。
+- `GET /api/feishu/bots`：查询当前用户绑定的 bot。
+- `GET /api/feishu/connections`：查询服务端当前维护的飞书长连接状态。
+- `POST /api/feishu/bots`：绑定当前用户的 bot。
+- `POST /api/feishu/bots/:id/probe`：探测当前用户的 bot 凭证是否有效。
+- `POST /api/feishu/qr-registration/begin`：发起飞书扫码创建机器人流程，返回扫码链接和 `deviceCode`。
+- `POST /api/feishu/qr-registration/poll`：轮询扫码授权结果，成功后创建 bot 绑定并启动长连接。
+- `DELETE /api/feishu/bots/:id`：删除当前用户的 bot，并关闭对应长连接。
+- `POST /feishu/webhook/:id`：飞书 webhook 兜底入口。
+
+## 扫码创建 bot
+
+扫码创建流程参考 Hermes：
+
+- `begin`：调用注册接口 `init` 检查是否支持 `client_secret`，再调用 `begin` 获取 `device_code` 和扫码链接。
+- `begin` 请求使用 `archetype=PersonalAgent`，依赖飞书模板创建并预置机器人、权限、长连接事件订阅等配置。
+- `poll`：客户端按 `interval` 轮询；如果飞书返回 `client_id` 和 `client_secret`，服务端立即写入 `feishu_bots`。
+- 绑定完成：服务端调用 `/open-apis/bot/v3/info` 探测机器人信息，并为新 bot 启动独立飞书长连接。
+
+如果扫码创建后的 bot 长连接已连接但收不到消息，需要回到飞书开放平台检查模板配置是否实际生效，包括机器人能力、`im.message.receive_v1` 事件订阅、长连接接收方式、机器人发消息权限和应用发布状态。
+
+手动绑定已有应用时，服务端不会也不能通过普通 OpenAPI 修改开放平台后台配置。请先在开放平台完成机器人能力、权限、事件订阅和发布，再把 `App ID` / `App Secret` 绑定到 DogeBot。
+
+## 飞书消息处理
+
+服务端默认使用飞书长连接接收事件。收到 `im.message.receive_v1` 后：
+
+- 如果不是 `/users` 命令，按回声逻辑原样回复文本。
+- 如果是 `/users` 命令，按命令参数更新 `at_users_record`，最终回复飞书消息卡片。
+
+飞书卡片中的 at 用户格式：
+
+```text
+<at id=ou_xxx></at>
+```
+
+## `/users` 命令
+
+- `/users @Alice @Bob`：记录当前发起人 at 过 Alice 和 Bob。
+- `/users`：返回当前发起人的历史 at 列表。
+- `/users delete`：软删除当前发起人的全部历史记录。
+- `/users delete @Alice`：软删除指定用户。
+- `/users top @Alice`：将指定用户排到卡片最前。
+- `/users new 3`：只返回最新加入的 3 个用户。

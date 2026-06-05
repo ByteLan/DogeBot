@@ -1,0 +1,19 @@
+{
+  "files": {
+    "apps/server/.rush/temp/chunked-rush-logs/server.build.chunks.jsonl": "c5eb36de59511e5a861a3a92f613aa25e91794f1",
+    "apps/server/.rush/temp/package-deps_build.json": "5fabb3936c41294076249e36982489aa5ba244d0",
+    "apps/server/.rush/temp/shrinkwrap-deps.json": "bb49cf49353d4435cb7524a8117beb06ac0682dd",
+    "apps/server/README.md": "9f3be8b38676aa35bb1388dd744f686506b4e6c2",
+    "apps/server/package.json": "1ca4c15e991828592c516b574dc669fdd7719f60",
+    "apps/server/rush-logs/server.build.log": "ccaa2b3dfa9c239a71fae6704fbab59541df537b",
+    "apps/server/scripts/add-user.ts": "7ce4df3992077182f115a3eeadd4b7d52d383ff3",
+    "apps/server/src/auth.ts": "aabc5ba3a2566872e60d6308f163487845f1f080",
+    "apps/server/src/db.ts": "8b377c4318feff0072e8752e00725f0326f70fbc",
+    "apps/server/src/feishu.ts": "86d4ac7578cc15640055de8bbeb79648de4692cd",
+    "apps/server/src/feishuConnection.ts": "f9ff6e8c18289c1bfcc38bf38a0b7629d40e4618",
+    "apps/server/src/feishuOnboard.ts": "cecd457475a1214b478bdc70b0e86a803952be1b",
+    "apps/server/src/index.ts": "2f603b5870ff3262189f39f8d570fa0f721261a6",
+    "apps/server/tsconfig.json": "b7bd3bb06389d4ddac0159e6314a073893a2a8b6"
+  },
+  "arguments": "tsc -p tsconfig.json "
+}

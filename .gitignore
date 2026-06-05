@@ -1,0 +1,9 @@
+node_modules/
+common/temp/
+common/autoinstallers/*/node_modules/
+dist/
+.DS_Store
+.env
+*.db
+*.sqlite
+apps/server/data/
