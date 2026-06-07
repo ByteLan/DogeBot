@@ -16,7 +16,7 @@ DogeBot/
 
 ## 应用说明
 
-- `apps/server`：服务端应用，提供 REST API、SQLite 存储、多用户登录、飞书 bot 手动绑定、扫码创建绑定、飞书 WebSocket 长连接、`/users` 命令处理。
+- `apps/server`：服务端应用，提供 REST API、SQLite 存储、多用户登录、飞书 bot 手动绑定、扫码创建绑定、飞书 WebSocket 长连接、机器人命令处理。
 - `apps/desktop`：桌面客户端，提供服务端 URL、用户名、密码登录入口，并支持手动绑定、扫码创建绑定、探测、删除当前用户绑定的飞书 bot。
 
 ## 快速开始
@@ -53,7 +53,7 @@ pnpm dev
 - 多 bot 绑定：每个用户可以绑定多个飞书 bot。
 - 扫码创建绑定：复用 Hermes 的飞书注册流程，支持通过扫码创建新飞书机器人并自动绑定到当前用户。
 - 独立长连接：服务端为每个启用的 bot 创建独立飞书 WebSocket 长连接，并在服务启动时自动恢复。
-- SQLite 持久化：用户、bot 绑定、`/users` 命令记录都存储在本地 SQLite 数据库中。
+- SQLite 持久化：用户、bot 绑定、机器人命令相关数据都存储在本地 SQLite 数据库中。
 - Webhook 兜底：保留 `/feishu/webhook/:botId` 作为飞书事件回调的备用调试入口。
 
 环境变量：
@@ -94,24 +94,9 @@ pnpm dev
 - `verificationToken`：可选，webhook 校验使用。
 - `encryptKey`：可选，预留给加密事件使用。
 
-## `/users` 命令
+## 机器人命令
 
-用户向 bot 发送 `/users` 命令时，服务端会按 `bot_id + at_by + at_who` 记录关系。返回内容始终是飞书消息卡片，卡片里会把该发起人在当前 bot 下历史记录的 `at_who` 全部 at 出来。
-
-支持命令：
-
-- `/users @Alice @Bob`：记录当前发起人 at 过 Alice 和 Bob，并返回当前列表。
-- `/users`：不新增记录，只返回当前发起人的历史 at 列表。
-- `/users delete`：软删除当前发起人在当前 bot 下的全部历史 at 记录。
-- `/users delete @Alice`：只软删除 Alice。
-- `/users top @Alice`：记录 Alice，并把 Alice 排到返回卡片的最前面。
-- `/users new 3`：只返回最新加入的 3 个 `at_who`。
-
-飞书卡片中的 at 用户格式为：
-
-```text
-<at id=ou_xxx></at>
-```
+所有飞书机器人文字命令的用法统一维护在 [`bot-command.md`](./bot-command.md)，包括 `/users`、`/douyin`、`/set-default` 和 `/add-cron`。
 
 ## 宝塔面板部署
 
