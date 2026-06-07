@@ -200,6 +200,32 @@ pnpm add-user <用户名> <密码> # 创建登录用户
 在 `apps/desktop` 中：
 
 ```bash
-pnpm dev    # 开发模式启动 Electron 客户端
-pnpm build  # 编译 Electron 客户端
+pnpm dev          # 开发模式启动 Electron 客户端
+pnpm build        # 编译 Electron 客户端运行资源
+pnpm package:dir  # 只生成未压缩应用目录，便于本地快速验证
+pnpm package:mac  # 打包 macOS 应用，输出 dmg 和 zip 到 release/
+pnpm package:win  # 打包 Windows 应用，输出 nsis 安装包和 zip 到 release/
 ```
+
+桌面端打包前先安装依赖：
+
+```bash
+cd /Users/bytedance/flux2/DogeBot/apps/desktop
+pnpm install
+```
+
+macOS 打包：
+
+```bash
+cd /Users/bytedance/flux2/DogeBot/apps/desktop
+pnpm package:mac
+```
+
+Windows 打包：
+
+```bash
+cd /Users/bytedance/flux2/DogeBot/apps/desktop
+pnpm package:win
+```
+
+打包产物默认输出到 `apps/desktop/release/`。macOS 上打 mac 包可直接执行；Windows 包更推荐在 Windows 机器上执行 `pnpm package:win`，如果在 macOS 上交叉打 Windows 包，可能需要额外安装 `wine`。

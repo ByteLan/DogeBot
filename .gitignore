@@ -2,6 +2,7 @@ node_modules/
 common/temp/
 common/autoinstallers/*/node_modules/
 dist/
+release/
 .DS_Store
 .env
 # *.db
