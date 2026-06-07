@@ -7,7 +7,7 @@
   "type": "module",
   "main": "dist/main.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json && vite build && cp src/preload.cjs dist/preload.cjs",
+    "build": "tsc -p tsconfig.json && vite build && node -e \"require('fs').copyFileSync('src/preload.cjs', 'dist/preload.cjs')\"",
     "dev": "pnpm build && electron dist/main.js",
     "package:dir": "pnpm build && electron-builder --dir",
     "package:mac": "pnpm build && electron-builder --mac",

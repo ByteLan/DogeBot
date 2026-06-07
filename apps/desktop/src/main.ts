@@ -319,7 +319,24 @@ function attachDouyinDebugger(win: BrowserWindow) {
   if (!devtools.isAttached()) {
     try {
       devtools.attach('1.3');
-      devtools.sendCommand('Network.enable').catch(() => undefined);
+      // 增大 Network 缓存上限，防止因为 JSON 响应体过大被浏览器底层直接丢弃(类似垃圾回收)
+      devtools.sendCommand('Network.enable', {
+        maxResourceBufferSize: 1024 * 1024 * 50, // 单个资源最大允许 50MB
+        maxTotalBufferSize: 1024 * 1024 * 100    // 总缓存最大允许 100MB
+      }).catch(() => undefined);
+
+      // 启用 Fetch 域以取代 Network 域获取 body，这是最稳妥的拦截方案
+      devtools.sendCommand('Fetch.enable', {
+        patterns: [{ requestStage: 'Response' }] // 只在收到响应时暂停请求
+      }).catch((error) => logDouyin('Fetch.enable failed', error));
+      
+      // 监听 debugger 意外掉线，实现"一直挂载"
+      devtools.on('detach', (_event, reason) => {
+        logDouyin('debugger detached', reason);
+        debugListenerAttached.delete(win);
+        // 尝试重新挂载
+        setTimeout(() => attachDouyinDebugger(win), 1000);
+      });
       devtools
         .sendCommand('Emulation.setUserAgentOverride', {
           userAgent: douyinUserAgent,
@@ -431,36 +448,35 @@ function attachDouyinDebugger(win: BrowserWindow) {
   }
   debugListenerAttached.add(win);
   devtools.on('message', (_event, method, params) => {
-    if (method === 'Network.responseReceived' && typeof params?.response?.url === 'string') {
-      const url = params.response.url as string;
-      if (isCollectListUrl(url)) {
-        logDouyin('matched response', { requestId: params.requestId, status: params.response.status, url });
-        pendingResponses.set(params.requestId, { url, status: params.response.status });
+    // 监听 fetch 事件，从源头获取 request 和响应数据 (需要开启 Fetch.enable)
+    if (method === 'Fetch.requestPaused') {
+      const url = params.request.url;
+      const requestId = params.requestId; // 注意：这是 Fetch 域的 requestId
+
+      if (isCollectListUrl(url) && params.request.method !== 'OPTIONS') {
+        logDouyin('Fetch matched response', { requestId, url });
+        
+        devtools.sendCommand('Fetch.getResponseBody', { requestId })
+          .then((result) => {
+            logDouyin('Fetch response body captured', { requestId, length: result.body.length });
+            mainWindow?.webContents.send('douyin:collects-video-list', {
+              url: url,
+              status: 200, // 走到这里说明有响应体
+              body: result.base64Encoded ? Buffer.from(result.body, 'base64').toString('utf8') : result.body,
+              receivedAt: new Date().toISOString()
+            });
+            // 必须放行请求，否则页面会被卡住
+            devtools.sendCommand('Fetch.continueRequest', { requestId }).catch(() => {});
+          })
+          .catch((error) => {
+            logDouyin('Fetch response body failed', error instanceof Error ? error.message : error);
+            // 获取失败也要放行
+            devtools.sendCommand('Fetch.continueRequest', { requestId }).catch(() => {});
+          });
+      } else {
+        // 不匹配的请求直接放行
+        devtools.sendCommand('Fetch.continueRequest', { requestId }).catch(() => {});
       }
-    }
-    if (method === 'Network.loadingFinished' && pendingResponses.has(params.requestId)) {
-      const meta = pendingResponses.get(params.requestId);
-      pendingResponses.delete(params.requestId);
-      devtools
-        .sendCommand('Network.getResponseBody', { requestId: params.requestId })
-        .then((result) => {
-          logDouyin('response body captured', { requestId: params.requestId, length: result.body.length });
-          mainWindow?.webContents.send('douyin:collects-video-list', {
-            url: meta?.url,
-            status: meta?.status,
-            body: result.base64Encoded ? Buffer.from(result.body, 'base64').toString('utf8') : result.body,
-            receivedAt: new Date().toISOString()
-          });
-        })
-        .catch((error) => {
-          logDouyin('response body failed', error instanceof Error ? error.message : error);
-          mainWindow?.webContents.send('douyin:collects-video-list', {
-            url: meta?.url,
-            status: meta?.status,
-            error: error instanceof Error ? error.message : '读取响应失败',
-            receivedAt: new Date().toISOString()
-          });
-        });
     }
   });
 }
