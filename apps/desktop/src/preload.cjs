@@ -15,6 +15,14 @@ contextBridge.exposeInMainWorld('douyin', {
     console.log('[douyin preload] stopMonitor');
     return ipcRenderer.invoke('douyin:stop-monitor');
   },
+  refreshNow: () => {
+    console.log('[douyin preload] refreshNow');
+    return ipcRenderer.invoke('douyin:refresh-now');
+  },
+  getMonitorState: () => {
+    console.log('[douyin preload] getMonitorState');
+    return ipcRenderer.invoke('douyin:get-monitor-state');
+  },
   setHidden: (hidden) => {
     console.log('[douyin preload] setHidden', hidden);
     return ipcRenderer.invoke('douyin:set-hidden', hidden);
@@ -32,5 +40,10 @@ contextBridge.exposeInMainWorld('douyin', {
     const handler = (_event, data) => listener(data);
     ipcRenderer.on('douyin:collects-video-list', handler);
     return () => ipcRenderer.off('douyin:collects-video-list', handler);
+  },
+  onMonitorState: (listener) => {
+    const handler = (_event, data) => listener(data);
+    ipcRenderer.on('douyin:monitor-state', handler);
+    return () => ipcRenderer.off('douyin:monitor-state', handler);
   }
 });

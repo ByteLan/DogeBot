@@ -43,16 +43,31 @@ type DouyinBridge = {
     retryLimit?: number
   ) => Promise<void>;
   stopMonitor: () => Promise<void>;
+  refreshNow: () => Promise<void>;
+  getMonitorState: () => Promise<DouyinMonitorState>;
   setHidden: (hidden: boolean) => Promise<void>;
   reportAwemeIds: (ids: string[]) => Promise<void>;
   onClickResult: (listener: (data: unknown) => void) => () => void;
   onCollectsVideoList: (listener: (data: unknown) => void) => () => void;
+  onMonitorState: (listener: (data: DouyinMonitorState) => void) => () => void;
 };
 
 type DouyinEvent = {
   id: string;
   title: string;
   data: unknown;
+};
+
+type DouyinMonitorState = {
+  running: boolean;
+  mode: 'short' | 'long';
+  currentIntervalSeconds: number;
+  shortIntervalSeconds: number;
+  longIntervalSeconds: number;
+  sameIdsCount: number;
+  retryLimit: number;
+  nextRunAt: string;
+  tickRunning: boolean;
 };
 
 declare global {
@@ -131,6 +146,17 @@ function App() {
   const [douyinLongIntervalSeconds, setDouyinLongIntervalSeconds] = useState(() => readPositiveNumber('dogebot.douyinLongIntervalSeconds', 60));
   const [douyinRetryLimit, setDouyinRetryLimit] = useState(() => readPositiveNumber('dogebot.douyinRetryLimit', 3));
   const [douyinStatus, setDouyinStatus] = useState(window.douyin ? '未开始' : 'Douyin preload 未加载，请检查终端日志');
+  const [douyinMonitorState, setDouyinMonitorState] = useState<DouyinMonitorState>({
+    running: false,
+    mode: 'short',
+    currentIntervalSeconds: douyinShortIntervalSeconds,
+    shortIntervalSeconds: douyinShortIntervalSeconds,
+    longIntervalSeconds: douyinLongIntervalSeconds,
+    sameIdsCount: 0,
+    retryLimit: douyinRetryLimit,
+    nextRunAt: '',
+    tickRunning: false
+  });
   const [douyinEvents, setDouyinEvents] = useState<DouyinEvent[]>([]);
 
   const loggedIn = Boolean(token);
@@ -178,6 +204,7 @@ function App() {
   useEffect(() => {
     if (!window.douyin) return;
     console.log('[douyin renderer] bridge ready');
+    window.douyin.getMonitorState().then(setDouyinMonitorState).catch((error) => console.error('[douyin renderer] get monitor state failed', error));
     const addCollectListBody = (data: unknown) => {
       const body = parseCollectListBody(data);
       if (body === undefined) return;
@@ -202,9 +229,11 @@ function App() {
       setDouyinStatus(result.skipped ? '已刷新页面并跳过点击，继续监听 API' : result.clicked ? `已点击：${result.text || douyinClickText}` : `点击失败：${result.reason || '未知原因'}`);
     });
     const offList = window.douyin.onCollectsVideoList(addCollectListBody);
+    const offState = window.douyin.onMonitorState(setDouyinMonitorState);
     return () => {
       offClick();
       offList();
+      offState();
     };
   }, [api, douyinClickText]);
 
@@ -374,6 +403,15 @@ function App() {
     console.log('[douyin renderer] stop monitor');
     await requireDouyinBridge().stopMonitor();
     setDouyinStatus('已停止监听');
+  };
+
+  const refreshDouyinNow = async () => {
+    try {
+      setDouyinStatus('正在立即刷新...');
+      await requireDouyinBridge().refreshNow();
+    } catch (error) {
+      setDouyinStatus(error instanceof Error ? error.message : '立即刷新失败');
+    }
   };
 
   return (
@@ -585,10 +623,25 @@ function App() {
               <Space>
                 <Button type="primary" onClick={openDouyinLogin}>登录 douyin.com</Button>
                 <Button onClick={startDouyinMonitor}>开始监听</Button>
+                <Button onClick={refreshDouyinNow} disabled={!douyinMonitorState.running || douyinMonitorState.tickRunning}>立即刷新</Button>
                 <Button onClick={stopDouyinMonitor}>停止监听</Button>
               </Space>
             </Form>
-            <Alert className="douyin-status" type="info" content={douyinStatus} />
+            <Alert
+              className="douyin-status"
+              type="info"
+              content={(
+                <Space direction="vertical" size={2}>
+                  <Text>{douyinStatus}</Text>
+                  <Text>
+                    当前刷新间隔：{douyinMonitorState.currentIntervalSeconds}s（{douyinMonitorState.mode === 'short' ? '短间隔' : '长间隔'}）；
+                    retry：{douyinMonitorState.sameIdsCount}/{douyinMonitorState.retryLimit}；
+                    状态：{douyinMonitorState.tickRunning ? '刷新中' : douyinMonitorState.running ? '等待下次刷新' : '未运行'}
+                    {douyinMonitorState.nextRunAt ? `；下次刷新：${new Date(douyinMonitorState.nextRunAt).toLocaleString()}` : ''}
+                  </Text>
+                </Space>
+              )}
+            />
             <Title heading={5}>接口返回</Title>
             {douyinEvents.length === 0 ? (
               <div className="json-empty">暂无</div>

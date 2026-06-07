@@ -38,6 +38,8 @@ let douyinIntervalMode: 'short' | 'long' = 'short';
 let douyinSameIdsCount = 0;
 let douyinLastIdsKey = '';
 let douyinMonitorRunning = false;
+let douyinTickRunning = false;
+let douyinNextRunAt = '';
 const pendingResponses = new Map<string, { url: string; status: number }>();
 const debugListenerAttached = new WeakSet<BrowserWindow>();
 const devToolsShortcutAttached = new WeakSet<BrowserWindow>();
@@ -125,6 +127,24 @@ function toPositiveInteger(value: unknown, fallback: number) {
 
 function currentMonitorIntervalMs() {
   return douyinIntervalMode === 'long' ? douyinLongIntervalMs : douyinShortIntervalMs;
+}
+
+function currentMonitorState() {
+  return {
+    running: douyinMonitorRunning,
+    mode: douyinIntervalMode,
+    currentIntervalSeconds: Math.round(currentMonitorIntervalMs() / 1000),
+    shortIntervalSeconds: Math.round(douyinShortIntervalMs / 1000),
+    longIntervalSeconds: Math.round(douyinLongIntervalMs / 1000),
+    sameIdsCount: douyinSameIdsCount,
+    retryLimit: douyinRetryLimit,
+    nextRunAt: douyinNextRunAt,
+    tickRunning: douyinTickRunning
+  };
+}
+
+function sendMonitorState() {
+  mainWindow?.webContents.send('douyin:monitor-state', currentMonitorState());
 }
 
 function resetMonitorIntervalState() {
@@ -501,7 +521,9 @@ function scheduleMonitorTick() {
   if (!douyinMonitorRunning) return;
   if (monitorTimer) clearTimeout(monitorTimer);
   const delayMs = currentMonitorIntervalMs();
+  douyinNextRunAt = new Date(Date.now() + delayMs).toISOString();
   monitorTimer = setTimeout(() => void runMonitorTick(), delayMs);
+  sendMonitorState();
   logDouyin('monitor next tick scheduled', {
     mode: douyinIntervalMode,
     delayMs,
@@ -512,35 +534,47 @@ function scheduleMonitorTick() {
 
 async function runMonitorTick() {
   if (!douyinMonitorRunning) return;
-  logDouyin('monitor tick start', { clickText, skipClick: douyinSkipClick });
-  const win = ensureDouyinWindow();
-  await win.loadURL(favoriteUrl, { userAgent: douyinUserAgent });
-  await new Promise((resolve) => setTimeout(resolve, 1500));
-  if (douyinSkipClick) {
-    mainWindow?.webContents.send('douyin:click-result', {
-      clicked: true,
-      text: clickText,
-      skipped: true,
-      clickedAt: new Date().toISOString()
-    });
-    scheduleMonitorTick();
+  if (douyinTickRunning) {
+    logDouyin('monitor tick skipped: already running');
     return;
   }
-  await clickTextOnPage(win).catch((error) => {
-    if (douyinShowOnClickFailure) showDouyinWindowNow(win);
-    mainWindow?.webContents.send('douyin:click-result', {
-      clicked: false,
-      reason: error instanceof Error ? error.message : '模拟点击失败',
-      clickedAt: new Date().toISOString()
+  douyinTickRunning = true;
+  douyinNextRunAt = '';
+  sendMonitorState();
+  logDouyin('monitor tick start', { clickText, skipClick: douyinSkipClick });
+  try {
+    const win = ensureDouyinWindow();
+    await win.loadURL(favoriteUrl, { userAgent: douyinUserAgent });
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    if (douyinSkipClick) {
+      mainWindow?.webContents.send('douyin:click-result', {
+        clicked: true,
+        text: clickText,
+        skipped: true,
+        clickedAt: new Date().toISOString()
+      });
+      return;
+    }
+    await clickTextOnPage(win).catch((error) => {
+      if (douyinShowOnClickFailure) showDouyinWindowNow(win);
+      mainWindow?.webContents.send('douyin:click-result', {
+        clicked: false,
+        reason: error instanceof Error ? error.message : '模拟点击失败',
+        clickedAt: new Date().toISOString()
+      });
     });
-  });
-  scheduleMonitorTick();
+  } finally {
+    douyinTickRunning = false;
+    scheduleMonitorTick();
+  }
 }
 
 function stopMonitor() {
   douyinMonitorRunning = false;
   if (monitorTimer) clearTimeout(monitorTimer);
   monitorTimer = undefined;
+  douyinNextRunAt = '';
+  sendMonitorState();
   logDouyin('monitor stopped');
 }
 
@@ -574,6 +608,8 @@ ipcMain.handle('douyin:start-monitor', async (
   douyinRetryLimit = toPositiveInteger(retryLimit, 3);
   resetMonitorIntervalState();
   douyinMonitorRunning = true;
+  douyinNextRunAt = '';
+  sendMonitorState();
   logDouyin('ipc start-monitor', {
     text,
     hidden: douyinRunHidden,
@@ -623,6 +659,7 @@ ipcMain.handle('douyin:report-aweme-ids', (_event, ids?: unknown[]) => {
     sameIdsCount: douyinSameIdsCount,
     retryLimit: douyinRetryLimit
   });
+  sendMonitorState();
 });
 
 ipcMain.handle('douyin:set-hidden', (_event, hidden?: boolean) => {
@@ -635,6 +672,17 @@ ipcMain.handle('douyin:stop-monitor', () => {
   logDouyin('ipc stop-monitor');
   stopMonitor();
 });
+
+ipcMain.handle('douyin:refresh-now', async () => {
+  logDouyin('ipc refresh-now');
+  if (!douyinMonitorRunning) throw new Error('监听未启动');
+  if (monitorTimer) clearTimeout(monitorTimer);
+  monitorTimer = undefined;
+  douyinNextRunAt = '';
+  await runMonitorTick();
+});
+
+ipcMain.handle('douyin:get-monitor-state', () => currentMonitorState());
 
 app.whenReady().then(() => {
   registerBlockedDeeplinkHandlers();
