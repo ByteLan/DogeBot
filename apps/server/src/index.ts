@@ -1,6 +1,7 @@
 import cors from 'cors';
 import express from 'express';
 import { authenticate, createToken, requireAuth, type AuthenticatedRequest } from './auth.js';
+import { uploadDouyinAwemeRecords } from './douyin.js';
 import { createFeishuBotForUser, deleteOwnedFeishuBot, feishuWebhook, listFeishuBots, probeFeishuBot, publicBot } from './feishu.js';
 import { feishuConnectionManager } from './feishuConnection.js';
 import { beginFeishuQrRegistration, pollFeishuQrRegistration } from './feishuOnboard.js';
@@ -27,6 +28,7 @@ app.get('/api/feishu/bots', requireAuth, listFeishuBots);
 app.get('/api/feishu/connections', requireAuth, (_req, res) => {
   res.json({ connections: feishuConnectionManager.snapshot() });
 });
+app.post('/api/douyin/aweme-records', requireAuth, uploadDouyinAwemeRecords);
 app.post('/api/feishu/bots', requireAuth, async (req: AuthenticatedRequest, res) => {
   if (!req.user) {
     res.status(401).json({ error: 'unauthorized' });

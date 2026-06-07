@@ -21,10 +21,12 @@ apps/desktop/
 ├── src/
 │   ├── index.html  # 页面结构和样式
 │   ├── main.ts     # Electron 主进程入口
-│   └── renderer.ts # 页面交互和服务端 API 调用
+│   ├── renderer.tsx # React 页面交互和服务端 API 调用
+│   └── style.css   # 前端样式
 ├── package.json
 ├── pnpm-lock.yaml
 ├── pnpm-workspace.yaml # 仅用于 pnpm 11 allowBuilds，不连接 server
+├── vite.config.ts
 └── tsconfig.json
 ```
 
@@ -41,7 +43,7 @@ pnpm dev
 pnpm build
 ```
 
-编译 TypeScript，并复制 `src/index.html` 到 `dist/index.html`。
+编译 Electron 主进程，并通过 Vite 将 React 前端打包为 `dist/index.html` 和 `dist/assets/*`。
 
 ## 使用方式
 

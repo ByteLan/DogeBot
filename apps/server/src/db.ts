@@ -49,9 +49,20 @@ db.exec(`
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(bot_id, at_by, at_who)
   );
+
+  CREATE TABLE IF NOT EXISTS douyin_aweme_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    click_text TEXT NOT NULL,
+    aweme_id TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, click_text, aweme_id)
+  );
 `);
 
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_feishu_bots_user_id ON feishu_bots(user_id);
   CREATE INDEX IF NOT EXISTS idx_at_users_record_lookup ON at_users_record(bot_id, at_by, deleted_at, sort_order, created_at);
+  CREATE INDEX IF NOT EXISTS idx_douyin_aweme_records_lookup ON douyin_aweme_records(user_id, click_text);
 `);

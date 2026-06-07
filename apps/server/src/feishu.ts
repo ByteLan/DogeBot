@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import type { AuthenticatedRequest } from './auth.js';
 import { db } from './db.js';
+import { randomDouyinAwemeId } from './douyin.js';
 
 const FEISHU_BASE: Record<string, string> = {
   feishu: 'https://open.feishu.cn',
@@ -48,6 +49,11 @@ type UsersCommand = {
   shouldDelete: boolean;
   shouldTop: boolean;
   newCount?: number;
+};
+
+type DouyinCommand = {
+  isDouyin: boolean;
+  clickText: string;
 };
 
 function openBase(domain: string) {
@@ -179,6 +185,15 @@ function parseUsersCommand(text: string): UsersCommand {
   };
 }
 
+function parseDouyinCommand(text: string): DouyinCommand {
+  const commandIndex = text.indexOf('/douyin');
+  if (commandIndex < 0) return { isDouyin: false, clickText: '' };
+  return {
+    isDouyin: true,
+    clickText: text.slice(commandIndex + '/douyin'.length).trim()
+  };
+}
+
 function mentionedUsers(bot: FeishuBot, message: any) {
   const seen = new Set<string>();
   const mentions = (Array.isArray(message?.mentions) ? message.mentions : []) as FeishuMention[];
@@ -303,6 +318,21 @@ export async function handleFeishuMessage(bot: FeishuBot, event: any) {
   const messageId = message?.message_id;
   const text = textFromMessage(message);
   if (!messageId || !text) return;
+
+  const douyinCommand = parseDouyinCommand(text);
+  if (douyinCommand.isDouyin) {
+    if (!douyinCommand.clickText) {
+      await replyText(bot, messageId, '用法：/douyin {模拟点击文案}');
+      return;
+    }
+    if (bot.user_id == null) {
+      await replyText(bot, messageId, '当前机器人未绑定用户，无法读取抖音收藏记录');
+      return;
+    }
+    const awemeId = randomDouyinAwemeId(bot.user_id, douyinCommand.clickText);
+    await replyText(bot, messageId, awemeId ? `https://www.douyin.com/video/${awemeId}` : `暂无“${douyinCommand.clickText}”的抖音收藏记录`);
+    return;
+  }
 
   const command = parseUsersCommand(text);
   if (!command.isUsers) {
