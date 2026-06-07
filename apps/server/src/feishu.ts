@@ -56,6 +56,34 @@ type DouyinCommand = {
   clickText: string;
 };
 
+type SetDefaultCommand = {
+  isSetDefault: boolean;
+  defaultCommand: string;
+};
+
+type AddCronCommand = {
+  isAddCron: boolean;
+  cronExpr: string;
+  commandText: string;
+};
+
+type ChatCronTask = {
+  id: number;
+  bot_id: number;
+  chat_id: string;
+  cron_expr: string;
+  command_text: string;
+  next_run_at: string;
+};
+
+type CronField = {
+  values: Set<number>;
+  unrestricted: boolean;
+};
+
+let cronSchedulerTimer: NodeJS.Timeout | undefined;
+let cronSchedulerRunning = false;
+
 function openBase(domain: string) {
   return FEISHU_BASE[domain] || FEISHU_BASE.feishu;
 }
@@ -139,6 +167,15 @@ export async function replyText(bot: FeishuBot, messageId: string, text: string)
   });
 }
 
+async function sendTextToChat(bot: FeishuBot, chatId: string, text: string) {
+  const token = await tenantAccessToken(bot);
+  await feishuJson(`${openBase(bot.domain)}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ receive_id: chatId, msg_type: 'text', content: JSON.stringify({ text }) })
+  });
+}
+
 async function replyCard(bot: FeishuBot, messageId: string, card: object) {
   const token = await tenantAccessToken(bot);
   await feishuJson(`${openBase(bot.domain)}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reply`, {
@@ -192,6 +229,152 @@ function parseDouyinCommand(text: string): DouyinCommand {
     isDouyin: true,
     clickText: text.slice(commandIndex + '/douyin'.length).trim()
   };
+}
+
+function unquoteCommand(value: string) {
+  const text = value.trim();
+  if (text.length >= 2 && ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'")))) {
+    return text.slice(1, -1).trim();
+  }
+  return text;
+}
+
+function parseSetDefaultCommand(text: string): SetDefaultCommand {
+  const commandIndex = text.indexOf('/set-default');
+  if (commandIndex < 0) return { isSetDefault: false, defaultCommand: '' };
+  return {
+    isSetDefault: true,
+    defaultCommand: unquoteCommand(text.slice(commandIndex + '/set-default'.length))
+  };
+}
+
+function readQuotedToken(value: string) {
+  const text = value.trimStart();
+  if (!text) return { token: '', rest: '' };
+  const quote = text[0];
+  if (quote === '"' || quote === "'") {
+    let escaped = false;
+    for (let index = 1; index < text.length; index += 1) {
+      const char = text[index];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (char === quote) {
+        return {
+          token: text.slice(1, index).replace(/\\(["'\\])/g, '$1').trim(),
+          rest: text.slice(index + 1).trim()
+        };
+      }
+    }
+  }
+  const [token = '', ...rest] = text.split(/\s+/);
+  return { token, rest: rest.join(' ').trim() };
+}
+
+function parseAddCronCommand(text: string): AddCronCommand {
+  const commandIndex = text.indexOf('/add-cron');
+  if (commandIndex < 0) return { isAddCron: false, cronExpr: '', commandText: '' };
+  const rest = text.slice(commandIndex + '/add-cron'.length).trim();
+  if (!rest) return { isAddCron: true, cronExpr: '', commandText: '' };
+  if (rest.startsWith('"') || rest.startsWith("'")) {
+    const cron = readQuotedToken(rest);
+    return { isAddCron: true, cronExpr: cron.token, commandText: unquoteCommand(cron.rest) };
+  }
+  const parts = rest.split(/\s+/).filter(Boolean);
+  return {
+    isAddCron: true,
+    cronExpr: parts.slice(0, 5).join(' '),
+    commandText: unquoteCommand(parts.slice(5).join(' '))
+  };
+}
+
+function parseCronField(raw: string, min: number, max: number): CronField {
+  const values = new Set<number>();
+  const parts = raw.split(',').map((part) => part.trim()).filter(Boolean);
+  const unrestricted = parts.length === 1 && parts[0] === '*';
+  for (const part of parts) {
+    const [rangePart, stepPart] = part.split('/');
+    const step = stepPart === undefined ? 1 : Number(stepPart);
+    if (!Number.isInteger(step) || step <= 0) throw new Error(`invalid cron step: ${part}`);
+    let start = min;
+    let end = max;
+    if (rangePart.includes('-')) {
+      const [from, to] = rangePart.split('-').map(Number);
+      if (!Number.isInteger(from) || !Number.isInteger(to)) throw new Error(`invalid cron range: ${part}`);
+      start = from;
+      end = to;
+    } else if (rangePart !== '*') {
+      const value = Number(rangePart);
+      if (!Number.isInteger(value)) throw new Error(`invalid cron value: ${part}`);
+      start = value;
+      end = value;
+    }
+    if (start < min || end > max || start > end) throw new Error(`cron value out of range: ${part}`);
+    for (let value = start; value <= end; value += step) values.add(value);
+  }
+  if (values.size === 0) throw new Error(`empty cron field: ${raw}`);
+  return { values, unrestricted };
+}
+
+function nextCronRunAt(cronExpr: string, from = new Date()) {
+  const parts = cronExpr.trim().split(/\s+/);
+  if (parts.length !== 5) throw new Error('cron 需要 5 段：分 时 日 月 周');
+  const [minute, hour, dayOfMonth, month, dayOfWeek] = [
+    parseCronField(parts[0], 0, 59),
+    parseCronField(parts[1], 0, 23),
+    parseCronField(parts[2], 1, 31),
+    parseCronField(parts[3], 1, 12),
+    parseCronField(parts[4], 0, 7)
+  ];
+  const cursor = new Date(from);
+  cursor.setSeconds(0, 0);
+  cursor.setMinutes(cursor.getMinutes() + 1);
+  const deadline = new Date(cursor.getTime() + 366 * 24 * 60 * 60 * 1000);
+  while (cursor <= deadline) {
+    const dow = cursor.getDay();
+    const dowMatches = dayOfWeek.values.has(dow) || (dow === 0 && dayOfWeek.values.has(7));
+    const domMatches = dayOfMonth.values.has(cursor.getDate());
+    const dayMatches = dayOfMonth.unrestricted || dayOfWeek.unrestricted ? domMatches && dowMatches : domMatches || dowMatches;
+    if (
+      minute.values.has(cursor.getMinutes()) &&
+      hour.values.has(cursor.getHours()) &&
+      month.values.has(cursor.getMonth() + 1) &&
+      dayMatches
+    ) {
+      return cursor;
+    }
+    cursor.setMinutes(cursor.getMinutes() + 1);
+  }
+  throw new Error('无法计算下一次执行时间');
+}
+
+function addCronTask(botId: number, chatId: string, cronExpr: string, commandText: string) {
+  const nextRunAt = nextCronRunAt(cronExpr).toISOString();
+  const result = db.prepare(`
+    INSERT INTO feishu_chat_cron_tasks (bot_id, chat_id, cron_expr, command_text, next_run_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(botId, chatId, cronExpr, commandText, nextRunAt);
+  return { id: Number(result.lastInsertRowid), nextRunAt };
+}
+
+function setDefaultCommand(botId: number, defaultCommand: string) {
+  db.prepare(`
+    INSERT INTO feishu_bot_default_commands (bot_id, default_command)
+    VALUES (?, ?)
+    ON CONFLICT(bot_id) DO UPDATE SET
+      default_command = excluded.default_command,
+      updated_at = CURRENT_TIMESTAMP
+  `).run(botId, defaultCommand);
+}
+
+function getDefaultCommand(botId: number) {
+  const row = db.prepare('SELECT default_command FROM feishu_bot_default_commands WHERE bot_id = ?').get(botId) as { default_command: string } | undefined;
+  return row?.default_command?.trim() || '';
 }
 
 function mentionedUsers(bot: FeishuBot, message: any) {
@@ -313,31 +496,57 @@ function usersCard(records: AtRecord[]) {
   };
 }
 
-export async function handleFeishuMessage(bot: FeishuBot, event: any) {
+async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string, text: string, options: { allowSetDefault: boolean }): Promise<boolean> {
   const message = event?.message;
-  const messageId = message?.message_id;
-  const text = textFromMessage(message);
-  if (!messageId || !text) return;
-
+  if (options.allowSetDefault) {
+    const addCron = parseAddCronCommand(text);
+    if (addCron.isAddCron) {
+      if (!addCron.cronExpr || !addCron.commandText) {
+        await replyText(bot, messageId, '用法：/add-cron "*/5 * * * *" "/douyin 123"');
+        return true;
+      }
+      const chatId = String(message?.chat_id || '').trim();
+      if (!chatId) {
+        await replyText(bot, messageId, '当前消息缺少 chat_id，无法创建会话定时任务');
+        return true;
+      }
+      try {
+        const task = addCronTask(bot.id, chatId, addCron.cronExpr, addCron.commandText);
+        await replyText(bot, messageId, `已添加定时任务 #${task.id}，下次执行：${task.nextRunAt}\n${addCron.cronExpr} -> ${addCron.commandText}`);
+      } catch (error) {
+        await replyText(bot, messageId, error instanceof Error ? `添加定时任务失败：${error.message}` : '添加定时任务失败');
+      }
+      return true;
+    }
+    const setDefault = parseSetDefaultCommand(text);
+    if (setDefault.isSetDefault) {
+      if (!setDefault.defaultCommand) {
+        await replyText(bot, messageId, '用法：/set-default "{兜底指令}"');
+        return true;
+      }
+      setDefaultCommand(bot.id, setDefault.defaultCommand);
+      await replyText(bot, messageId, `已设置默认兜底指令：${setDefault.defaultCommand}`);
+      return true;
+    }
+  }
   const douyinCommand = parseDouyinCommand(text);
   if (douyinCommand.isDouyin) {
     if (!douyinCommand.clickText) {
       await replyText(bot, messageId, '用法：/douyin {模拟点击文案}');
-      return;
+      return true;
     }
     if (bot.user_id == null) {
       await replyText(bot, messageId, '当前机器人未绑定用户，无法读取抖音收藏记录');
-      return;
+      return true;
     }
     const awemeId = randomDouyinAwemeId(bot.user_id, douyinCommand.clickText);
     await replyText(bot, messageId, awemeId ? `https://www.douyin.com/video/${awemeId}` : `暂无“${douyinCommand.clickText}”的抖音收藏记录`);
-    return;
+    return true;
   }
 
   const command = parseUsersCommand(text);
   if (!command.isUsers) {
-    await replyText(bot, messageId, text);
-    return;
+    return false;
   }
 
   const atBy = senderIdentity(event);
@@ -360,6 +569,25 @@ export async function handleFeishuMessage(bot: FeishuBot, event: any) {
   }
 
   await replyCard(bot, messageId, usersCard(listMentions(bot.id, atBy.id, command.newCount)));
+  return true;
+}
+
+export async function handleFeishuMessage(bot: FeishuBot, event: any) {
+  const message = event?.message;
+  const messageId = message?.message_id;
+  const text = textFromMessage(message);
+  if (!messageId || !text) return;
+
+  if (await handleFeishuCommand(bot, event, messageId, text, { allowSetDefault: true })) return;
+
+  const defaultCommand = getDefaultCommand(bot.id);
+  if (defaultCommand) {
+    if (await handleFeishuCommand(bot, event, messageId, defaultCommand, { allowSetDefault: false })) return;
+    await replyText(bot, messageId, defaultCommand);
+    return;
+  }
+
+  await replyText(bot, messageId, text);
 }
 
 function getOwnedBot(id: number, userId: number) {
@@ -413,6 +641,8 @@ export function createFeishuBot(req: AuthenticatedRequest, res: Response) {
 
 export function deleteOwnedFeishuBot(botId: number, userId: number) {
   if (!getOwnedBot(botId, userId)) return false;
+  db.prepare('DELETE FROM feishu_bot_default_commands WHERE bot_id = ?').run(botId);
+  db.prepare('DELETE FROM feishu_chat_cron_tasks WHERE bot_id = ?').run(botId);
   db.prepare('DELETE FROM feishu_bots WHERE id = ? AND user_id = ?').run(botId, userId);
   tokenCache.delete(botId);
   return true;
@@ -465,4 +695,61 @@ export async function feishuWebhook(req: Request, res: Response) {
   }
 
   res.json({ ok: true });
+}
+
+async function executeCronTask(task: ChatCronTask) {
+  const bot = getBot(task.bot_id);
+  if (!bot || !bot.enabled) return;
+  const douyinCommand = parseDouyinCommand(task.command_text);
+  if (!douyinCommand.isDouyin) {
+    await sendTextToChat(bot, task.chat_id, `定时任务 #${task.id} 暂不支持该指令：${task.command_text}`);
+    return;
+  }
+  if (!douyinCommand.clickText) {
+    await sendTextToChat(bot, task.chat_id, `定时任务 #${task.id} 配置错误：/douyin 缺少模拟点击文案`);
+    return;
+  }
+  if (bot.user_id == null) {
+    await sendTextToChat(bot, task.chat_id, `定时任务 #${task.id} 执行失败：当前机器人未绑定用户`);
+    return;
+  }
+  const awemeId = randomDouyinAwemeId(bot.user_id, douyinCommand.clickText);
+  await sendTextToChat(bot, task.chat_id, awemeId ? `https://www.douyin.com/video/${awemeId}` : `暂无“${douyinCommand.clickText}”的抖音收藏记录`);
+}
+
+async function runCronSchedulerTick() {
+  if (cronSchedulerRunning) return;
+  cronSchedulerRunning = true;
+  try {
+    const now = new Date();
+    const tasks = db.prepare(`
+      SELECT id, bot_id, chat_id, cron_expr, command_text, next_run_at
+      FROM feishu_chat_cron_tasks
+      WHERE enabled = 1 AND next_run_at <= ?
+      ORDER BY next_run_at ASC, id ASC
+      LIMIT 20
+    `).all(now.toISOString()) as ChatCronTask[];
+    for (const task of tasks) {
+      const nextRunAt = nextCronRunAt(task.cron_expr, now).toISOString();
+      db.prepare(`
+        UPDATE feishu_chat_cron_tasks
+        SET last_run_at = ?, next_run_at = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(now.toISOString(), nextRunAt, task.id);
+      executeCronTask(task).catch((error) => console.error('[feishu:cron] task failed', { taskId: task.id, error }));
+    }
+  } finally {
+    cronSchedulerRunning = false;
+  }
+}
+
+export function startFeishuCronScheduler() {
+  if (cronSchedulerTimer) return;
+  cronSchedulerTimer = setInterval(() => void runCronSchedulerTick(), 30_000);
+  void runCronSchedulerTick();
+}
+
+export function stopFeishuCronScheduler() {
+  if (cronSchedulerTimer) clearInterval(cronSchedulerTimer);
+  cronSchedulerTimer = undefined;
 }

@@ -2,7 +2,7 @@ import cors from 'cors';
 import express from 'express';
 import { authenticate, createToken, requireAuth, type AuthenticatedRequest } from './auth.js';
 import { uploadDouyinAwemeRecords } from './douyin.js';
-import { createFeishuBotForUser, deleteOwnedFeishuBot, feishuWebhook, listFeishuBots, probeFeishuBot, publicBot } from './feishu.js';
+import { createFeishuBotForUser, deleteOwnedFeishuBot, feishuWebhook, listFeishuBots, probeFeishuBot, publicBot, startFeishuCronScheduler, stopFeishuCronScheduler } from './feishu.js';
 import { feishuConnectionManager } from './feishuConnection.js';
 import { beginFeishuQrRegistration, pollFeishuQrRegistration } from './feishuOnboard.js';
 
@@ -80,14 +80,17 @@ app.post('/feishu/webhook/:id', feishuWebhook);
 app.listen(port, () => {
   console.log(`DogeBot server listening on http://127.0.0.1:${port}`);
   void feishuConnectionManager.startAll();
+  startFeishuCronScheduler();
 });
 
 process.on('SIGINT', () => {
+  stopFeishuCronScheduler();
   feishuConnectionManager.stopAll();
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
+  stopFeishuCronScheduler();
   feishuConnectionManager.stopAll();
   process.exit(0);
 });
