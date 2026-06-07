@@ -31,6 +31,13 @@ let douyinRunHidden = false;
 let douyinShowOnClickFailure = false;
 let douyinSkipClick = false;
 let douyinCollectsId = '';
+let douyinShortIntervalMs = 10_000;
+let douyinLongIntervalMs = 60_000;
+let douyinRetryLimit = 3;
+let douyinIntervalMode: 'short' | 'long' = 'short';
+let douyinSameIdsCount = 0;
+let douyinLastIdsKey = '';
+let douyinMonitorRunning = false;
 const pendingResponses = new Map<string, { url: string; status: number }>();
 const debugListenerAttached = new WeakSet<BrowserWindow>();
 const devToolsShortcutAttached = new WeakSet<BrowserWindow>();
@@ -109,6 +116,21 @@ function applyDouyinWindowVisibility(win: BrowserWindow) {
 function showDouyinWindowNow(win: BrowserWindow) {
   win.show();
   win.focus();
+}
+
+function toPositiveInteger(value: unknown, fallback: number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+function currentMonitorIntervalMs() {
+  return douyinIntervalMode === 'long' ? douyinLongIntervalMs : douyinShortIntervalMs;
+}
+
+function resetMonitorIntervalState() {
+  douyinIntervalMode = 'short';
+  douyinSameIdsCount = 0;
+  douyinLastIdsKey = '';
 }
 
 function registerBlockedDeeplinkHandlers() {
@@ -246,6 +268,11 @@ function ensureDouyinWindow() {
     event.preventDefault();
     logDouyin('blocked deeplink will-redirect', url);
   });
+  (win.webContents as any).on('will-frame-navigate', (event: Electron.Event, url: string, isMainFrame: boolean, frameProcessId: number, frameRoutingId: number) => {
+    if (isAllowedNavigationUrl(url)) return;
+    event.preventDefault();
+    logDouyin('blocked deeplink will-frame-navigate', { url, isMainFrame, frameProcessId, frameRoutingId });
+  });
   win.webContents.on('did-start-loading', () => logDouyin('did-start-loading', win.webContents.getURL()));
   win.webContents.on('did-finish-load', () => {
     logDouyin('did-finish-load', win.webContents.getURL());
@@ -347,6 +374,14 @@ function attachDouyinDebugger(win: BrowserWindow) {
               document.addEventListener('click', (event) => {
                 const target = event.target && event.target.closest ? event.target.closest('a[href]') : null;
                 if (target && blockDeeplink(target.href, 'anchor.click')) {
+                  event.preventDefault();
+                  event.stopImmediatePropagation();
+                }
+              }, true);
+              document.addEventListener('submit', (event) => {
+                const target = event.target;
+                const action = target && target.getAttribute ? target.getAttribute('action') : '';
+                if (action && blockDeeplink(action, 'form.submit')) {
                   event.preventDefault();
                   event.stopImmediatePropagation();
                 }
@@ -463,11 +498,20 @@ async function clickTextOnPage(win: BrowserWindow) {
 }
 
 function scheduleMonitorTick() {
+  if (!douyinMonitorRunning) return;
   if (monitorTimer) clearTimeout(monitorTimer);
-  monitorTimer = setTimeout(() => void runMonitorTick(), 10_000);
+  const delayMs = currentMonitorIntervalMs();
+  monitorTimer = setTimeout(() => void runMonitorTick(), delayMs);
+  logDouyin('monitor next tick scheduled', {
+    mode: douyinIntervalMode,
+    delayMs,
+    sameIdsCount: douyinSameIdsCount,
+    retryLimit: douyinRetryLimit
+  });
 }
 
 async function runMonitorTick() {
+  if (!douyinMonitorRunning) return;
   logDouyin('monitor tick start', { clickText, skipClick: douyinSkipClick });
   const win = ensureDouyinWindow();
   await win.loadURL(favoriteUrl, { userAgent: douyinUserAgent });
@@ -494,6 +538,7 @@ async function runMonitorTick() {
 }
 
 function stopMonitor() {
+  douyinMonitorRunning = false;
   if (monitorTimer) clearTimeout(monitorTimer);
   monitorTimer = undefined;
   logDouyin('monitor stopped');
@@ -509,15 +554,75 @@ ipcMain.handle('douyin:open-login', async () => {
   logDouyin('open-login done');
 });
 
-ipcMain.handle('douyin:start-monitor', async (_event, text: string, hidden?: boolean, showOnClickFailure?: boolean, collectsId?: string, skipClick?: boolean) => {
+ipcMain.handle('douyin:start-monitor', async (
+  _event,
+  text: string,
+  hidden?: boolean,
+  showOnClickFailure?: boolean,
+  collectsId?: string,
+  skipClick?: boolean,
+  shortIntervalSeconds?: number,
+  longIntervalSeconds?: number,
+  retryLimit?: number
+) => {
   douyinRunHidden = Boolean(hidden);
   douyinShowOnClickFailure = Boolean(showOnClickFailure);
   douyinSkipClick = Boolean(skipClick);
   douyinCollectsId = String(collectsId || '').trim();
-  logDouyin('ipc start-monitor', { text, hidden: douyinRunHidden, showOnClickFailure: douyinShowOnClickFailure, collectsId: douyinCollectsId, skipClick: douyinSkipClick });
+  douyinShortIntervalMs = toPositiveInteger(shortIntervalSeconds, 10) * 1000;
+  douyinLongIntervalMs = toPositiveInteger(longIntervalSeconds, 60) * 1000;
+  douyinRetryLimit = toPositiveInteger(retryLimit, 3);
+  resetMonitorIntervalState();
+  douyinMonitorRunning = true;
+  logDouyin('ipc start-monitor', {
+    text,
+    hidden: douyinRunHidden,
+    showOnClickFailure: douyinShowOnClickFailure,
+    collectsId: douyinCollectsId,
+    skipClick: douyinSkipClick,
+    shortIntervalMs: douyinShortIntervalMs,
+    longIntervalMs: douyinLongIntervalMs,
+    retryLimit: douyinRetryLimit
+  });
   clickText = text;
-  stopMonitor();
+  if (monitorTimer) clearTimeout(monitorTimer);
+  monitorTimer = undefined;
   await runMonitorTick();
+});
+
+ipcMain.handle('douyin:report-aweme-ids', (_event, ids?: unknown[]) => {
+  if (!douyinMonitorRunning) return;
+  const awemeIds = Array.isArray(ids) ? ids.map((id) => String(id || '').trim()).filter(Boolean) : [];
+  const idsKey = JSON.stringify(awemeIds);
+  if (awemeIds.length === 0) {
+    if (douyinIntervalMode === 'long') {
+      resetMonitorIntervalState();
+      scheduleMonitorTick();
+    }
+    logDouyin('aweme ids empty', { mode: douyinIntervalMode, sameIdsCount: douyinSameIdsCount });
+    return;
+  }
+  if (!douyinLastIdsKey || idsKey !== douyinLastIdsKey) {
+    douyinLastIdsKey = idsKey;
+    douyinSameIdsCount = 0;
+    douyinIntervalMode = 'short';
+    scheduleMonitorTick();
+    logDouyin('aweme ids changed, switch short interval', { count: awemeIds.length });
+    return;
+  }
+  if (douyinIntervalMode === 'short') {
+    douyinSameIdsCount += 1;
+    if (douyinSameIdsCount >= douyinRetryLimit) {
+      douyinIntervalMode = 'long';
+      scheduleMonitorTick();
+    }
+  }
+  logDouyin('aweme ids same', {
+    mode: douyinIntervalMode,
+    count: awemeIds.length,
+    sameIdsCount: douyinSameIdsCount,
+    retryLimit: douyinRetryLimit
+  });
 });
 
 ipcMain.handle('douyin:set-hidden', (_event, hidden?: boolean) => {

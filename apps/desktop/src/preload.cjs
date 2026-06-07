@@ -7,9 +7,9 @@ contextBridge.exposeInMainWorld('douyin', {
     console.log('[douyin preload] openLogin');
     return ipcRenderer.invoke('douyin:open-login');
   },
-  startMonitor: (clickText, hidden, showOnClickFailure, collectsId, skipClick) => {
-    console.log('[douyin preload] startMonitor', { clickText, hidden, showOnClickFailure, collectsId, skipClick });
-    return ipcRenderer.invoke('douyin:start-monitor', clickText, hidden, showOnClickFailure, collectsId, skipClick);
+  startMonitor: (clickText, hidden, showOnClickFailure, collectsId, skipClick, shortIntervalSeconds, longIntervalSeconds, retryLimit) => {
+    console.log('[douyin preload] startMonitor', { clickText, hidden, showOnClickFailure, collectsId, skipClick, shortIntervalSeconds, longIntervalSeconds, retryLimit });
+    return ipcRenderer.invoke('douyin:start-monitor', clickText, hidden, showOnClickFailure, collectsId, skipClick, shortIntervalSeconds, longIntervalSeconds, retryLimit);
   },
   stopMonitor: () => {
     console.log('[douyin preload] stopMonitor');
@@ -18,6 +18,10 @@ contextBridge.exposeInMainWorld('douyin', {
   setHidden: (hidden) => {
     console.log('[douyin preload] setHidden', hidden);
     return ipcRenderer.invoke('douyin:set-hidden', hidden);
+  },
+  reportAwemeIds: (ids) => {
+    console.log('[douyin preload] reportAwemeIds', { count: Array.isArray(ids) ? ids.length : 0 });
+    return ipcRenderer.invoke('douyin:report-aweme-ids', ids);
   },
   onClickResult: (listener) => {
     const handler = (_event, data) => listener(data);

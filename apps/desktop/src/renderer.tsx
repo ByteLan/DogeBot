@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Alert, Button, Card, Form, Grid, Input, Link, List, Select, Space, Switch, Tabs, Typography } from '@arco-design/web-react';
+import { Alert, Button, Card, Form, Grid, Input, InputNumber, Link, List, Select, Space, Switch, Tabs, Typography } from '@arco-design/web-react';
 import '@arco-design/web-react/dist/css/arco.css';
 import { JsonView, allExpanded, collapseAllNested, darkStyles } from 'react-json-view-lite';
 import 'react-json-view-lite/dist/index.css';
@@ -32,9 +32,19 @@ type Connection = {
 
 type DouyinBridge = {
   openLogin: () => Promise<void>;
-  startMonitor: (clickText: string, hidden?: boolean, showOnClickFailure?: boolean, collectsId?: string, skipClick?: boolean) => Promise<void>;
+  startMonitor: (
+    clickText: string,
+    hidden?: boolean,
+    showOnClickFailure?: boolean,
+    collectsId?: string,
+    skipClick?: boolean,
+    shortIntervalSeconds?: number,
+    longIntervalSeconds?: number,
+    retryLimit?: number
+  ) => Promise<void>;
   stopMonitor: () => Promise<void>;
   setHidden: (hidden: boolean) => Promise<void>;
+  reportAwemeIds: (ids: string[]) => Promise<void>;
   onClickResult: (listener: (data: unknown) => void) => () => void;
   onCollectsVideoList: (listener: (data: unknown) => void) => () => void;
 };
@@ -55,6 +65,11 @@ const { Title, Text, Paragraph } = Typography;
 const { Row, Col } = Grid;
 const initialServerUrl = localStorage.getItem('dogebot.serverUrl') || 'http://127.0.0.1:3000';
 const douyinCollectListUrl = 'https://www.douyin.com/aweme/v1/web/collects/video/list/';
+
+function readPositiveNumber(key: string, fallback: number) {
+  const parsed = Number(localStorage.getItem(key));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 function parseJson(value: string) {
   try {
@@ -112,6 +127,9 @@ function App() {
   const [douyinRunHidden, setDouyinRunHidden] = useState(() => localStorage.getItem('dogebot.douyinRunHidden') === '1');
   const [douyinShowOnClickFailure, setDouyinShowOnClickFailure] = useState(() => localStorage.getItem('dogebot.douyinShowOnClickFailure') === '1');
   const [douyinSkipClick, setDouyinSkipClick] = useState(() => localStorage.getItem('dogebot.douyinSkipClick') === '1');
+  const [douyinShortIntervalSeconds, setDouyinShortIntervalSeconds] = useState(() => readPositiveNumber('dogebot.douyinShortIntervalSeconds', 10));
+  const [douyinLongIntervalSeconds, setDouyinLongIntervalSeconds] = useState(() => readPositiveNumber('dogebot.douyinLongIntervalSeconds', 60));
+  const [douyinRetryLimit, setDouyinRetryLimit] = useState(() => readPositiveNumber('dogebot.douyinRetryLimit', 3));
   const [douyinStatus, setDouyinStatus] = useState(window.douyin ? '未开始' : 'Douyin preload 未加载，请检查终端日志');
   const [douyinEvents, setDouyinEvents] = useState<DouyinEvent[]>([]);
 
@@ -164,6 +182,7 @@ function App() {
       const body = parseCollectListBody(data);
       if (body === undefined) return;
       const awemeIds = extractAwemeIds(body);
+      window.douyin?.reportAwemeIds(awemeIds).catch((error) => console.error('[douyin renderer] report aweme ids failed', error));
       setDouyinEvents((items) => [{ id: `${Date.now()}-collects-video-list`, title: douyinCollectListUrl, data: body }, ...items].slice(0, 10));
       if (awemeIds.length === 0) return;
       const clickText = douyinClickText.trim();
@@ -330,9 +349,22 @@ function App() {
       localStorage.setItem('dogebot.douyinRunHidden', douyinRunHidden ? '1' : '0');
       localStorage.setItem('dogebot.douyinShowOnClickFailure', douyinShowOnClickFailure ? '1' : '0');
       localStorage.setItem('dogebot.douyinSkipClick', douyinSkipClick ? '1' : '0');
-      console.log('[douyin renderer] start monitor', { text, hidden: douyinRunHidden, showOnClickFailure: douyinShowOnClickFailure, collectsId, skipClick: douyinSkipClick });
-      setDouyinStatus(douyinSkipClick ? '监听中：每 10 秒刷新收藏页，不执行点击，只监听 API' : douyinRunHidden ? '后台监听中：每 10 秒跳转收藏页并模拟点击' : '前台监听中：每 10 秒跳转收藏页并模拟点击');
-      await requireDouyinBridge().startMonitor(text, douyinRunHidden, douyinShowOnClickFailure, collectsId, douyinSkipClick);
+      localStorage.setItem('dogebot.douyinShortIntervalSeconds', String(douyinShortIntervalSeconds));
+      localStorage.setItem('dogebot.douyinLongIntervalSeconds', String(douyinLongIntervalSeconds));
+      localStorage.setItem('dogebot.douyinRetryLimit', String(douyinRetryLimit));
+      console.log('[douyin renderer] start monitor', {
+        text,
+        hidden: douyinRunHidden,
+        showOnClickFailure: douyinShowOnClickFailure,
+        collectsId,
+        skipClick: douyinSkipClick,
+        shortIntervalSeconds: douyinShortIntervalSeconds,
+        longIntervalSeconds: douyinLongIntervalSeconds,
+        retryLimit: douyinRetryLimit
+      });
+      const intervalText = `短间隔 ${douyinShortIntervalSeconds}s，长间隔 ${douyinLongIntervalSeconds}s，retry ${douyinRetryLimit} 次`;
+      setDouyinStatus(douyinSkipClick ? `监听中：按 ${intervalText} 刷新收藏页，不执行点击，只监听 API` : douyinRunHidden ? `后台监听中：按 ${intervalText} 跳转收藏页并模拟点击` : `前台监听中：按 ${intervalText} 跳转收藏页并模拟点击`);
+      await requireDouyinBridge().startMonitor(text, douyinRunHidden, douyinShowOnClickFailure, collectsId, douyinSkipClick, douyinShortIntervalSeconds, douyinLongIntervalSeconds, douyinRetryLimit);
     } catch (error) {
       setDouyinStatus(error instanceof Error ? error.message : '开始监听失败');
     }
@@ -453,7 +485,7 @@ function App() {
           </Card>
 
           <Card title="抖音收藏监听">
-            <Paragraph type="secondary">登录态保存在本机 Electron 持久会话中。开始监听后，每 10 秒打开收藏页并点击页面上包含指定字样的组件，然后捕获 <code>collects/video/list</code> 接口返回值。</Paragraph>
+            <Paragraph type="secondary">登录态保存在本机 Electron 持久会话中。开始监听后，按短/长间隔打开收藏页并点击页面上包含指定字样的组件，然后捕获 <code>collects/video/list</code> 接口返回值。</Paragraph>
             <Form layout="vertical">
               <Form.Item label="模拟点击字样">
                 <Input value={douyinClickText} placeholder="例如：默认收藏夹" onChange={setDouyinClickText} />
@@ -468,6 +500,50 @@ function App() {
                   }}
                 />
               </Form.Item>
+              <Row gutter={12}>
+                <Col span={8}>
+                  <Form.Item label="短间隔（秒）">
+                    <InputNumber
+                      min={1}
+                      precision={0}
+                      value={douyinShortIntervalSeconds}
+                      onChange={(value) => {
+                        const next = Number(value) > 0 ? Number(value) : 10;
+                        setDouyinShortIntervalSeconds(next);
+                        localStorage.setItem('dogebot.douyinShortIntervalSeconds', String(next));
+                      }}
+                    />
+                  </Form.Item>
+                </Col>
+                <Col span={8}>
+                  <Form.Item label="长间隔（秒）">
+                    <InputNumber
+                      min={1}
+                      precision={0}
+                      value={douyinLongIntervalSeconds}
+                      onChange={(value) => {
+                        const next = Number(value) > 0 ? Number(value) : 60;
+                        setDouyinLongIntervalSeconds(next);
+                        localStorage.setItem('dogebot.douyinLongIntervalSeconds', String(next));
+                      }}
+                    />
+                  </Form.Item>
+                </Col>
+                <Col span={8}>
+                  <Form.Item label="retry 次数">
+                    <InputNumber
+                      min={1}
+                      precision={0}
+                      value={douyinRetryLimit}
+                      onChange={(value) => {
+                        const next = Number(value) > 0 ? Number(value) : 3;
+                        setDouyinRetryLimit(next);
+                        localStorage.setItem('dogebot.douyinRetryLimit', String(next));
+                      }}
+                    />
+                  </Form.Item>
+                </Col>
+              </Row>
               <Form.Item label="执行方式">
                 <Space direction="vertical" align="start">
                   <Space>
