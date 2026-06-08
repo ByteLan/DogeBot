@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, session } from 'electron';
+import { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, session } from 'electron';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -6,6 +6,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const douyinUrl = 'https://www.douyin.com';
 const favoriteUrl = 'https://www.douyin.com/user/self?from_tab_name=main&showSubTab=favorite_folder&showTab=favorite_collection';
 const collectListUrl = 'https://www.douyin.com/aweme/v1/web/collects/video/list/';
+type DouyinCollectCaptureMode = 'page-hook' | 'fetch-debugger';
+const douyinCollectCaptureMode = 'page-hook' as DouyinCollectCaptureMode;
+const douyinUsePageHookCapture = douyinCollectCaptureMode === 'page-hook';
+const douyinUseFetchDebuggerCapture = douyinCollectCaptureMode === 'fetch-debugger';
+const douyinUseCdpPageHookCapture = false;
 const douyinPartition = 'persist:dogebot-douyin';
 const chromeVersion = process.versions.chrome;
 const douyinUserAgent = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`;
@@ -26,6 +31,8 @@ app.commandLine.appendSwitch('lang', 'zh-CN');
 let mainWindow: BrowserWindow | undefined;
 let douyinWindow: BrowserWindow | undefined;
 let monitorTimer: NodeJS.Timeout | undefined;
+let tray: Tray | undefined;
+let appQuitting = false;
 let clickText = '';
 let douyinRunHidden = false;
 let douyinShowOnClickFailure = false;
@@ -40,7 +47,6 @@ let douyinLastIdsKey = '';
 let douyinMonitorRunning = false;
 let douyinTickRunning = false;
 let douyinNextRunAt = '';
-const pendingResponses = new Map<string, { url: string; status: number }>();
 const debugListenerAttached = new WeakSet<BrowserWindow>();
 const devToolsShortcutAttached = new WeakSet<BrowserWindow>();
 let douyinSessionConfigured = false;
@@ -145,6 +151,60 @@ function currentMonitorState() {
 
 function sendMonitorState() {
   mainWindow?.webContents.send('douyin:monitor-state', currentMonitorState());
+  updateTrayMenu();
+}
+
+function buildTrayIcon() {
+  const svg = encodeURIComponent(`
+    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+      <rect width="32" height="32" rx="8" fill="#111827"/>
+      <text x="16" y="22" text-anchor="middle" font-family="Arial" font-size="18" font-weight="700" fill="#ffffff">D</text>
+    </svg>
+  `);
+  const icon = nativeImage.createFromDataURL(`data:image/svg+xml;charset=utf-8,${svg}`);
+  if (process.platform === 'darwin') icon.setTemplateImage(true);
+  return icon;
+}
+
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+  sendMonitorState();
+}
+
+function hideMainWindowToTray() {
+  mainWindow?.hide();
+}
+
+function updateTrayMenu() {
+  if (!tray) return;
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: '显示 DogeBot', click: showMainWindow },
+    {
+      label: '停止监听',
+      click: () => stopMonitor(),
+      enabled: douyinMonitorRunning
+    },
+    { type: 'separator' },
+    {
+      label: '退出',
+      click: () => {
+        appQuitting = true;
+        app.quit();
+      }
+    }
+  ]));
+}
+
+function createTray() {
+  if (tray) return;
+  tray = new Tray(buildTrayIcon());
+  tray.setToolTip('DogeBot');
+  updateTrayMenu();
+  tray.on('click', showMainWindow);
 }
 
 function resetMonitorIntervalState() {
@@ -226,6 +286,14 @@ function createWindow() {
     }
   });
   mainWindow = win;
+  win.on('close', (event) => {
+    if (appQuitting) return;
+    event.preventDefault();
+    hideMainWindowToTray();
+  });
+  win.on('minimize', () => {
+    hideMainWindowToTray();
+  });
   win.on('closed', () => {
     if (mainWindow === win) mainWindow = undefined;
   });
@@ -252,6 +320,7 @@ function ensureDouyinWindow() {
       webSecurity: true,
       allowRunningInsecureContent: false,
       backgroundThrottling: false,
+      ...(douyinUsePageHookCapture ? { preload: join(__dirname, 'douyin-preload.cjs') } : {}),
       session: douyinSession
     }
   });
@@ -270,6 +339,7 @@ function ensureDouyinWindow() {
             webSecurity: true,
             allowRunningInsecureContent: false,
             backgroundThrottling: false,
+            ...(douyinUsePageHookCapture ? { preload: join(__dirname, 'douyin-preload.cjs') } : {}),
             session: douyinSession
           }
         }
@@ -304,6 +374,19 @@ function ensureDouyinWindow() {
   win.webContents.on('did-fail-load', (_event, code, description, validatedURL) => {
     logDouyin('did-fail-load', { code, description, validatedURL });
   });
+  win.on('close', (event) => {
+    if (appQuitting || !douyinMonitorRunning) return;
+    event.preventDefault();
+    douyinRunHidden = true;
+    win.hide();
+    logDouyin('window hidden instead of closed while monitoring');
+  });
+  win.on('minimize', () => {
+    if (!douyinMonitorRunning) return;
+    douyinRunHidden = true;
+    win.hide();
+    logDouyin('window hidden on minimize while monitoring');
+  });
   win.on('closed', () => {
     logDouyin('window closed');
     if (douyinWindow === win) douyinWindow = undefined;
@@ -319,24 +402,20 @@ function attachDouyinDebugger(win: BrowserWindow) {
   if (!devtools.isAttached()) {
     try {
       devtools.attach('1.3');
-      // 增大 Network 缓存上限，防止因为 JSON 响应体过大被浏览器底层直接丢弃(类似垃圾回收)
-      devtools.sendCommand('Network.enable', {
-        maxResourceBufferSize: 1024 * 1024 * 50, // 单个资源最大允许 50MB
-        maxTotalBufferSize: 1024 * 1024 * 100    // 总缓存最大允许 100MB
-      }).catch(() => undefined);
-
-      // 启用 Fetch 域以取代 Network 域获取 body，这是最稳妥的拦截方案
-      devtools.sendCommand('Fetch.enable', {
-        patterns: [{ requestStage: 'Response' }] // 只在收到响应时暂停请求
-      }).catch((error) => logDouyin('Fetch.enable failed', error));
-      
-      // 监听 debugger 意外掉线，实现"一直挂载"
       devtools.on('detach', (_event, reason) => {
         logDouyin('debugger detached', reason);
         debugListenerAttached.delete(win);
-        // 尝试重新挂载
         setTimeout(() => attachDouyinDebugger(win), 1000);
       });
+      if (douyinUseFetchDebuggerCapture) {
+        devtools.sendCommand('Network.enable', {
+          maxResourceBufferSize: 1024 * 1024 * 50,
+          maxTotalBufferSize: 1024 * 1024 * 100
+        }).catch(() => undefined);
+        devtools.sendCommand('Fetch.enable', {
+          patterns: [{ requestStage: 'Response' }]
+        }).catch((error) => logDouyin('Fetch.enable failed', error));
+      }
       devtools
         .sendCommand('Emulation.setUserAgentOverride', {
           userAgent: douyinUserAgent,
@@ -348,6 +427,8 @@ function attachDouyinDebugger(win: BrowserWindow) {
         .sendCommand('Page.addScriptToEvaluateOnNewDocument', {
           source: `
             (() => {
+              if (window.__dogebotDouyinHookInstalled) return;
+              window.__dogebotDouyinHookInstalled = true;
               const userAgent = ${JSON.stringify(douyinUserAgent)};
               const uaMetadata = ${JSON.stringify(douyinUaMetadata)};
               const isAllowedWebUrl = (url) => {
@@ -393,6 +474,161 @@ function attachDouyinDebugger(win: BrowserWindow) {
                 }
               });
               window.chrome = window.chrome || { runtime: {} };
+              if (${JSON.stringify(douyinUseCdpPageHookCapture)}) {
+              const collectListEndpoint = ${JSON.stringify(collectListUrl)};
+              const isCollectListApiUrl = (url) => {
+                if (!url) return false;
+                try {
+                  const parsed = new URL(String(url), location.href);
+                  return parsed.origin + parsed.pathname === collectListEndpoint;
+                } catch {
+                  return false;
+                }
+              };
+              const hookLog = (message, data) => {
+                try {
+                  window.dispatchEvent(new CustomEvent('dogebot-douyin-hook-event', {
+                    detail: JSON.stringify({
+                      source: 'dogebot-douyin-hook',
+                      type: 'hook-log',
+                      payload: { message, data }
+                    })
+                  }));
+                } catch {}
+                if (window.__dogebotDouyinCapture && typeof window.__dogebotDouyinCapture.log === 'function') {
+                  try {
+                    window.__dogebotDouyinCapture.log(message, data);
+                  } catch {}
+                }
+              };
+              const emitCollectList = (payload) => {
+                const message = {
+                  ...payload,
+                  receivedAt: new Date().toISOString()
+                };
+                if (window.__dogebotDouyinCapture && typeof window.__dogebotDouyinCapture.sendCollectsVideoList === 'function') {
+                  try {
+                    window.__dogebotDouyinCapture.sendCollectsVideoList(message);
+                    return;
+                  } catch (error) {
+                    console.warn('[douyin injected] bridge collect list failed', error);
+                  }
+                }
+                try {
+                  window.dispatchEvent(new CustomEvent('dogebot-douyin-hook-event', {
+                    detail: JSON.stringify({
+                      source: 'dogebot-douyin-hook',
+                      type: 'collects-video-list',
+                      payload: message
+                    })
+                  }));
+                  return;
+                } catch (error) {
+                  console.warn('[douyin injected] event collect list failed', error);
+                }
+                try {
+                  window.postMessage({
+                    source: 'dogebot-douyin-hook',
+                    type: 'collects-video-list',
+                    payload: message
+                  }, '*');
+                } catch (error) {
+                  console.warn('[douyin injected] emit collect list failed', error);
+                }
+              };
+              hookLog('installed', { href: location.href, hasBridge: Boolean(window.__dogebotDouyinCapture) });
+              const readBlobText = (blob) => blob && typeof blob.text === 'function' ? blob.text() : Promise.resolve('');
+              const decodeArrayBuffer = (buffer) => {
+                try {
+                  return new TextDecoder('utf-8').decode(buffer);
+                } catch {
+                  return '';
+                }
+              };
+              const originalFetch = window.fetch;
+              if (typeof originalFetch === 'function') {
+                window.fetch = async function(input, init) {
+                  const response = await originalFetch.apply(this, arguments);
+                  const requestUrl = typeof input === 'string'
+                    ? input
+                    : input && typeof Request !== 'undefined' && input instanceof Request
+                      ? input.url
+                      : String(input || '');
+                  const responseUrl = response && response.url ? response.url : requestUrl;
+                  if (isCollectListApiUrl(responseUrl) || isCollectListApiUrl(requestUrl)) {
+                    hookLog('fetch matched', { requestUrl, responseUrl, status: response.status });
+                    response.clone().text()
+                      .then((body) => emitCollectList({
+                        source: 'fetch',
+                        url: responseUrl || requestUrl,
+                        status: response.status,
+                        body
+                      }))
+                      .catch((error) => emitCollectList({
+                        source: 'fetch',
+                        url: responseUrl || requestUrl,
+                        status: response.status,
+                        error: error instanceof Error ? error.message : '读取 fetch 响应失败'
+                      }));
+                  }
+                  return response;
+                };
+                try {
+                  Object.defineProperty(window.fetch, 'toString', { value: () => originalFetch.toString(), configurable: true });
+                } catch {}
+              }
+              const originalXhrOpen = XMLHttpRequest.prototype.open;
+              const originalXhrSend = XMLHttpRequest.prototype.send;
+              XMLHttpRequest.prototype.open = function(method, url) {
+                this.__dogebotMethod = method;
+                this.__dogebotUrl = url;
+                return originalXhrOpen.apply(this, arguments);
+              };
+              XMLHttpRequest.prototype.send = function() {
+                const xhr = this;
+                xhr.addEventListener('loadend', () => {
+                  const url = xhr.responseURL || xhr.__dogebotUrl;
+                  if (!isCollectListApiUrl(url)) return;
+                  hookLog('xhr matched', { url, status: xhr.status, responseType: xhr.responseType });
+                  const emit = (body) => emitCollectList({
+                    source: 'xhr',
+                    url,
+                    status: xhr.status,
+                    body
+                  });
+                  try {
+                    if (!xhr.responseType || xhr.responseType === 'text') {
+                      emit(xhr.responseText || '');
+                      return;
+                    }
+                    if (xhr.responseType === 'json') {
+                      emit(typeof xhr.response === 'string' ? xhr.response : JSON.stringify(xhr.response));
+                      return;
+                    }
+                    if (xhr.responseType === 'arraybuffer') {
+                      emit(decodeArrayBuffer(xhr.response));
+                      return;
+                    }
+                    if (xhr.responseType === 'blob') {
+                      readBlobText(xhr.response).then(emit).catch((error) => emitCollectList({
+                        source: 'xhr',
+                        url,
+                        status: xhr.status,
+                        error: error instanceof Error ? error.message : '读取 xhr blob 响应失败'
+                      }));
+                    }
+                  } catch (error) {
+                    emitCollectList({
+                      source: 'xhr',
+                      url,
+                      status: xhr.status,
+                      error: error instanceof Error ? error.message : '读取 xhr 响应失败'
+                    });
+                  }
+                }, { once: true });
+                return originalXhrSend.apply(this, arguments);
+              };
+              }
               const originalOpen = window.open;
               window.open = function(url, ...args) {
                 if (blockDeeplink(url, 'window.open')) return null;
@@ -447,38 +683,69 @@ function attachDouyinDebugger(win: BrowserWindow) {
     }
   }
   debugListenerAttached.add(win);
-  devtools.on('message', (_event, method, params) => {
-    // 监听 fetch 事件，从源头获取 request 和响应数据 (需要开启 Fetch.enable)
-    if (method === 'Fetch.requestPaused') {
-      const url = params.request.url;
-      const requestId = params.requestId; // 注意：这是 Fetch 域的 requestId
-
-      if (isCollectListUrl(url) && params.request.method !== 'OPTIONS') {
-        logDouyin('Fetch matched response', { requestId, url });
-        
-        devtools.sendCommand('Fetch.getResponseBody', { requestId })
-          .then((result) => {
-            logDouyin('Fetch response body captured', { requestId, length: result.body.length });
-            mainWindow?.webContents.send('douyin:collects-video-list', {
-              url: url,
-              status: 200, // 走到这里说明有响应体
-              body: result.base64Encoded ? Buffer.from(result.body, 'base64').toString('utf8') : result.body,
-              receivedAt: new Date().toISOString()
-            });
-            // 必须放行请求，否则页面会被卡住
-            devtools.sendCommand('Fetch.continueRequest', { requestId }).catch(() => {});
-          })
-          .catch((error) => {
-            logDouyin('Fetch response body failed', error instanceof Error ? error.message : error);
-            // 获取失败也要放行
-            devtools.sendCommand('Fetch.continueRequest', { requestId }).catch(() => {});
-          });
-      } else {
-        // 不匹配的请求直接放行
-        devtools.sendCommand('Fetch.continueRequest', { requestId }).catch(() => {});
+  if (douyinUseFetchDebuggerCapture) {
+    devtools.on('message', (_event, method, params) => {
+      if (method !== 'Fetch.requestPaused') return;
+      const requestId = params.requestId;
+      const url = params.request?.url;
+      const continueRequest = () => {
+        devtools.sendCommand('Fetch.continueRequest', { requestId }).catch(() => undefined);
+      };
+      if (typeof url !== 'string' || params.request?.method === 'OPTIONS' || !isCollectListUrl(url)) {
+        continueRequest();
+        return;
       }
-    }
+      logDouyin('Fetch matched response', { requestId, url });
+      devtools.sendCommand('Fetch.getResponseBody', { requestId })
+        .then((result) => {
+          const body = result.base64Encoded ? Buffer.from(result.body, 'base64').toString('utf8') : result.body;
+          logDouyin('Fetch response body captured', { requestId, length: body.length });
+          handleCapturedCollectsVideoList({
+            source: 'fetch-debugger',
+            url,
+            status: 200,
+            body,
+            receivedAt: new Date().toISOString()
+          });
+        })
+        .catch((error) => {
+          logDouyin('Fetch response body failed', error instanceof Error ? error.message : error);
+          handleCapturedCollectsVideoList({
+            source: 'fetch-debugger',
+            url,
+            status: 0,
+            error: error instanceof Error ? error.message : '读取响应失败',
+            receivedAt: new Date().toISOString()
+          });
+        })
+        .finally(continueRequest);
+    });
+  }
+}
+
+function handleCapturedCollectsVideoList(payload: unknown) {
+  if (!payload || typeof payload !== 'object') return;
+  const data = payload as { url?: unknown; status?: unknown; body?: unknown; error?: unknown; source?: unknown; receivedAt?: unknown };
+  if (typeof data.url !== 'string' || !isCollectListUrl(data.url)) {
+    logDouyin('ignored collect list payload', { url: data.url, source: data.source });
+    return;
+  }
+  const result = {
+    url: data.url,
+    status: typeof data.status === 'number' ? data.status : Number(data.status || 0),
+    body: typeof data.body === 'string' ? data.body : '',
+    error: typeof data.error === 'string' ? data.error : undefined,
+    source: typeof data.source === 'string' ? data.source : 'page-hook',
+    receivedAt: typeof data.receivedAt === 'string' ? data.receivedAt : new Date().toISOString()
+  };
+  logDouyin('page hook response captured', {
+    url: result.url,
+    status: result.status,
+    source: result.source,
+    length: result.body.length,
+    error: result.error
   });
+  mainWindow?.webContents.send('douyin:collects-video-list', result);
 }
 
 async function clickTextOnPage(win: BrowserWindow) {
@@ -594,6 +861,24 @@ function stopMonitor() {
   logDouyin('monitor stopped');
 }
 
+ipcMain.on('douyin:collects-video-list-captured', (event, payload: unknown) => {
+  if (!douyinWindow || event.sender !== douyinWindow.webContents) {
+    logDouyin('ignored collect list payload from unknown sender');
+    return;
+  }
+  handleCapturedCollectsVideoList(payload);
+});
+
+ipcMain.on('douyin:hook-log', (event, payload: unknown) => {
+  if (!douyinWindow || event.sender !== douyinWindow.webContents) return;
+  logDouyin('page hook log', payload);
+});
+
+ipcMain.on('douyin:preload-ready', (event, payload: unknown) => {
+  if (!douyinWindow || event.sender !== douyinWindow.webContents) return;
+  logDouyin('page preload ready', payload);
+});
+
 ipcMain.handle('douyin:open-login', async () => {
   logDouyin('ipc open-login');
   douyinRunHidden = false;
@@ -702,11 +987,15 @@ ipcMain.handle('douyin:get-monitor-state', () => currentMonitorState());
 
 app.whenReady().then(() => {
   registerBlockedDeeplinkHandlers();
+  createTray();
   createWindow();
 });
+app.on('before-quit', () => {
+  appQuitting = true;
+});
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  if (appQuitting) app.quit();
 });
 app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  showMainWindow();
 });

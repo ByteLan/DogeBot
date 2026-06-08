@@ -7,7 +7,7 @@
   "type": "module",
   "main": "dist/main.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json && vite build && node -e \"require('fs').copyFileSync('src/preload.cjs', 'dist/preload.cjs')\"",
+    "build": "tsc -p tsconfig.json && vite build && node -e \"const fs=require('fs'); for (const file of ['preload.cjs','douyin-preload.cjs']) fs.copyFileSync('src/'+file, 'dist/'+file)\"",
     "dev": "pnpm build && electron dist/main.js",
     "package:dir": "pnpm build && electron-builder --dir",
     "package:mac": "pnpm build && electron-builder --mac",
