@@ -86,24 +86,24 @@ type CronField = {
 let cronSchedulerTimer: NodeJS.Timeout | undefined;
 let cronSchedulerRunning = false;
 const FEISHU_EVENT_DEDUP_TTL_MS = 10 * 60 * 1000;
-const recentFeishuEventIds = new Map<string, number>();
+const recentFeishuEventKeys = new Map<string, number>();
 
-function cleanupRecentFeishuEventIds(now: number) {
-  for (const [eventId, expiresAt] of recentFeishuEventIds) {
-    if (expiresAt <= now) recentFeishuEventIds.delete(eventId);
+function cleanupRecentFeishuEventKeys(now: number) {
+  for (const [eventKey, expiresAt] of recentFeishuEventKeys) {
+    if (expiresAt <= now) recentFeishuEventKeys.delete(eventKey);
   }
 }
 
-function rememberFeishuEvent(eventId: string) {
+function rememberFeishuEventKey(eventKey: string) {
   const now = Date.now();
-  cleanupRecentFeishuEventIds(now);
-  if (recentFeishuEventIds.has(eventId)) return false;
-  recentFeishuEventIds.set(eventId, now + FEISHU_EVENT_DEDUP_TTL_MS);
+  cleanupRecentFeishuEventKeys(now);
+  if (recentFeishuEventKeys.has(eventKey)) return false;
+  recentFeishuEventKeys.set(eventKey, now + FEISHU_EVENT_DEDUP_TTL_MS);
   return true;
 }
 
-function forgetFeishuEvent(eventId: string) {
-  recentFeishuEventIds.delete(eventId);
+function forgetFeishuEventKey(eventKey: string) {
+  recentFeishuEventKeys.delete(eventKey);
 }
 
 function openBase(domain: string) {
@@ -278,6 +278,14 @@ function parseDouyinCommand(text: string): DouyinCommand {
 
 async function sendDouyinMessages(bot: FeishuBot, clickText: string, count: number, sendMessage: (text: string) => Promise<void>) {
   const awemeRecords = randomDouyinAwemeIds(bot.user_id!, clickText, count);
+  console.log('[feishu] douyin send start', {
+    botId: bot.id,
+    userId: bot.user_id,
+    clickText,
+    requestedCount: count,
+    actualCount: awemeRecords.length,
+    awemeIds: awemeRecords.map((record) => record.aweme_id)
+  });
   if (awemeRecords.length === 0) {
     await sendMessage(`暂无“${clickText}”的抖音收藏记录`);
     return;
@@ -636,6 +644,13 @@ export async function handleFeishuMessage(bot: FeishuBot, event: any) {
   const messageId = message?.message_id;
   const text = textFromMessage(message);
   if (!messageId || !text) return;
+  console.log('[feishu] message handling start', {
+    botId: bot.id,
+    messageId,
+    chatId: message?.chat_id || '',
+    messageType: message?.message_type || '',
+    text
+  });
 
   if (await handleFeishuCommand(bot, event, messageId, text, { allowSetDefault: true })) return;
 
@@ -752,13 +767,15 @@ export async function feishuWebhook(req: Request, res: Response) {
   if (eventType === 'im.message.receive_v1') {
     const eventId = String(payload.header?.event_id || payload.event?.message?.message_id || '').trim();
     const messageId = String(payload.event?.message?.message_id || '').trim();
-    if (!eventId || rememberFeishuEvent(eventId)) {
+    const dedupKey = messageId ? `message:${messageId}` : eventId ? `event:${eventId}` : '';
+    console.log('[feishu] webhook message received', { botId: bot.id, dedupKey, eventId, messageId });
+    if (!dedupKey || rememberFeishuEventKey(dedupKey)) {
       handleFeishuMessage(bot, payload.event).catch((error) => {
-        if (eventId) forgetFeishuEvent(eventId);
+        if (dedupKey) forgetFeishuEventKey(dedupKey);
         console.error('[feishu] message handling failed', error);
       });
     } else {
-      console.log('[feishu] duplicate message skipped', { botId: bot.id, eventId, messageId });
+      console.log('[feishu] duplicate message skipped', { botId: bot.id, dedupKey, eventId, messageId });
     }
   }
 
