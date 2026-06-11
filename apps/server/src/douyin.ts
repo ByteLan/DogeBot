@@ -99,3 +99,12 @@ export function getRandomMmVideo(_req: AuthenticatedRequest, res: Response) {
     }
   });
 }
+
+export function redirectRandomMmVideo(_req: AuthenticatedRequest, res: Response) {
+  const awemeId = randomDouyinAwemeIdByClickText('随机甜妹');
+  if (!awemeId) {
+    res.status(404).json({ error: 'no aweme found' });
+    return;
+  }
+  res.redirect(`https://www.douyin.com/video/${awemeId}`);
+}
