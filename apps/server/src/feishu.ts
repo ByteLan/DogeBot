@@ -102,10 +102,6 @@ function rememberFeishuEventKey(eventKey: string) {
   return true;
 }
 
-function forgetFeishuEventKey(eventKey: string) {
-  recentFeishuEventKeys.delete(eventKey);
-}
-
 function openBase(domain: string) {
   return FEISHU_BASE[domain] || FEISHU_BASE.feishu;
 }
@@ -290,8 +286,24 @@ async function sendDouyinMessages(bot: FeishuBot, clickText: string, count: numb
     await sendMessage(`暂无“${clickText}”的抖音收藏记录`);
     return;
   }
-  for (const record of awemeRecords) {
-    await sendMessage(`https://www.douyin.com/video/${record.aweme_id}`);
+  for (const [index, record] of awemeRecords.entries()) {
+    try {
+      await sendMessage(`https://www.douyin.com/video/${record.aweme_id}`);
+    } catch (error) {
+      console.error('[feishu] douyin send failed', {
+        botId: bot.id,
+        userId: bot.user_id,
+        clickText,
+        awemeId: record.aweme_id,
+        currentIndex: index + 1,
+        totalCount: awemeRecords.length,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      throw error;
+    }
+    if (index < awemeRecords.length - 1) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
   }
 }
 
@@ -771,8 +783,13 @@ export async function feishuWebhook(req: Request, res: Response) {
     console.log('[feishu] webhook message received', { botId: bot.id, dedupKey, eventId, messageId });
     if (!dedupKey || rememberFeishuEventKey(dedupKey)) {
       handleFeishuMessage(bot, payload.event).catch((error) => {
-        if (dedupKey) forgetFeishuEventKey(dedupKey);
-        console.error('[feishu] message handling failed', error);
+        console.error('[feishu] message handling failed', {
+          botId: bot.id,
+          dedupKey,
+          eventId,
+          messageId,
+          error: error instanceof Error ? error.message : String(error)
+        });
       });
     } else {
       console.log('[feishu] duplicate message skipped', { botId: bot.id, dedupKey, eventId, messageId });
