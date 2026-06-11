@@ -65,6 +65,17 @@ export function randomDouyinAwemeId(userId: number, clickText: string) {
   return row?.aweme_id || '';
 }
 
+export function randomDouyinAwemeIds(userId: number, clickText: string, count: number) {
+  if (!Number.isInteger(count) || count <= 0) return [];
+  return db.prepare(`
+    SELECT aweme_id
+    FROM douyin_aweme_records
+    WHERE user_id = ? AND click_text = ?
+    ORDER BY RANDOM()
+    LIMIT ?
+  `).all(userId, clickText, count) as DouyinAwemeRecord[];
+}
+
 export function randomDouyinAwemeIdByClickText(clickText: string) {
   const row = db.prepare(`
     SELECT aweme_id

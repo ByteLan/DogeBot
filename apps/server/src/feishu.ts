@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import type { AuthenticatedRequest } from './auth.js';
 import { db } from './db.js';
-import { randomDouyinAwemeId } from './douyin.js';
+import { randomDouyinAwemeIds } from './douyin.js';
 
 const FEISHU_BASE: Record<string, string> = {
   feishu: 'https://open.feishu.cn',
@@ -54,6 +54,8 @@ type UsersCommand = {
 type DouyinCommand = {
   isDouyin: boolean;
   clickText: string;
+  count: number;
+  hasInvalidCount: boolean;
 };
 
 type SetDefaultCommand = {
@@ -224,11 +226,45 @@ function parseUsersCommand(text: string): UsersCommand {
 
 function parseDouyinCommand(text: string): DouyinCommand {
   const commandIndex = text.indexOf('/douyin');
-  if (commandIndex < 0) return { isDouyin: false, clickText: '' };
+  if (commandIndex < 0) return { isDouyin: false, clickText: '', count: 1, hasInvalidCount: false };
+  const argsText = text.slice(commandIndex + '/douyin'.length).trim();
+  const hasCountFlag = /(?:^|\s)--count(?:\s|$)/.test(argsText);
+  const countMatch = argsText.match(/(?:^|\s)--count\s+(\S+)/);
+  const clickText = argsText.replace(/(?:^|\s)--count(?:\s+\S+)?/, ' ').trim().replace(/\s+/g, ' ');
+  if (!hasCountFlag) {
+    return {
+      isDouyin: true,
+      clickText: argsText,
+      count: 1,
+      hasInvalidCount: false
+    };
+  }
+  if (!countMatch) {
+    return {
+      isDouyin: true,
+      clickText,
+      count: 1,
+      hasInvalidCount: true
+    };
+  }
+  const count = Number(countMatch[1]);
   return {
     isDouyin: true,
-    clickText: text.slice(commandIndex + '/douyin'.length).trim()
+    clickText,
+    count: Number.isInteger(count) && count > 0 ? count : 1,
+    hasInvalidCount: !Number.isInteger(count) || count <= 0
   };
+}
+
+async function sendDouyinMessages(bot: FeishuBot, clickText: string, count: number, sendMessage: (text: string) => Promise<void>) {
+  const awemeRecords = randomDouyinAwemeIds(bot.user_id!, clickText, count);
+  if (awemeRecords.length === 0) {
+    await sendMessage(`暂无“${clickText}”的抖音收藏记录`);
+    return;
+  }
+  for (const record of awemeRecords) {
+    await sendMessage(`https://www.douyin.com/video/${record.aweme_id}`);
+  }
 }
 
 function unquoteCommand(value: string) {
@@ -502,7 +538,7 @@ async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string
     const addCron = parseAddCronCommand(text);
     if (addCron.isAddCron) {
       if (!addCron.cronExpr || !addCron.commandText) {
-        await replyText(bot, messageId, '用法：/add-cron "*/5 * * * *" "/douyin 123"');
+        await replyText(bot, messageId, '用法：/add-cron "*/5 * * * *" "/douyin 123 [--count n]"');
         return true;
       }
       const chatId = String(message?.chat_id || '').trim();
@@ -532,15 +568,18 @@ async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string
   const douyinCommand = parseDouyinCommand(text);
   if (douyinCommand.isDouyin) {
     if (!douyinCommand.clickText) {
-      await replyText(bot, messageId, '用法：/douyin {模拟点击文案}');
+      await replyText(bot, messageId, '用法：/douyin {模拟点击文案} [--count n]');
+      return true;
+    }
+    if (douyinCommand.hasInvalidCount) {
+      await replyText(bot, messageId, '用法：/douyin {模拟点击文案} [--count n]，其中 n 必须为大于 0 的整数');
       return true;
     }
     if (bot.user_id == null) {
       await replyText(bot, messageId, '当前机器人未绑定用户，无法读取抖音收藏记录');
       return true;
     }
-    const awemeId = randomDouyinAwemeId(bot.user_id, douyinCommand.clickText);
-    await replyText(bot, messageId, awemeId ? `https://www.douyin.com/video/${awemeId}` : `暂无“${douyinCommand.clickText}”的抖音收藏记录`);
+    await sendDouyinMessages(bot, douyinCommand.clickText, douyinCommand.count, (messageText) => replyText(bot, messageId, messageText));
     return true;
   }
 
@@ -706,15 +745,18 @@ async function executeCronTask(task: ChatCronTask) {
     return;
   }
   if (!douyinCommand.clickText) {
-    await sendTextToChat(bot, task.chat_id, `定时任务 #${task.id} 配置错误：/douyin 缺少模拟点击文案`);
+    await sendTextToChat(bot, task.chat_id, `定时任务 #${task.id} 配置错误：/douyin 缺少模拟点击文案，格式应为 /douyin {模拟点击文案} [--count n]`);
+    return;
+  }
+  if (douyinCommand.hasInvalidCount) {
+    await sendTextToChat(bot, task.chat_id, `定时任务 #${task.id} 配置错误：/douyin 的 --count 必须为大于 0 的整数`);
     return;
   }
   if (bot.user_id == null) {
     await sendTextToChat(bot, task.chat_id, `定时任务 #${task.id} 执行失败：当前机器人未绑定用户`);
     return;
   }
-  const awemeId = randomDouyinAwemeId(bot.user_id, douyinCommand.clickText);
-  await sendTextToChat(bot, task.chat_id, awemeId ? `https://www.douyin.com/video/${awemeId}` : `暂无“${douyinCommand.clickText}”的抖音收藏记录`);
+  await sendDouyinMessages(bot, douyinCommand.clickText, douyinCommand.count, (messageText) => sendTextToChat(bot, task.chat_id, messageText));
 }
 
 async function runCronSchedulerTick() {
