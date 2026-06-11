@@ -656,6 +656,16 @@ export async function handleFeishuMessage(bot: FeishuBot, event: any) {
   const messageId = message?.message_id;
   const text = textFromMessage(message);
   if (!messageId || !text) return;
+  const dedupKey = `message:${messageId}`;
+  if (!rememberFeishuEventKey(dedupKey)) {
+    console.log('[feishu] duplicate message skipped', {
+      botId: bot.id,
+      dedupKey,
+      messageId,
+      chatId: message?.chat_id || ''
+    });
+    return;
+  }
   console.log('[feishu] message handling start', {
     botId: bot.id,
     messageId,
@@ -779,21 +789,15 @@ export async function feishuWebhook(req: Request, res: Response) {
   if (eventType === 'im.message.receive_v1') {
     const eventId = String(payload.header?.event_id || payload.event?.message?.message_id || '').trim();
     const messageId = String(payload.event?.message?.message_id || '').trim();
-    const dedupKey = messageId ? `message:${messageId}` : eventId ? `event:${eventId}` : '';
-    console.log('[feishu] webhook message received', { botId: bot.id, dedupKey, eventId, messageId });
-    if (!dedupKey || rememberFeishuEventKey(dedupKey)) {
-      handleFeishuMessage(bot, payload.event).catch((error) => {
-        console.error('[feishu] message handling failed', {
-          botId: bot.id,
-          dedupKey,
-          eventId,
-          messageId,
-          error: error instanceof Error ? error.message : String(error)
-        });
+    console.log('[feishu] webhook message received', { botId: bot.id, eventId, messageId });
+    handleFeishuMessage(bot, payload.event).catch((error) => {
+      console.error('[feishu] message handling failed', {
+        botId: bot.id,
+        messageId,
+        eventId,
+        error: error instanceof Error ? error.message : String(error)
       });
-    } else {
-      console.log('[feishu] duplicate message skipped', { botId: bot.id, dedupKey, eventId, messageId });
-    }
+    });
   }
 
   res.json({ ok: true });
