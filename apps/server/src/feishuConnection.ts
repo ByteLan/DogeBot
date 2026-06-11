@@ -69,7 +69,9 @@ class FeishuConnectionManager {
           verificationToken: bot.verification_token || undefined
         }).register({
           'im.message.receive_v1': async (data: any) => {
-            await handleFeishuMessage(bot, data?.event || data);
+            void handleFeishuMessage(bot, data?.event || data).catch((error) => {
+              console.error(`[feishu] bot ${bot.id} message handling failed`, error);
+            });
           }
         })
       });
