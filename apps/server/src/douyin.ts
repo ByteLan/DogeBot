@@ -64,3 +64,27 @@ export function randomDouyinAwemeId(userId: number, clickText: string) {
   `).get(userId, clickText) as DouyinAwemeRecord | undefined;
   return row?.aweme_id || '';
 }
+
+export function randomDouyinAwemeIdByClickText(clickText: string) {
+  const row = db.prepare(`
+    SELECT aweme_id
+    FROM douyin_aweme_records
+    WHERE click_text = ?
+    ORDER BY RANDOM()
+    LIMIT 1
+  `).get(clickText) as DouyinAwemeRecord | undefined;
+  return row?.aweme_id || '';
+}
+
+export function getRandomMmVideo(_req: AuthenticatedRequest, res: Response) {
+  const awemeId = randomDouyinAwemeIdByClickText('随机甜妹');
+  if (!awemeId) {
+    res.status(404).json({ error: 'no aweme found' });
+    return;
+  }
+  res.json({
+    data: {
+      url: `https://www.douyin.com/video/${awemeId}`
+    }
+  });
+}

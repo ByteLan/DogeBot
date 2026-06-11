@@ -1,7 +1,7 @@
 import cors from 'cors';
 import express from 'express';
 import { authenticate, createToken, requireAuth, type AuthenticatedRequest } from './auth.js';
-import { uploadDouyinAwemeRecords } from './douyin.js';
+import { getRandomMmVideo, uploadDouyinAwemeRecords } from './douyin.js';
 import { createFeishuBotForUser, deleteOwnedFeishuBot, feishuWebhook, listFeishuBots, probeFeishuBot, publicBot, startFeishuCronScheduler, stopFeishuCronScheduler } from './feishu.js';
 import { feishuConnectionManager } from './feishuConnection.js';
 import { beginFeishuQrRegistration, pollFeishuQrRegistration } from './feishuOnboard.js';
@@ -13,6 +13,7 @@ app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
+app.get('/open-api/v1/mm', getRandomMmVideo);
 
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body || {};
