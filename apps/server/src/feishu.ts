@@ -85,6 +85,26 @@ type CronField = {
 
 let cronSchedulerTimer: NodeJS.Timeout | undefined;
 let cronSchedulerRunning = false;
+const FEISHU_EVENT_DEDUP_TTL_MS = 10 * 60 * 1000;
+const recentFeishuEventIds = new Map<string, number>();
+
+function cleanupRecentFeishuEventIds(now: number) {
+  for (const [eventId, expiresAt] of recentFeishuEventIds) {
+    if (expiresAt <= now) recentFeishuEventIds.delete(eventId);
+  }
+}
+
+function rememberFeishuEvent(eventId: string) {
+  const now = Date.now();
+  cleanupRecentFeishuEventIds(now);
+  if (recentFeishuEventIds.has(eventId)) return false;
+  recentFeishuEventIds.set(eventId, now + FEISHU_EVENT_DEDUP_TTL_MS);
+  return true;
+}
+
+function forgetFeishuEvent(eventId: string) {
+  recentFeishuEventIds.delete(eventId);
+}
 
 function openBase(domain: string) {
   return FEISHU_BASE[domain] || FEISHU_BASE.feishu;
@@ -730,7 +750,16 @@ export async function feishuWebhook(req: Request, res: Response) {
 
   const eventType = payload.header?.event_type || payload.type;
   if (eventType === 'im.message.receive_v1') {
-    handleFeishuMessage(bot, payload.event).catch((error) => console.error('[feishu] message handling failed', error));
+    const eventId = String(payload.header?.event_id || payload.event?.message?.message_id || '').trim();
+    const messageId = String(payload.event?.message?.message_id || '').trim();
+    if (!eventId || rememberFeishuEvent(eventId)) {
+      handleFeishuMessage(bot, payload.event).catch((error) => {
+        if (eventId) forgetFeishuEvent(eventId);
+        console.error('[feishu] message handling failed', error);
+      });
+    } else {
+      console.log('[feishu] duplicate message skipped', { botId: bot.id, eventId, messageId });
+    }
   }
 
   res.json({ ok: true });
