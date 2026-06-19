@@ -87,6 +87,7 @@ let cronSchedulerTimer: NodeJS.Timeout | undefined;
 let cronSchedulerRunning = false;
 const FEISHU_EVENT_DEDUP_TTL_MS = 10 * 60 * 1000;
 const recentFeishuEventKeys = new Map<string, number>();
+const USERS_CARD_PERSON_LIST_CHUNK_SIZE = 600;
 
 function cleanupRecentFeishuEventKeys(now: number) {
   for (const [eventKey, expiresAt] of recentFeishuEventKeys) {
@@ -104,6 +105,17 @@ function rememberFeishuEventKey(eventKey: string) {
 
 function openBase(domain: string) {
   return FEISHU_BASE[domain] || FEISHU_BASE.feishu;
+}
+
+async function feishuSdkClient(bot: FeishuBot) {
+  const lark = await import('@larksuiteoapi/node-sdk');
+  return new lark.Client({
+    appId: bot.app_id,
+    appSecret: bot.app_secret,
+    domain: bot.domain === 'lark' ? lark.Domain.Lark : lark.Domain.Feishu,
+    loggerLevel: lark.LoggerLevel.warn,
+    source: 'dogebot'
+  });
 }
 
 export function publicBot(row: FeishuBot) {
@@ -550,28 +562,61 @@ function listMentions(botId: number, atBy: string, newCount?: number) {
 }
 
 function usersCard(records: AtRecord[]) {
-  const atTexts = records.map((record) => `<at id=${record.at_who}></at>`);
-  const groups: string[] = [];
-  for (let index = 0; index < atTexts.length; index += 100) {
-    groups.push(atTexts.slice(index, index + 100).join(' '));
-  }
-  const content = groups.length > 0 ? groups.join('\n\n') : '暂无已记录用户';
-  const elements: object[] = [{ tag: 'markdown', content }];
-  if (records.length > 0) {
-    for (let index = 0; index < records.length; index += 600) {
-      elements.push({
-        tag: 'person_list',
-        drop_invalid_user_id: true,
-        show_avatar: true,
-        size: 'large',
-        persons: records.slice(index, index + 600).map((record) => ({ id: record.at_who }))
-      });
-    }
-  }
+  const content = records.length === 0
+    ? '暂无已记录用户'
+    : `已记录用户：${records.length} 人\n\n人员列表按每 ${USERS_CARD_PERSON_LIST_CHUNK_SIZE} 人一组展示。`;
+  const elements: object[] = [{ tag: 'markdown', content, element_id: 'users_summary' }];
+  if (records.length > 0) elements.push(usersPersonListElement(records.slice(0, USERS_CARD_PERSON_LIST_CHUNK_SIZE), 0));
   return {
     schema: '2.0',
     body: { elements }
   };
+}
+
+function usersPersonListElement(records: AtRecord[], index: number) {
+  return {
+    tag: 'person_list',
+    element_id: `users_person_list_${index}`,
+    drop_invalid_user_id: true,
+    show_avatar: true,
+    size: 'large',
+    persons: records.map((record) => ({ id: record.at_who }))
+  };
+}
+
+async function replyUsersCard(bot: FeishuBot, messageId: string, records: AtRecord[]) {
+  const client = await feishuSdkClient(bot);
+  const card = usersCard(records);
+  const createResult = await client.cardkit.v1.card.create({
+    data: {
+      type: 'card_json',
+      data: JSON.stringify(card)
+    }
+  });
+  const cardId = createResult.data?.card_id;
+  if (!cardId) throw new Error('failed to create users card entity');
+  await client.im.v1.message.reply({
+    path: { message_id: messageId },
+    data: {
+      msg_type: 'interactive',
+      content: JSON.stringify({ type: 'card', data: { card_id: cardId } })
+    }
+  });
+  let sequence = 1;
+  for (let index = USERS_CARD_PERSON_LIST_CHUNK_SIZE; index < records.length; index += USERS_CARD_PERSON_LIST_CHUNK_SIZE) {
+    await client.cardkit.v1.cardElement.create({
+      path: { card_id: cardId },
+      data: {
+        type: 'append',
+        sequence,
+        uuid: `users_${cardId}_${sequence}`,
+        elements: JSON.stringify([
+          usersPersonListElement(records.slice(index, index + USERS_CARD_PERSON_LIST_CHUNK_SIZE), sequence)
+        ])
+      }
+    });
+    sequence += 1;
+  }
 }
 
 async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string, text: string, options: { allowSetDefault: boolean }): Promise<boolean> {
@@ -649,7 +694,7 @@ async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string
     if (command.shouldTop) topMentions(bot.id, atBy.id, atWhos);
   }
 
-  await replyCard(bot, messageId, usersCard(listMentions(bot.id, atBy.id, command.newCount)));
+  await replyUsersCard(bot, messageId, listMentions(bot.id, atBy.id, command.newCount));
   return true;
 }
 
