@@ -20,6 +20,15 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
 
+  CREATE TABLE IF NOT EXISTS auth_sessions (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    username TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    last_used_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS feishu_bots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -82,6 +91,8 @@ db.exec(`
 `);
 
 db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id);
+  CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires_at ON auth_sessions(expires_at);
   CREATE INDEX IF NOT EXISTS idx_feishu_bots_user_id ON feishu_bots(user_id);
   CREATE INDEX IF NOT EXISTS idx_at_users_record_lookup ON at_users_record(bot_id, at_by, deleted_at, sort_order, created_at);
   CREATE INDEX IF NOT EXISTS idx_douyin_aweme_records_lookup ON douyin_aweme_records(user_id, click_text);

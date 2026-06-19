@@ -3,6 +3,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { db } from './db.js';
 
 const TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60;
+const TOKEN_RENEW_THRESHOLD_SECONDS = 3 * 24 * 60 * 60;
 const authSecret = process.env.DOGEBOT_AUTH_SECRET || 'dogebot-dev-secret-change-me';
 
 export type AuthenticatedRequest = Request & { user?: { id: number; username: string } };
@@ -32,18 +33,60 @@ export function verifyPassword(password: string, salt: string, expectedHash: str
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
+function nowInSeconds() {
+  return Math.floor(Date.now() / 1000);
+}
+
+function createSession(user: { id: number; username: string }) {
+  const now = nowInSeconds();
+  const sessionId = randomBytes(24).toString('base64url');
+  db.prepare(`
+    INSERT INTO auth_sessions (id, user_id, username, expires_at, last_used_at, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(sessionId, user.id, user.username, now + TOKEN_TTL_SECONDS, now, now);
+  return sessionId;
+}
+
 export function createToken(user: { id: number; username: string }): string {
-  const payload = base64url(JSON.stringify({ sub: user.id, username: user.username, exp: Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS }));
+  const payload = base64url(JSON.stringify({ sub: user.id, username: user.username, sid: createSession(user) }));
   return `${payload}.${sign(payload)}`;
+}
+
+function verifyLegacyToken(data: { sub: number; username: string; exp: number }) {
+  if (!data.sub || !data.username || data.exp < nowInSeconds()) return null;
+  return { id: data.sub, username: data.username };
+}
+
+function verifySessionToken(data: { sub: number; username: string; sid: string }) {
+  if (!data.sub || !data.username || !data.sid) return null;
+  const now = nowInSeconds();
+  const session = db.prepare(`
+    SELECT user_id, username, expires_at
+    FROM auth_sessions
+    WHERE id = ?
+  `).get(data.sid) as { user_id: number; username: string; expires_at: number } | undefined;
+  if (!session || session.user_id !== data.sub || session.username !== data.username || session.expires_at < now) {
+    return null;
+  }
+  const nextExpiresAt = session.expires_at - now < TOKEN_RENEW_THRESHOLD_SECONDS ? now + TOKEN_TTL_SECONDS : session.expires_at;
+  db.prepare(`
+    UPDATE auth_sessions
+    SET expires_at = ?, last_used_at = ?
+    WHERE id = ?
+  `).run(nextExpiresAt, now, data.sid);
+  return { id: session.user_id, username: session.username };
 }
 
 export function verifyToken(token: string): { id: number; username: string } | null {
   const [payload, signature] = token.split('.');
   if (!payload || !signature || !safeEqual(signature, sign(payload))) return null;
   try {
-    const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { sub: number; username: string; exp: number };
-    if (!data.sub || !data.username || data.exp < Math.floor(Date.now() / 1000)) return null;
-    return { id: data.sub, username: data.username };
+    const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as
+      | { sub: number; username: string; exp: number }
+      | { sub: number; username: string; sid: string };
+    if ('sid' in data) return verifySessionToken(data);
+    if ('exp' in data) return verifyLegacyToken(data);
+    return null;
   } catch {
     return null;
   }

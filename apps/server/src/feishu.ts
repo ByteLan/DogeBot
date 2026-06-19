@@ -558,13 +558,15 @@ function usersCard(records: AtRecord[]) {
   const content = groups.length > 0 ? groups.join('\n\n') : '暂无已记录用户';
   const elements: object[] = [{ tag: 'markdown', content }];
   if (records.length > 0) {
-    elements.push({
-      tag: 'person_list',
-      drop_invalid_user_id: true,
-      show_avatar: true,
-      size: 'large',
-      persons: records.map((record) => ({ id: record.at_who }))
-    });
+    for (let index = 0; index < records.length; index += 600) {
+      elements.push({
+        tag: 'person_list',
+        drop_invalid_user_id: true,
+        show_avatar: true,
+        size: 'large',
+        persons: records.slice(index, index + 600).map((record) => ({ id: record.at_who }))
+      });
+    }
   }
   return {
     schema: '2.0',
