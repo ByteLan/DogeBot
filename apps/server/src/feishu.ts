@@ -562,9 +562,12 @@ function listMentions(botId: number, atBy: string, newCount?: number) {
 }
 
 function usersCard(records: AtRecord[]) {
-  const content = records.length === 0
-    ? '暂无已记录用户'
-    : `已记录用户：${records.length} 人\n\n人员列表按每 ${USERS_CARD_PERSON_LIST_CHUNK_SIZE} 人一组展示。`;
+  const atTexts = records.map((record) => `<at id=${record.at_who}></at>`);
+  const groups: string[] = [];
+  for (let index = 0; index < atTexts.length; index += 100) {
+    groups.push(atTexts.slice(index, index + 100).join(' '));
+  }
+  const content = groups.length > 0 ? groups.join('\n\n') : '暂无已记录用户';
   const elements: object[] = [{ tag: 'markdown', content, element_id: 'users_summary' }];
   if (records.length > 0) elements.push(usersPersonListElement(records.slice(0, USERS_CARD_PERSON_LIST_CHUNK_SIZE), 0));
   return {
