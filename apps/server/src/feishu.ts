@@ -87,7 +87,7 @@ let cronSchedulerTimer: NodeJS.Timeout | undefined;
 let cronSchedulerRunning = false;
 const FEISHU_EVENT_DEDUP_TTL_MS = 10 * 60 * 1000;
 const recentFeishuEventKeys = new Map<string, number>();
-const USERS_CARD_PERSON_LIST_CHUNK_SIZE = 600;
+const USERS_CARD_PERSON_LIST_CHUNK_SIZE = 200;
 
 function cleanupRecentFeishuEventKeys(now: number) {
   for (const [eventKey, expiresAt] of recentFeishuEventKeys) {
