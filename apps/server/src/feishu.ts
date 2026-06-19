@@ -87,7 +87,7 @@ let cronSchedulerTimer: NodeJS.Timeout | undefined;
 let cronSchedulerRunning = false;
 const FEISHU_EVENT_DEDUP_TTL_MS = 10 * 60 * 1000;
 const recentFeishuEventKeys = new Map<string, number>();
-const USERS_CARD_PERSON_LIST_CHUNK_SIZE = 200;
+const USERS_CARD_PERSON_LIST_CHUNK_SIZE = 100;
 
 function cleanupRecentFeishuEventKeys(now: number) {
   for (const [eventKey, expiresAt] of recentFeishuEventKeys) {
@@ -562,17 +562,21 @@ function listMentions(botId: number, atBy: string, newCount?: number) {
 }
 
 function usersCard(records: AtRecord[]) {
-  const atTexts = records.map((record) => `<at id=${record.at_who}></at>`);
-  const groups: string[] = [];
-  for (let index = 0; index < atTexts.length; index += 100) {
-    groups.push(atTexts.slice(index, index + 100).join(' '));
-  }
-  const content = groups.length > 0 ? groups.join('\n\n') : '暂无已记录用户';
-  const elements: object[] = [{ tag: 'markdown', content, element_id: 'users_summary' }];
-  if (records.length > 0) elements.push(usersPersonListElement(records.slice(0, USERS_CARD_PERSON_LIST_CHUNK_SIZE), 0));
+  const firstChunk = records.slice(0, USERS_CARD_PERSON_LIST_CHUNK_SIZE);
+  const elements: object[] = firstChunk.length > 0
+    ? [usersMarkdownElement(firstChunk, 0), usersPersonListElement(firstChunk, 0)]
+    : [{ tag: 'markdown', content: '暂无已记录用户', element_id: 'users_empty' }];
   return {
     schema: '2.0',
     body: { elements }
+  };
+}
+
+function usersMarkdownElement(records: AtRecord[], index: number) {
+  return {
+    tag: 'markdown',
+    element_id: `users_markdown_${index}`,
+    content: records.map((record) => `<at id=${record.at_who}></at>`).join(' ')
   };
 }
 
@@ -614,6 +618,7 @@ async function replyUsersCard(bot: FeishuBot, messageId: string, records: AtReco
         sequence,
         uuid: `users_${cardId}_${sequence}`,
         elements: JSON.stringify([
+          usersMarkdownElement(records.slice(index, index + USERS_CARD_PERSON_LIST_CHUNK_SIZE), sequence),
           usersPersonListElement(records.slice(index, index + USERS_CARD_PERSON_LIST_CHUNK_SIZE), sequence)
         ])
       }
