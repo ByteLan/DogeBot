@@ -62,6 +62,17 @@ pnpm add-user <用户名> <密码>
 - `PORT`：HTTP 服务端口，默认 `3000`。
 - `DOGEBOT_DATA_DIR`：SQLite 数据目录，默认 `apps/server/data`。
 - `DOGEBOT_AUTH_SECRET`：登录 token 签名密钥；开发环境有默认值，生产环境建议显式配置。
+- `DOGEBOT_FEISHU_REACTION_RATE`：普通消息自动添加表情的概率，支持 `0.1` 或 `10` 这种百分比写法，默认 `0.1`。
+- `DOGEBOT_FEISHU_REACTION_EMOJIS`：自动 reaction 的候选 emoji key，逗号分隔，默认 `OK,DONE,THUMBSUP,HEART,LAUGH`。
+- `DOGEBOT_FEISHU_REPEAT_RATE`：普通消息自动复读的概率，默认 `0.05`。
+- `DOGEBOT_FEISHU_REPEAT_MAX_CHARS`：允许复读的最大文本长度，默认 `300`。
+- `DOGEBOT_FEISHU_IMITATE_RATE`：普通消息触发大模型模仿接话的概率，默认 `0.05`。
+- `DOGEBOT_FEISHU_IMITATE_CONTEXT_SIZE`：模仿接话时带入的最近群聊消息条数，默认 `8`。
+- `DOGEBOT_LLM_URL` / `DOGEBOT_LLM_BASE_URL` / `OPENAI_BASE_URL`：OpenAI 兼容接口地址，支持传 `/v1` 基地址或完整 `/chat/completions` 地址。
+- `DOGEBOT_LLM_API_KEY` / `OPENAI_API_KEY`：OpenAI 兼容接口 Key。
+- `DOGEBOT_LLM_MODEL` / `OPENAI_MODEL`：模仿接话使用的模型名。
+- `DOGEBOT_LLM_TIMEOUT_MS`：大模型请求超时时间，默认 `15000`。
+- `DOGEBOT_LLM_MAX_TOKENS`：大模型回复 token 上限，默认 `160`。
 
 ## 宝塔面板长期运行
 
@@ -99,6 +110,9 @@ DOGEBOT_DATA_DIR=/www/wwwroot/DogeBot-data pnpm add-user admin 'change-me'
 - 环境变量：`DOGEBOT_DATA_DIR=/www/wwwroot/DogeBot-data`
 - 环境变量：`DOGEBOT_AUTH_SECRET=<一段足够长的随机字符串>`
 - 环境变量：`DOGEBOT_FEISHU_DEBUG=0`
+- 环境变量：`DOGEBOT_LLM_BASE_URL=https://api.openai.com/v1`
+- 环境变量：`DOGEBOT_LLM_API_KEY=<OpenAI 兼容接口 Key>`
+- 环境变量：`DOGEBOT_LLM_MODEL=<模型名>`
 
 如果直接使用 PM2：
 
@@ -108,6 +122,9 @@ PORT=3000 \
 DOGEBOT_DATA_DIR=/www/wwwroot/DogeBot-data \
 DOGEBOT_AUTH_SECRET='<一段足够长的随机字符串>' \
 DOGEBOT_FEISHU_DEBUG=0 \
+DOGEBOT_LLM_BASE_URL='https://api.openai.com/v1' \
+DOGEBOT_LLM_API_KEY='<OpenAI 兼容接口 Key>' \
+DOGEBOT_LLM_MODEL='<模型名>' \
 pm2 start dist/index.js --name dogebot-server --update-env
 pm2 save
 ```
@@ -167,8 +184,10 @@ pm2 restart dogebot-server --update-env
 
 服务端默认使用飞书长连接接收事件。收到 `im.message.receive_v1` 后：
 
-- 如果不是 `/users` 命令，按回声逻辑原样回复文本。
-- 如果是 `/users` 命令，按命令参数更新 `at_users_record`，最终回复飞书消息卡片。
+- 如果是 `/users`、`/douyin`、`/set-default`、`/add-cron` 等命令，优先按命令逻辑处理。
+- 如果配置了 bot 默认兜底指令，继续执行默认指令。
+- 普通文本消息不会要求 @ 机器人；服务端会按概率自动触发消息 reaction、复读、以及大模型模仿接话。
+- 大模型模仿接话需要配置 OpenAI 兼容接口的 URL、Key 和 model；未配置时只会跳过该项，不影响 reaction 和复读。
 
 飞书卡片中的 at 用户格式：
 

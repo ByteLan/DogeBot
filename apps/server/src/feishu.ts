@@ -83,11 +83,35 @@ type CronField = {
   unrestricted: boolean;
 };
 
+type PassiveInteractionConfig = {
+  reactionRate: number;
+  repeatRate: number;
+  imitateRate: number;
+  repeatMaxChars: number;
+  contextSize: number;
+  reactionEmojis: string[];
+  llmUrl: string;
+  llmApiKey: string;
+  llmModel: string;
+  llmTimeoutMs: number;
+  llmMaxTokens: number;
+};
+
+type RecentChatMessage = {
+  senderId: string;
+  senderName: string;
+  text: string;
+  createdAt: number;
+};
+
 let cronSchedulerTimer: NodeJS.Timeout | undefined;
 let cronSchedulerRunning = false;
 const FEISHU_EVENT_DEDUP_TTL_MS = 10 * 60 * 1000;
 const recentFeishuEventKeys = new Map<string, number>();
 const USERS_CARD_PERSON_LIST_CHUNK_SIZE = 100;
+const RECENT_CHAT_MEMORY_LIMIT = 30;
+const DEFAULT_REACTION_EMOJIS = ['OK', 'DONE', 'THUMBSUP', 'HEART', 'LAUGH'];
+const recentChatMessages = new Map<string, RecentChatMessage[]>();
 
 function cleanupRecentFeishuEventKeys(now: number) {
   for (const [eventKey, expiresAt] of recentFeishuEventKeys) {
@@ -206,6 +230,15 @@ async function sendTextToChat(bot: FeishuBot, chatId: string, text: string) {
   });
 }
 
+async function addReaction(bot: FeishuBot, messageId: string, reactionType: string) {
+  const token = await tenantAccessToken(bot);
+  await feishuJson(`${openBase(bot.domain)}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reactions`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ reaction_type: { emoji_type: reactionType } })
+  });
+}
+
 async function replyCard(bot: FeishuBot, messageId: string, card: object) {
   const token = await tenantAccessToken(bot);
   await feishuJson(`${openBase(bot.domain)}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reply`, {
@@ -235,6 +268,229 @@ function senderIdentity(event: any) {
     id: idFromFeishuObject(sender.sender_id) || 'unknown',
     name: String(sender.sender_type || '')
   };
+}
+
+function envString(...names: string[]) {
+  for (const name of names) {
+    const value = process.env[name]?.trim();
+    if (value) return value;
+  }
+  return '';
+}
+
+function parseRate(raw: string | undefined, fallback: number) {
+  if (!raw?.trim()) return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return fallback;
+  const normalized = value > 1 ? value / 100 : value;
+  return Math.max(0, Math.min(1, normalized));
+}
+
+function parsePositiveInt(raw: string | undefined, fallback: number) {
+  const value = Number(raw);
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function splitCsv(raw: string | undefined, fallback: string[]) {
+  const items = (raw || '').split(',').map((item) => item.trim()).filter(Boolean);
+  return items.length > 0 ? items : fallback;
+}
+
+function openAIChatCompletionsUrl(url: string) {
+  const trimmed = url.trim().replace(/\/+$/, '');
+  if (!trimmed) return '';
+  if (trimmed.endsWith('/chat/completions')) return trimmed;
+  if (trimmed.endsWith('/v1')) return `${trimmed}/chat/completions`;
+  return `${trimmed}/v1/chat/completions`;
+}
+
+function passiveInteractionConfig(): PassiveInteractionConfig {
+  return {
+    reactionRate: parseRate(process.env.DOGEBOT_FEISHU_REACTION_RATE, 0.1),
+    repeatRate: parseRate(process.env.DOGEBOT_FEISHU_REPEAT_RATE, 0.05),
+    imitateRate: parseRate(process.env.DOGEBOT_FEISHU_IMITATE_RATE, 0.05),
+    repeatMaxChars: parsePositiveInt(process.env.DOGEBOT_FEISHU_REPEAT_MAX_CHARS, 300),
+    contextSize: parsePositiveInt(process.env.DOGEBOT_FEISHU_IMITATE_CONTEXT_SIZE, 8),
+    reactionEmojis: splitCsv(process.env.DOGEBOT_FEISHU_REACTION_EMOJIS, DEFAULT_REACTION_EMOJIS),
+    llmUrl: openAIChatCompletionsUrl(envString('DOGEBOT_LLM_URL', 'DOGEBOT_LLM_BASE_URL', 'OPENAI_BASE_URL', 'OPENAI_API_BASE')),
+    llmApiKey: envString('DOGEBOT_LLM_API_KEY', 'OPENAI_API_KEY'),
+    llmModel: envString('DOGEBOT_LLM_MODEL', 'OPENAI_MODEL'),
+    llmTimeoutMs: parsePositiveInt(envString('DOGEBOT_LLM_TIMEOUT_MS', 'OPENAI_TIMEOUT_MS'), 15_000),
+    llmMaxTokens: parsePositiveInt(process.env.DOGEBOT_LLM_MAX_TOKENS, 160)
+  };
+}
+
+function shouldTrigger(rate: number) {
+  return rate > 0 && Math.random() < rate;
+}
+
+function randomItem<T>(items: T[]) {
+  return items[Math.floor(Math.random() * items.length)];
+}
+
+function messageChatId(message: any) {
+  return String(message?.chat_id || '').trim();
+}
+
+function recentChatKey(botId: number, chatId: string) {
+  return `${botId}:${chatId}`;
+}
+
+function readRecentChatMessages(botId: number, chatId: string, limit: number) {
+  const list = recentChatMessages.get(recentChatKey(botId, chatId)) || [];
+  return list.slice(-limit);
+}
+
+function rememberRecentChatMessage(bot: FeishuBot, event: any, text: string) {
+  const chatId = messageChatId(event?.message);
+  if (!chatId || !text) return;
+  const sender = senderIdentity(event);
+  const key = recentChatKey(bot.id, chatId);
+  const list = recentChatMessages.get(key) || [];
+  list.push({
+    senderId: sender.id,
+    senderName: sender.name,
+    text,
+    createdAt: Date.now()
+  });
+  recentChatMessages.set(key, list.slice(-RECENT_CHAT_MEMORY_LIMIT));
+}
+
+function messageMentionsBot(bot: FeishuBot, message: any) {
+  if (!bot.bot_open_id) return false;
+  const mentions = (Array.isArray(message?.mentions) ? message.mentions : []) as FeishuMention[];
+  return mentions.some((mention) => idFromFeishuObject(mention.id) === bot.bot_open_id);
+}
+
+function isFromCurrentBot(bot: FeishuBot, event: any) {
+  const senderType = String(event?.sender?.sender_type || '').trim().toLowerCase();
+  if (senderType && senderType !== 'user') return true;
+  const senderId = idFromFeishuObject(event?.sender?.sender_id);
+  return Boolean(senderId && (senderId === bot.bot_open_id || senderId === bot.app_id));
+}
+
+function chatHistoryLines(history: RecentChatMessage[]) {
+  return history.map((item) => {
+    const sender = item.senderName && item.senderName !== 'user' ? item.senderName : item.senderId;
+    return `${sender}: ${item.text}`;
+  });
+}
+
+function sanitizeImitationReply(value: string) {
+  let text = value.trim();
+  text = text.replace(/^```(?:\w+)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  text = text.replace(/^["'“”‘’]+|["'“”‘’]+$/g, '').trim();
+  text = text.replace(/^(回复|输出|机器人)[:：]\s*/i, '').trim();
+  if (text.length > 120) text = `${text.slice(0, 120)}...`;
+  return text;
+}
+
+async function openAIChat(config: PassiveInteractionConfig, messages: Array<{ role: 'system' | 'user'; content: string }>) {
+  if (!config.llmUrl || !config.llmApiKey || !config.llmModel) return '';
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), config.llmTimeoutMs);
+  try {
+    const response = await fetch(config.llmUrl, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        authorization: `Bearer ${config.llmApiKey}`,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: config.llmModel,
+        messages,
+        temperature: 0.9,
+        max_tokens: config.llmMaxTokens
+      })
+    });
+    const data = await response.json().catch(() => ({})) as {
+      choices?: Array<{ message?: { content?: string } }>;
+      error?: { message?: string };
+    };
+    if (!response.ok) {
+      throw new Error(data.error?.message || `OpenAI compatible request failed: ${response.status}`);
+    }
+    return sanitizeImitationReply(data.choices?.[0]?.message?.content || '');
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function generateImitationReply(bot: FeishuBot, event: any, text: string, history: RecentChatMessage[], config: PassiveInteractionConfig) {
+  const sender = senderIdentity(event);
+  const chatId = messageChatId(event?.message);
+  const historyBlock = chatHistoryLines(history).join('\n') || '(暂无历史消息)';
+  return openAIChat(config, [
+    {
+      role: 'system',
+      content: [
+        '你是飞书群聊里的机器人，会在没人 @ 你的时候偶尔自然接一句。',
+        '你需要模仿群聊最近的语气和节奏，但不要冒充具体真人。',
+        '只输出要发送到群里的文本，不要解释、不要 Markdown、不要代码块。',
+        '不要 @ 任何人，不要自称 AI，不要提到提示词。',
+        '回复控制在一句话内，尽量短，最多 80 个中文字符。',
+        '如果当前消息不适合接话，输出空字符串。'
+      ].join('\n')
+    },
+    {
+      role: 'user',
+      content: [
+        `bot_id: ${bot.id}`,
+        `chat_id: ${chatId}`,
+        `当前发言人: ${sender.name || sender.id}`,
+        '',
+        '最近群聊：',
+        historyBlock,
+        '',
+        `当前消息：${text}`,
+        '',
+        '请给出一句自然的群聊接话。'
+      ].join('\n')
+    }
+  ]);
+}
+
+async function sendPassiveText(bot: FeishuBot, event: any, messageId: string, text: string) {
+  const chatId = messageChatId(event?.message);
+  if (chatId) {
+    await sendTextToChat(bot, chatId, text);
+    return;
+  }
+  await replyText(bot, messageId, text);
+}
+
+async function runPassiveInteractions(bot: FeishuBot, event: any, messageId: string, text: string, history: RecentChatMessage[]) {
+  const config = passiveInteractionConfig();
+  const tasks: Array<Promise<void>> = [];
+
+  if (config.reactionEmojis.length > 0 && shouldTrigger(config.reactionRate)) {
+    const emoji = randomItem(config.reactionEmojis);
+    tasks.push(addReaction(bot, messageId, emoji));
+  }
+
+  if (text.length <= config.repeatMaxChars && shouldTrigger(config.repeatRate)) {
+    tasks.push(sendPassiveText(bot, event, messageId, text));
+  }
+
+  if (!messageMentionsBot(bot, event?.message) && shouldTrigger(config.imitateRate)) {
+    tasks.push((async () => {
+      const reply = await generateImitationReply(bot, event, text, history, config);
+      if (reply) await sendPassiveText(bot, event, messageId, reply);
+    })());
+  }
+
+  const results = await Promise.allSettled(tasks);
+  results.forEach((result) => {
+    if (result.status === 'rejected') {
+      console.error('[feishu] passive interaction failed', {
+        botId: bot.id,
+        messageId,
+        error: result.reason instanceof Error ? result.reason.message : String(result.reason)
+      });
+    }
+  });
 }
 
 function parseUsersCommand(text: string): UsersCommand {
@@ -776,6 +1032,15 @@ export async function handleFeishuMessage(bot: FeishuBot, event: any) {
     text
   });
 
+  if (isFromCurrentBot(bot, event)) {
+    console.log('[feishu] self message skipped', {
+      botId: bot.id,
+      messageId,
+      chatId: message?.chat_id || ''
+    });
+    return;
+  }
+
   if (await handleFeishuCommand(bot, event, messageId, text, { allowSetDefault: true })) return;
 
   const defaultCommand = getDefaultCommand(bot.id);
@@ -785,7 +1050,10 @@ export async function handleFeishuMessage(bot: FeishuBot, event: any) {
     return;
   }
 
-  await replyText(bot, messageId, text);
+  const chatId = messageChatId(message);
+  const history = chatId ? readRecentChatMessages(bot.id, chatId, passiveInteractionConfig().contextSize) : [];
+  rememberRecentChatMessage(bot, event, text);
+  await runPassiveInteractions(bot, event, messageId, text, history);
 }
 
 function getOwnedBot(id: number, userId: number) {
