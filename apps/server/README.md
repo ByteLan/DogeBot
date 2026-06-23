@@ -154,6 +154,8 @@ pm2 restart dogebot-server --update-env
 - `users`：本地登录用户。
 - `feishu_bots`：飞书 bot 绑定信息，包含 `user_id`，用于隔离不同用户的 bot。
 - `at_users_record`：`/users` 命令记录，按 `bot_id + at_by + at_who` 唯一记录，支持 `sort_order` 排序和 `deleted_at` 软删除。
+- `douyin_aweme_records`：抖音收藏记录，支持通过 `status = 'delete'` 和 `deleted_at` 软删除；随机读取会排除删除状态。
+- `feishu_bot_default_commands`：每个 bot 的默认兜底指令，以及首次设置 `/set-default` 的飞书用户管理员。
 
 ## REST API
 
@@ -203,3 +205,13 @@ pm2 restart dogebot-server --update-env
 - `/users delete @Alice`：软删除指定用户。
 - `/users top @Alice`：将指定用户排到卡片最前。
 - `/users new 3`：只返回最新加入的 3 个用户。
+
+## `/douyin` 命令
+
+- `/douyin {模拟点击文案} [--count n]`：随机发送匹配文案的抖音收藏视频。
+- `/douyin --delete {aweme_id}`：软删除当前 bot 绑定用户名下的指定抖音收藏记录，`aweme_id` 必须是大于 5 位的数字，且只有该 bot 的 `/set-default` 管理员可以执行。
+
+## `/set-default` 命令
+
+- `/set-default "{兜底指令}"`：设置当前 bot 的默认兜底指令。
+- 每个 bot 第一次成功执行 `/set-default` 的飞书用户会被记录为管理员；之后只有这个管理员可以继续修改默认兜底指令。

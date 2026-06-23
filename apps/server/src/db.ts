@@ -64,6 +64,8 @@ db.exec(`
     user_id INTEGER NOT NULL,
     click_text TEXT NOT NULL,
     aweme_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT '',
+    deleted_at TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(user_id, click_text, aweme_id)
@@ -72,6 +74,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS feishu_bot_default_commands (
     bot_id INTEGER PRIMARY KEY,
     default_command TEXT NOT NULL,
+    admin_user_id TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
@@ -90,11 +93,25 @@ db.exec(`
   );
 `);
 
+const defaultCommandColumns = db.prepare('PRAGMA table_info(feishu_bot_default_commands)').all() as Array<{ name: string }>;
+if (!defaultCommandColumns.some((column) => column.name === 'admin_user_id')) {
+  db.exec('ALTER TABLE feishu_bot_default_commands ADD COLUMN admin_user_id TEXT');
+}
+
+const douyinAwemeColumns = db.prepare('PRAGMA table_info(douyin_aweme_records)').all() as Array<{ name: string }>;
+if (!douyinAwemeColumns.some((column) => column.name === 'status')) {
+  db.exec("ALTER TABLE douyin_aweme_records ADD COLUMN status TEXT NOT NULL DEFAULT ''");
+}
+if (!douyinAwemeColumns.some((column) => column.name === 'deleted_at')) {
+  db.exec('ALTER TABLE douyin_aweme_records ADD COLUMN deleted_at TEXT');
+}
+
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id);
   CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires_at ON auth_sessions(expires_at);
   CREATE INDEX IF NOT EXISTS idx_feishu_bots_user_id ON feishu_bots(user_id);
   CREATE INDEX IF NOT EXISTS idx_at_users_record_lookup ON at_users_record(bot_id, at_by, deleted_at, sort_order, created_at);
   CREATE INDEX IF NOT EXISTS idx_douyin_aweme_records_lookup ON douyin_aweme_records(user_id, click_text);
+  CREATE INDEX IF NOT EXISTS idx_douyin_aweme_records_user_aweme_status ON douyin_aweme_records(user_id, aweme_id, status);
   CREATE INDEX IF NOT EXISTS idx_feishu_chat_cron_tasks_due ON feishu_chat_cron_tasks(enabled, next_run_at);
 `);

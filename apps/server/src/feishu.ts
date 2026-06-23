@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import type { AuthenticatedRequest } from './auth.js';
 import { db } from './db.js';
-import { randomDouyinAwemeIds } from './douyin.js';
+import { randomDouyinAwemeIds, softDeleteDouyinAwemeRecords } from './douyin.js';
 
 const FEISHU_BASE: Record<string, string> = {
   feishu: 'https://open.feishu.cn',
@@ -55,13 +55,25 @@ type DouyinCommand = {
   isDouyin: boolean;
   clickText: string;
   count: number;
+  shouldDelete: boolean;
+  deleteAwemeId: string;
   hasInvalidCount: boolean;
+  hasInvalidDelete: boolean;
 };
 
 type SetDefaultCommand = {
   isSetDefault: boolean;
   defaultCommand: string;
 };
+
+type DefaultCommandRecord = {
+  defaultCommand: string;
+  adminUserId: string;
+};
+
+type SetDefaultCommandResult =
+  | { ok: true; assignedAdmin: boolean }
+  | { ok: false; adminUserId: string };
 
 type AddCronCommand = {
   isAddCron: boolean;
@@ -510,17 +522,38 @@ function parseUsersCommand(text: string): UsersCommand {
 
 function parseDouyinCommand(text: string): DouyinCommand {
   const commandIndex = text.indexOf('/douyin');
-  if (commandIndex < 0) return { isDouyin: false, clickText: '', count: 1, hasInvalidCount: false };
+  if (commandIndex < 0) {
+    return {
+      isDouyin: false,
+      clickText: '',
+      count: 1,
+      shouldDelete: false,
+      deleteAwemeId: '',
+      hasInvalidCount: false,
+      hasInvalidDelete: false
+    };
+  }
   const argsText = text.slice(commandIndex + '/douyin'.length).trim();
+  const hasDeleteFlag = /(?:^|\s)--delete(?:\s|$)/.test(argsText);
+  const deleteMatch = argsText.match(/(?:^|\s)--delete\s+(\S+)/);
+  const deleteAwemeId = deleteMatch?.[1] || '';
+  const hasInvalidDelete = hasDeleteFlag && !/^\d{6,}$/.test(deleteAwemeId);
   const hasCountFlag = /(?:^|\s)--count(?:\s|$)/.test(argsText);
   const countMatch = argsText.match(/(?:^|\s)--count\s+(\S+)/);
-  const clickText = argsText.replace(/(?:^|\s)--count(?:\s+\S+)?/, ' ').trim().replace(/\s+/g, ' ');
+  const clickText = argsText
+    .replace(/(?:^|\s)--delete(?:\s+\S+)?/, ' ')
+    .replace(/(?:^|\s)--count(?:\s+\S+)?/, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
   if (!hasCountFlag) {
     return {
       isDouyin: true,
-      clickText: argsText,
+      clickText: hasDeleteFlag ? clickText : argsText,
       count: 1,
-      hasInvalidCount: false
+      shouldDelete: hasDeleteFlag,
+      deleteAwemeId,
+      hasInvalidCount: false,
+      hasInvalidDelete
     };
   }
   if (!countMatch) {
@@ -528,7 +561,10 @@ function parseDouyinCommand(text: string): DouyinCommand {
       isDouyin: true,
       clickText,
       count: 1,
-      hasInvalidCount: true
+      shouldDelete: hasDeleteFlag,
+      deleteAwemeId,
+      hasInvalidCount: true,
+      hasInvalidDelete
     };
   }
   const count = Number(countMatch[1]);
@@ -536,7 +572,10 @@ function parseDouyinCommand(text: string): DouyinCommand {
     isDouyin: true,
     clickText,
     count: Number.isInteger(count) && count > 0 ? count : 1,
-    hasInvalidCount: !Number.isInteger(count) || count <= 0
+    shouldDelete: hasDeleteFlag,
+    deleteAwemeId,
+    hasInvalidCount: !Number.isInteger(count) || count <= 0,
+    hasInvalidDelete
   };
 }
 
@@ -706,19 +745,40 @@ function addCronTask(botId: number, chatId: string, cronExpr: string, commandTex
   return { id: Number(result.lastInsertRowid), nextRunAt };
 }
 
-function setDefaultCommand(botId: number, defaultCommand: string) {
+function getDefaultCommandRecord(botId: number): DefaultCommandRecord | undefined {
+  const row = db.prepare('SELECT default_command, admin_user_id FROM feishu_bot_default_commands WHERE bot_id = ?').get(botId) as
+    | { default_command: string; admin_user_id: string | null }
+    | undefined;
+  if (!row) return undefined;
+  return {
+    defaultCommand: row.default_command.trim(),
+    adminUserId: row.admin_user_id?.trim() || ''
+  };
+}
+
+function setDefaultCommand(botId: number, defaultCommand: string, adminUserId: string): SetDefaultCommandResult {
+  const existing = getDefaultCommandRecord(botId);
+  if (existing?.adminUserId && existing.adminUserId !== adminUserId) {
+    return { ok: false, adminUserId: existing.adminUserId };
+  }
+  const assignedAdmin = !existing?.adminUserId;
   db.prepare(`
-    INSERT INTO feishu_bot_default_commands (bot_id, default_command)
-    VALUES (?, ?)
+    INSERT INTO feishu_bot_default_commands (bot_id, default_command, admin_user_id)
+    VALUES (?, ?, ?)
     ON CONFLICT(bot_id) DO UPDATE SET
       default_command = excluded.default_command,
+      admin_user_id = CASE
+        WHEN feishu_bot_default_commands.admin_user_id IS NULL OR feishu_bot_default_commands.admin_user_id = ''
+        THEN excluded.admin_user_id
+        ELSE feishu_bot_default_commands.admin_user_id
+      END,
       updated_at = CURRENT_TIMESTAMP
-  `).run(botId, defaultCommand);
+  `).run(botId, defaultCommand, adminUserId);
+  return { ok: true, assignedAdmin };
 }
 
 function getDefaultCommand(botId: number) {
-  const row = db.prepare('SELECT default_command FROM feishu_bot_default_commands WHERE bot_id = ?').get(botId) as { default_command: string } | undefined;
-  return row?.default_command?.trim() || '';
+  return getDefaultCommandRecord(botId)?.defaultCommand || '';
 }
 
 function mentionedUsers(bot: FeishuBot, message: any) {
@@ -954,17 +1014,72 @@ async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string
     }
     const setDefault = parseSetDefaultCommand(text);
     if (setDefault.isSetDefault) {
+      const sender = senderIdentity(event);
+      if (!sender.id || sender.id === 'unknown') {
+        await replyText(bot, messageId, '无法识别当前发送用户，不能设置默认兜底指令');
+        return true;
+      }
+      const currentDefault = getDefaultCommandRecord(bot.id);
+      if (currentDefault?.adminUserId && currentDefault.adminUserId !== sender.id) {
+        await replyText(bot, messageId, '只有首次设置默认兜底指令的管理员可以修改 /set-default');
+        return true;
+      }
       if (!setDefault.defaultCommand) {
         await replyText(bot, messageId, '用法：/set-default "{兜底指令}"');
         return true;
       }
-      setDefaultCommand(bot.id, setDefault.defaultCommand);
-      await replyText(bot, messageId, `已设置默认兜底指令：${setDefault.defaultCommand}`);
+      const result = setDefaultCommand(bot.id, setDefault.defaultCommand, sender.id);
+      if (!result.ok) {
+        await replyText(bot, messageId, '只有首次设置默认兜底指令的管理员可以修改 /set-default');
+        return true;
+      }
+      await replyText(
+        bot,
+        messageId,
+        result.assignedAdmin
+          ? `已设置默认兜底指令：${setDefault.defaultCommand}\n你已成为该机器人的 /set-default 管理员。`
+          : `已设置默认兜底指令：${setDefault.defaultCommand}`
+      );
       return true;
     }
   }
   const douyinCommand = parseDouyinCommand(text);
   if (douyinCommand.isDouyin) {
+    if (douyinCommand.shouldDelete) {
+      const sender = senderIdentity(event);
+      if (!sender.id || sender.id === 'unknown') {
+        await replyText(bot, messageId, '无法识别当前发送用户，不能删除抖音收藏记录');
+        return true;
+      }
+      const adminUserId = getDefaultCommandRecord(bot.id)?.adminUserId || '';
+      if (!adminUserId) {
+        await replyText(bot, messageId, '当前机器人还没有 /set-default 管理员，不能执行 /douyin --delete');
+        return true;
+      }
+      if (adminUserId !== sender.id) {
+        await replyText(bot, messageId, '只有该机器人的 /set-default 管理员可以执行 /douyin --delete');
+        return true;
+      }
+      if (douyinCommand.hasInvalidDelete) {
+        await replyText(bot, messageId, '用法：/douyin --delete {大于 5 位的数字 aweme_id}');
+        return true;
+      }
+      if (bot.user_id == null) {
+        await replyText(bot, messageId, '当前机器人未绑定用户，无法删除抖音收藏记录');
+        return true;
+      }
+      const result = softDeleteDouyinAwemeRecords(bot.user_id, douyinCommand.deleteAwemeId);
+      if (result.matched === 0) {
+        await replyText(bot, messageId, `未找到 aweme_id=${douyinCommand.deleteAwemeId} 的抖音收藏记录`);
+        return true;
+      }
+      if (result.deleted === 0) {
+        await replyText(bot, messageId, `aweme_id=${douyinCommand.deleteAwemeId} 已经是删除状态`);
+        return true;
+      }
+      await replyText(bot, messageId, `已删除 aweme_id=${douyinCommand.deleteAwemeId} 的抖音收藏记录，共 ${result.deleted} 条`);
+      return true;
+    }
     if (!douyinCommand.clickText) {
       await replyText(bot, messageId, '用法：/douyin {模拟点击文案} [--count n]');
       return true;
@@ -1179,6 +1294,10 @@ async function executeCronTask(task: ChatCronTask) {
   const douyinCommand = parseDouyinCommand(task.command_text);
   if (!douyinCommand.isDouyin) {
     await sendTextToChat(bot, task.chat_id, `定时任务 #${task.id} 暂不支持该指令：${task.command_text}`);
+    return;
+  }
+  if (douyinCommand.shouldDelete) {
+    await sendTextToChat(bot, task.chat_id, `定时任务 #${task.id} 不支持 /douyin --delete，请由管理员手动执行`);
     return;
   }
   if (!douyinCommand.clickText) {

@@ -6,6 +6,8 @@ type DouyinAwemeRecord = {
   aweme_id: string;
 };
 
+const ACTIVE_DOUYIN_RECORD_FILTER = "COALESCE(status, '') <> 'delete'";
+
 function normalizeClickText(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -31,7 +33,7 @@ export function saveDouyinAwemeRecords(userId: number, clickText: string, awemeI
   const total = (db.prepare(`
     SELECT COUNT(*) AS value
     FROM douyin_aweme_records
-    WHERE user_id = ? AND click_text = ?
+    WHERE user_id = ? AND click_text = ? AND ${ACTIVE_DOUYIN_RECORD_FILTER}
   `).get(userId, clickText) as { value: number }).value;
   return { inserted, total };
 }
@@ -58,7 +60,7 @@ export function randomDouyinAwemeId(userId: number, clickText: string) {
   const row = db.prepare(`
     SELECT aweme_id
     FROM douyin_aweme_records
-    WHERE user_id = ? AND click_text = ?
+    WHERE user_id = ? AND click_text = ? AND ${ACTIVE_DOUYIN_RECORD_FILTER}
     ORDER BY RANDOM()
     LIMIT 1
   `).get(userId, clickText) as DouyinAwemeRecord | undefined;
@@ -70,7 +72,7 @@ export function randomDouyinAwemeIds(userId: number, clickText: string, count: n
   return db.prepare(`
     SELECT aweme_id
     FROM douyin_aweme_records
-    WHERE user_id = ? AND click_text = ?
+    WHERE user_id = ? AND click_text = ? AND ${ACTIVE_DOUYIN_RECORD_FILTER}
     ORDER BY RANDOM()
     LIMIT ?
   `).all(userId, clickText, count) as DouyinAwemeRecord[];
@@ -80,11 +82,25 @@ export function randomDouyinAwemeIdByClickText(clickText: string) {
   const row = db.prepare(`
     SELECT aweme_id
     FROM douyin_aweme_records
-    WHERE click_text = ?
+    WHERE click_text = ? AND ${ACTIVE_DOUYIN_RECORD_FILTER}
     ORDER BY RANDOM()
     LIMIT 1
   `).get(clickText) as DouyinAwemeRecord | undefined;
   return row?.aweme_id || '';
+}
+
+export function softDeleteDouyinAwemeRecords(userId: number, awemeId: string) {
+  const matched = (db.prepare(`
+    SELECT COUNT(*) AS value
+    FROM douyin_aweme_records
+    WHERE user_id = ? AND aweme_id = ?
+  `).get(userId, awemeId) as { value: number }).value;
+  const result = db.prepare(`
+    UPDATE douyin_aweme_records
+    SET status = 'delete', deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+    WHERE user_id = ? AND aweme_id = ? AND ${ACTIVE_DOUYIN_RECORD_FILTER}
+  `).run(userId, awemeId);
+  return { matched, deleted: result.changes };
 }
 
 export function getRandomMmVideo(_req: AuthenticatedRequest, res: Response) {
