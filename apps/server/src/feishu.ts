@@ -107,6 +107,7 @@ type PassiveInteractionConfig = {
   llmModel: string;
   llmTimeoutMs: number;
   llmMaxTokens: number;
+  llmDisableThinking: boolean;
 };
 
 type RecentChatMessage = {
@@ -336,6 +337,11 @@ function parsePositiveInt(raw: string | undefined, fallback: number) {
   return Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
+function parseBooleanFlag(raw: string | undefined, fallback = false) {
+  if (!raw?.trim()) return fallback;
+  return ['1', 'true', 'yes', 'on'].includes(raw.trim().toLowerCase());
+}
+
 function splitCsv(raw: string | undefined, fallback: string[]) {
   const items = (raw || '').split(',').map((item) => item.trim()).filter(Boolean);
   return items.length > 0 ? items : fallback;
@@ -361,7 +367,8 @@ function passiveInteractionConfig(): PassiveInteractionConfig {
     llmApiKey: envString('DOGEBOT_LLM_API_KEY', 'OPENAI_API_KEY'),
     llmModel: envString('DOGEBOT_LLM_MODEL', 'OPENAI_MODEL'),
     llmTimeoutMs: parsePositiveInt(envString('DOGEBOT_LLM_TIMEOUT_MS', 'OPENAI_TIMEOUT_MS'), 15_000),
-    llmMaxTokens: parsePositiveInt(process.env.DOGEBOT_LLM_MAX_TOKENS, 160)
+    llmMaxTokens: parsePositiveInt(process.env.DOGEBOT_LLM_MAX_TOKENS, 160),
+    llmDisableThinking: parseBooleanFlag(process.env.DOGEBOT_LLM_DISABLE_THINKING)
   };
 }
 
@@ -437,6 +444,15 @@ async function openAIChat(config: PassiveInteractionConfig, messages: Array<{ ro
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), config.llmTimeoutMs);
   try {
+    const body: Record<string, unknown> = {
+      model: config.llmModel,
+      messages,
+      temperature: 0.9,
+      max_tokens: config.llmMaxTokens
+    };
+    if (config.llmDisableThinking) {
+      body.enable_thinking = false;
+    }
     const response = await fetch(config.llmUrl, {
       method: 'POST',
       signal: controller.signal,
@@ -444,12 +460,7 @@ async function openAIChat(config: PassiveInteractionConfig, messages: Array<{ ro
         authorization: `Bearer ${config.llmApiKey}`,
         'content-type': 'application/json'
       },
-      body: JSON.stringify({
-        model: config.llmModel,
-        messages,
-        temperature: 0.9,
-        max_tokens: config.llmMaxTokens
-      })
+      body: JSON.stringify(body)
     });
     const data = await response.json().catch(() => ({})) as {
       choices?: Array<{ message?: { content?: string } }>;

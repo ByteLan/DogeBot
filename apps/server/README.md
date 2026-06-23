@@ -73,6 +73,7 @@ pnpm add-user <用户名> <密码>
 - `DOGEBOT_LLM_MODEL` / `OPENAI_MODEL`：模仿接话使用的模型名。
 - `DOGEBOT_LLM_TIMEOUT_MS`：大模型请求超时时间，默认 `15000`。
 - `DOGEBOT_LLM_MAX_TOKENS`：大模型回复 token 上限，默认 `160`。
+- `DOGEBOT_LLM_DISABLE_THINKING`：设为 `1` 时，请求 OpenAI 兼容接口会额外带 `enable_thinking: false`，用于关闭支持该参数的模型思考模式。
 
 ## 宝塔面板长期运行
 
