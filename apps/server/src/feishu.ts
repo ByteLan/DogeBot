@@ -225,13 +225,13 @@ export function textFromMessage(message: any) {
   }
 }
 
-export async function replyText(bot: FeishuBot, messageId: string, text: string) {
+export async function replyText(bot: FeishuBot, messageId: string, text: string, replyInThread = false) {
   const token = await tenantAccessToken(bot);
   try {
     await feishuJson(`${openBase(bot.domain)}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reply`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ msg_type: 'text', content: JSON.stringify({ text }) })
+      body: JSON.stringify({ msg_type: 'text', content: JSON.stringify({ text }), reply_in_thread: replyInThread })
     });
     // console.log('[feishu] text reply send success', { botId: bot.id, messageId, textLength: text.length });
   } catch (error) {
@@ -253,7 +253,7 @@ async function sendTextToChat(bot: FeishuBot, chatId: string, text: string) {
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ receive_id: chatId, msg_type: 'text', content: JSON.stringify({ text }) })
     });
-    console.log('[feishu] chat text send success', { botId: bot.id, chatId, textLength: text.length });
+    // console.log('[feishu] chat text send success', { botId: bot.id, chatId, textLength: text.length });
   } catch (error) {
     console.error('[feishu] chat text send failed', {
       botId: bot.id,
@@ -385,6 +385,10 @@ function messageChatId(message: any) {
   return String(message?.chat_id || '').trim();
 }
 
+function messageThreadId(message: any) {
+  return String(message?.thread_id || '').trim();
+}
+
 function recentChatKey(botId: number, chatId: string) {
   return `${botId}:${chatId}`;
 }
@@ -513,6 +517,10 @@ async function generateImitationReply(bot: FeishuBot, event: any, text: string, 
 }
 
 async function sendPassiveText(bot: FeishuBot, event: any, messageId: string, text: string) {
+  if (messageThreadId(event?.message)) {
+    await replyText(bot, messageId, text, true);
+    return;
+  }
   const chatId = messageChatId(event?.message);
   if (chatId) {
     await sendTextToChat(bot, chatId, text);
