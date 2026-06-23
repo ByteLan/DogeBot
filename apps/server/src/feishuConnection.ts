@@ -72,6 +72,15 @@ class FeishuConnectionManager {
             void handleFeishuMessage(bot, data?.event || data).catch((error) => {
               console.error(`[feishu] bot ${bot.id} message handling failed`, error);
             });
+          },
+          'im.message.reaction.created_v1': async (data: any) => {
+            const event = data?.event || data;
+            console.log('[feishu] reaction event received', {
+              botId: bot.id,
+              messageId: event?.message_id || event?.message?.message_id || '',
+              reactionType: event?.reaction_type?.emoji_type || event?.reaction?.reaction_type?.emoji_type || '',
+              operatorId: event?.operator_id?.open_id || event?.operator?.operator_id?.open_id || ''
+            });
           }
         })
       });
