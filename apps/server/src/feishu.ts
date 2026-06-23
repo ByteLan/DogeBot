@@ -602,6 +602,13 @@ function usersPersonListElement(records: AtRecord[], index: number) {
   };
 }
 
+function usersDividerElement(index: number) {
+  return {
+    tag: 'hr',
+    element_id: `users_divider_${index}`
+  };
+}
+
 function chunkUsersRecords(records: AtRecord[]) {
   const chunks: AtRecord[][] = [];
   for (let index = 0; index < records.length; index += USERS_CARD_PERSON_LIST_CHUNK_SIZE) {
@@ -654,11 +661,16 @@ async function replyUsersCard(bot: FeishuBot, messageId: string, records: AtReco
   const chunks = chunkUsersRecords(records);
 
   const personListCardId = await createCardEntity(client, usersPersonListCard(records));
-  await replyCardReference(client, messageId, personListCardId);
-  await appendUsersCardElements(client, personListCardId, chunks, (chunk, index) => [usersPersonListElement(chunk, index)]);
+  const personListReply = await replyCardReference(client, messageId, personListCardId);
+  await appendUsersCardElements(client, personListCardId, chunks, (chunk, index) => [
+    usersDividerElement(index),
+    usersPersonListElement(chunk, index)
+  ]);
 
+  const personListMessageId = personListReply.data?.message_id;
+  if (!personListMessageId) throw new Error('failed to get person list message id');
   const markdownCardId = await createCardEntity(client, usersMarkdownCard(records));
-  await replyCardReference(client, messageId, markdownCardId, true);
+  await replyCardReference(client, personListMessageId, markdownCardId, true);
   await appendUsersCardElements(client, markdownCardId, chunks, (chunk, index) => [usersMarkdownElement(chunk, index)]);
 }
 
