@@ -1246,43 +1246,45 @@ export async function handleFeishuMessage(bot: FeishuBot, event: any) {
     return;
   }
 
-  if (await handleFeishuCommand(bot, event, messageId, text, { allowSetDefault: true })) {
-    console.log('[feishu] explicit command handled, passive interaction skipped', {
-      botId: bot.id,
-      messageId,
-      chatId: message?.chat_id || ''
-    });
-    return;
-  }
+  const chatId = messageChatId(message);
+  const chatType = String(message?.chat_type || '').trim();
+  const isPrivateChat = chatType === 'p2p';
+  const mentionsBot = messageMentionsBot(bot, message);
+  const shouldHandleCommand = isPrivateChat || mentionsBot;
 
-  const defaultCommand = getDefaultCommand(bot.id);
-  if (defaultCommand) {
-    console.log('[feishu] default command active, passive interaction skipped', {
-      botId: bot.id,
-      messageId,
-      chatId: message?.chat_id || '',
-      defaultCommandLength: defaultCommand.length
-    });
-    if (await handleFeishuCommand(bot, event, messageId, defaultCommand, { allowSetDefault: false })) {
-      console.log('[feishu] default command handled as command', {
+  const history = chatId ? readRecentChatMessages(bot.id, chatId, passiveInteractionConfig().contextSize) : [];
+  rememberRecentChatMessage(bot, event, text);
+
+  if (shouldHandleCommand) {
+    if (await handleFeishuCommand(bot, event, messageId, text, { allowSetDefault: true })) {
+      console.log('[feishu] explicit command handled, passive interaction skipped', {
         botId: bot.id,
         messageId,
         chatId: message?.chat_id || ''
       });
       return;
     }
-    await replyText(bot, messageId, defaultCommand);
-    console.log('[feishu] default command replied as text', {
-      botId: bot.id,
-      messageId,
-      chatId: message?.chat_id || ''
-    });
-    return;
+
+    const defaultCommand = getDefaultCommand(bot.id);
+    if (defaultCommand) {
+      if (await handleFeishuCommand(bot, event, messageId, defaultCommand, { allowSetDefault: false })) {
+        console.log('[feishu] default command handled as command', {
+          botId: bot.id,
+          messageId,
+          chatId: message?.chat_id || ''
+        });
+        return;
+      }
+      await replyText(bot, messageId, defaultCommand);
+      console.log('[feishu] default command replied as text', {
+        botId: bot.id,
+        messageId,
+        chatId: message?.chat_id || ''
+      });
+      return;
+    }
   }
 
-  const chatId = messageChatId(message);
-  const history = chatId ? readRecentChatMessages(bot.id, chatId, passiveInteractionConfig().contextSize) : [];
-  rememberRecentChatMessage(bot, event, text);
   await runPassiveInteractions(bot, event, messageId, text, history);
 }
 
