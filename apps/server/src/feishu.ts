@@ -561,11 +561,22 @@ function listMentions(botId: number, atBy: string, newCount?: number) {
   `).all(...(newCount ? [botId, atBy, newCount] : [botId, atBy])) as AtRecord[];
 }
 
-function usersCard(records: AtRecord[]) {
+function usersPersonListCard(records: AtRecord[]) {
   const firstChunk = records.slice(0, USERS_CARD_PERSON_LIST_CHUNK_SIZE);
   const elements: object[] = firstChunk.length > 0
-    ? [usersMarkdownElement(firstChunk, 0), usersPersonListElement(firstChunk, 0)]
+    ? [usersPersonListElement(firstChunk, 0)]
     : [{ tag: 'markdown', content: '暂无已记录用户', element_id: 'users_empty' }];
+  return {
+    schema: '2.0',
+    body: { elements }
+  };
+}
+
+function usersMarkdownCard(records: AtRecord[]) {
+  const firstChunk = records.slice(0, USERS_CARD_PERSON_LIST_CHUNK_SIZE);
+  const elements: object[] = firstChunk.length > 0
+    ? [usersMarkdownElement(firstChunk, 0)]
+    : [{ tag: 'markdown', content: '暂无已记录用户', element_id: 'users_markdown_empty' }];
   return {
     schema: '2.0',
     body: { elements }
@@ -591,9 +602,15 @@ function usersPersonListElement(records: AtRecord[], index: number) {
   };
 }
 
-async function replyUsersCard(bot: FeishuBot, messageId: string, records: AtRecord[]) {
-  const client = await feishuSdkClient(bot);
-  const card = usersCard(records);
+function chunkUsersRecords(records: AtRecord[]) {
+  const chunks: AtRecord[][] = [];
+  for (let index = 0; index < records.length; index += USERS_CARD_PERSON_LIST_CHUNK_SIZE) {
+    chunks.push(records.slice(index, index + USERS_CARD_PERSON_LIST_CHUNK_SIZE));
+  }
+  return chunks;
+}
+
+async function createCardEntity(client: Awaited<ReturnType<typeof feishuSdkClient>>, card: object) {
   const createResult = await client.cardkit.v1.card.create({
     data: {
       type: 'card_json',
@@ -601,30 +618,48 @@ async function replyUsersCard(bot: FeishuBot, messageId: string, records: AtReco
     }
   });
   const cardId = createResult.data?.card_id;
-  if (!cardId) throw new Error('failed to create users card entity');
-  await client.im.v1.message.reply({
+  if (!cardId) throw new Error('failed to create card entity');
+  return cardId;
+}
+
+async function replyCardReference(client: Awaited<ReturnType<typeof feishuSdkClient>>, messageId: string, cardId: string, replyInThread = false) {
+  return client.im.v1.message.reply({
     path: { message_id: messageId },
     data: {
       msg_type: 'interactive',
-      content: JSON.stringify({ type: 'card', data: { card_id: cardId } })
+      content: JSON.stringify({ type: 'card', data: { card_id: cardId } }),
+      reply_in_thread: replyInThread
     }
   });
+}
+
+async function appendUsersCardElements(client: Awaited<ReturnType<typeof feishuSdkClient>>, cardId: string, chunks: AtRecord[][], buildElements: (chunk: AtRecord[], index: number) => object[]) {
   let sequence = 1;
-  for (let index = USERS_CARD_PERSON_LIST_CHUNK_SIZE; index < records.length; index += USERS_CARD_PERSON_LIST_CHUNK_SIZE) {
+  for (let index = 1; index < chunks.length; index += 1) {
     await client.cardkit.v1.cardElement.create({
       path: { card_id: cardId },
       data: {
         type: 'append',
         sequence,
         uuid: `users_${cardId}_${sequence}`,
-        elements: JSON.stringify([
-          usersMarkdownElement(records.slice(index, index + USERS_CARD_PERSON_LIST_CHUNK_SIZE), sequence),
-          usersPersonListElement(records.slice(index, index + USERS_CARD_PERSON_LIST_CHUNK_SIZE), sequence)
-        ])
+        elements: JSON.stringify(buildElements(chunks[index], index))
       }
     });
     sequence += 1;
   }
+}
+
+async function replyUsersCard(bot: FeishuBot, messageId: string, records: AtRecord[]) {
+  const client = await feishuSdkClient(bot);
+  const chunks = chunkUsersRecords(records);
+
+  const personListCardId = await createCardEntity(client, usersPersonListCard(records));
+  await replyCardReference(client, messageId, personListCardId);
+  await appendUsersCardElements(client, personListCardId, chunks, (chunk, index) => [usersPersonListElement(chunk, index)]);
+
+  const markdownCardId = await createCardEntity(client, usersMarkdownCard(records));
+  await replyCardReference(client, messageId, markdownCardId, true);
+  await appendUsersCardElements(client, markdownCardId, chunks, (chunk, index) => [usersMarkdownElement(chunk, index)]);
 }
 
 async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string, text: string, options: { allowSetDefault: boolean }): Promise<boolean> {
