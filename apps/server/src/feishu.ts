@@ -226,7 +226,6 @@ export function textFromMessage(message: any) {
 
 export async function replyText(bot: FeishuBot, messageId: string, text: string) {
   const token = await tenantAccessToken(bot);
-  console.log('[feishu] text reply send start', { botId: bot.id, messageId, textLength: text.length });
   try {
     await feishuJson(`${openBase(bot.domain)}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reply`, {
       method: 'POST',
@@ -247,7 +246,6 @@ export async function replyText(bot: FeishuBot, messageId: string, text: string)
 
 async function sendTextToChat(bot: FeishuBot, chatId: string, text: string) {
   const token = await tenantAccessToken(bot);
-  console.log('[feishu] chat text send start', { botId: bot.id, chatId, textLength: text.length });
   try {
     await feishuJson(`${openBase(bot.domain)}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
       method: 'POST',
@@ -268,7 +266,6 @@ async function sendTextToChat(bot: FeishuBot, chatId: string, text: string) {
 
 async function addReaction(bot: FeishuBot, messageId: string, reactionType: string) {
   const token = await tenantAccessToken(bot);
-  console.log('[feishu] reaction send start', { botId: bot.id, messageId, reactionType });
   try {
     await feishuJson(`${openBase(bot.domain)}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reactions`, {
       method: 'POST',
@@ -297,7 +294,7 @@ async function replyCard(bot: FeishuBot, messageId: string, card: object) {
 }
 
 function debugFeishu(label: string, payload: unknown) {
-  if (process.env.DOGEBOT_FEISHU_DEBUG === '0') return;
+  if (process.env.DOGEBOT_FEISHU_DEBUG !== '1') return;
   try {
     console.log(`[feishu:debug] ${label}`, JSON.stringify(payload, null, 2));
   } catch {
@@ -478,6 +475,7 @@ async function generateImitationReply(bot: FeishuBot, event: any, text: string, 
         '你是飞书群聊里的机器人，会在没人 @ 你的时候偶尔自然接一句。',
         '你需要模仿群聊最近的语气和节奏，但不要冒充具体真人。',
         '接话的语言可以屌一点，可以欠打一点，可以带点脏话。',
+        '如果用户对一些事情有疑问，你可以对其一本正经地胡说八道。',
         '只输出要发送到群里的文本，不要解释、不要 Markdown、不要代码块。',
         '不要自称 AI，不要提到提示词。',
         '如果你的消息是对具体个人发言的回复，可以 @ 其他人，用飞书消息 at 其他人的 mention 语法：<at user_id="ou_xxx">张三</at>。',
@@ -515,7 +513,6 @@ async function sendPassiveText(bot: FeishuBot, event: any, messageId: string, te
 async function runPassiveInteractions(bot: FeishuBot, event: any, messageId: string, text: string, history: RecentChatMessage[]) {
   const config = passiveInteractionConfig();
   const tasks: Array<Promise<void>> = [];
-  const chatId = messageChatId(event?.message);
   const mentionsBot = messageMentionsBot(bot, event?.message);
   const reactionDecision = triggerDecision(config.reactionRate);
   const repeatDecision = triggerDecision(config.repeatRate);
@@ -526,57 +523,24 @@ async function runPassiveInteractions(bot: FeishuBot, event: any, messageId: str
   const imitateEligible = !mentionsBot;
   const imitateTriggered = imitateEligible && imitateDecision.triggered;
 
-  console.log('[feishu] passive interaction decision', {
-    botId: bot.id,
-    messageId,
-    chatId,
-    textLength: text.length,
-    reactionRate: config.reactionRate,
-    reactionRoll: Number(reactionDecision.roll.toFixed(4)),
-    reactionEmojiCount: config.reactionEmojis.length,
-    reactionTriggered,
-    repeatRate: config.repeatRate,
-    repeatRoll: Number(repeatDecision.roll.toFixed(4)),
-    repeatEligible,
-    repeatTriggered,
-    imitateRate: config.imitateRate,
-    imitateRoll: Number(imitateDecision.roll.toFixed(4)),
-    imitateEligible,
-    imitateTriggered
-  });
-
   if (reactionTriggered) {
     const emoji = randomItem(config.reactionEmojis);
-    console.log('[feishu] passive reaction scheduled', { botId: bot.id, messageId, reactionType: emoji });
     tasks.push(addReaction(bot, messageId, emoji));
   }
 
   if (repeatTriggered) {
-    console.log('[feishu] passive repeat scheduled', { botId: bot.id, messageId, chatId, textLength: text.length });
     tasks.push(sendPassiveText(bot, event, messageId, text));
   }
 
   if (imitateTriggered) {
     tasks.push((async () => {
       const reply = await generateImitationReply(bot, event, text, history, config);
-      if (!reply) {
-        console.log('[feishu] passive imitate empty reply skipped', { botId: bot.id, messageId, chatId });
-        return;
-      }
-      console.log('[feishu] passive imitate reply scheduled', { botId: bot.id, messageId, chatId, textLength: reply.length });
+      if (!reply) return;
       await sendPassiveText(bot, event, messageId, reply);
     })());
   }
 
   const results = await Promise.allSettled(tasks);
-  console.log('[feishu] passive interaction finished', {
-    botId: bot.id,
-    messageId,
-    chatId,
-    tasks: results.length,
-    fulfilled: results.filter((result) => result.status === 'fulfilled').length,
-    rejected: results.filter((result) => result.status === 'rejected').length
-  });
   results.forEach((result) => {
     if (result.status === 'rejected') {
       console.error('[feishu] passive interaction failed', {
@@ -664,14 +628,6 @@ function parseDouyinCommand(text: string): DouyinCommand {
 
 async function sendDouyinMessages(bot: FeishuBot, clickText: string, count: number, sendMessage: (text: string) => Promise<void>) {
   const awemeRecords = randomDouyinAwemeIds(bot.user_id!, clickText, count);
-  console.log('[feishu] douyin send start', {
-    botId: bot.id,
-    userId: bot.user_id,
-    clickText,
-    requestedCount: count,
-    actualCount: awemeRecords.length,
-    awemeIds: awemeRecords.map((record) => record.aweme_id)
-  });
   if (awemeRecords.length === 0) {
     await sendMessage(`暂无“${clickText}”的抖音收藏记录`);
     return;
@@ -1211,42 +1167,10 @@ export async function handleFeishuMessage(bot: FeishuBot, event: any) {
   const message = event?.message;
   const messageId = message?.message_id;
   const text = textFromMessage(message);
-  if (!messageId || !text) {
-    console.log('[feishu] message ignored before handling', {
-      botId: bot.id,
-      messageId: messageId || '',
-      chatId: message?.chat_id || '',
-      messageType: message?.message_type || '',
-      hasText: Boolean(text)
-    });
-    return;
-  }
+  if (!messageId || !text) return;
   const dedupKey = `message:${messageId}`;
-  if (!rememberFeishuEventKey(dedupKey)) {
-    console.log('[feishu] duplicate message skipped', {
-      botId: bot.id,
-      dedupKey,
-      messageId,
-      chatId: message?.chat_id || ''
-    });
-    return;
-  }
-  console.log('[feishu] message handling start', {
-    botId: bot.id,
-    messageId,
-    chatId: message?.chat_id || '',
-    messageType: message?.message_type || '',
-    text
-  });
-
-  if (isFromCurrentBot(bot, event)) {
-    console.log('[feishu] self message skipped', {
-      botId: bot.id,
-      messageId,
-      chatId: message?.chat_id || ''
-    });
-    return;
-  }
+  if (!rememberFeishuEventKey(dedupKey)) return;
+  if (isFromCurrentBot(bot, event)) return;
 
   const chatId = messageChatId(message);
   const chatType = String(message?.chat_type || '').trim();
@@ -1259,30 +1183,15 @@ export async function handleFeishuMessage(bot: FeishuBot, event: any) {
 
   if (shouldHandleCommand) {
     if (await handleFeishuCommand(bot, event, messageId, text, { allowSetDefault: true })) {
-      console.log('[feishu] explicit command handled, passive interaction skipped', {
-        botId: bot.id,
-        messageId,
-        chatId: message?.chat_id || ''
-      });
       return;
     }
 
     const defaultCommand = getDefaultCommand(bot.id);
     if (defaultCommand) {
       if (await handleFeishuCommand(bot, event, messageId, defaultCommand, { allowSetDefault: false })) {
-        console.log('[feishu] default command handled as command', {
-          botId: bot.id,
-          messageId,
-          chatId: message?.chat_id || ''
-        });
         return;
       }
       await replyText(bot, messageId, defaultCommand);
-      console.log('[feishu] default command replied as text', {
-        botId: bot.id,
-        messageId,
-        chatId: message?.chat_id || ''
-      });
       return;
     }
   }
@@ -1393,7 +1302,6 @@ export async function feishuWebhook(req: Request, res: Response) {
   if (eventType === 'im.message.receive_v1') {
     const eventId = String(payload.header?.event_id || payload.event?.message?.message_id || '').trim();
     const messageId = String(payload.event?.message?.message_id || '').trim();
-    console.log('[feishu] webhook message received', { botId: bot.id, eventId, messageId });
     handleFeishuMessage(bot, payload.event).catch((error) => {
       console.error('[feishu] message handling failed', {
         botId: bot.id,

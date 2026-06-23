@@ -17,6 +17,28 @@ function sdkDomain(lark: LarkModule, domain: string) {
   return domain;
 }
 
+function messageTextPreview(event: any) {
+  try {
+    const content = JSON.parse(event?.message?.content || '{}') as { text?: string };
+    return String(content.text || '').trim().slice(0, 50);
+  } catch {
+    return '';
+  }
+}
+
+function senderName(event: any) {
+  const sender = event?.sender || {};
+  return String(
+    sender.sender_name ||
+      sender.name ||
+      sender.sender_id?.open_id ||
+      sender.sender_id?.user_id ||
+      sender.sender_id?.union_id ||
+      sender.sender_type ||
+      ''
+  ).trim();
+}
+
 class FeishuConnectionManager {
   private readonly connections = new Map<number, ManagedConnection>();
 
@@ -71,25 +93,14 @@ class FeishuConnectionManager {
           'im.message.receive_v1': async (data: any) => {
             const event = data?.event || data;
             console.log('[feishu] message event received', {
-              botId: bot.id,
-              messageId: event?.message?.message_id || '',
-              chatId: event?.message?.chat_id || '',
-              messageType: event?.message?.message_type || '',
-              mentionCount: Array.isArray(event?.message?.mentions) ? event.message.mentions.length : 0
+              senderName: senderName(event),
+              text: messageTextPreview(event)
             });
             void handleFeishuMessage(bot, data?.event || data).catch((error) => {
               console.error(`[feishu] bot ${bot.id} message handling failed`, error);
             });
           },
-          'im.message.reaction.created_v1': async (data: any) => {
-            const event = data?.event || data;
-            console.log('[feishu] reaction event received', {
-              botId: bot.id,
-              messageId: event?.message_id || event?.message?.message_id || '',
-              reactionType: event?.reaction_type?.emoji_type || event?.reaction?.reaction_type?.emoji_type || '',
-              operatorId: event?.operator_id?.open_id || event?.operator?.operator_id?.open_id || ''
-            });
-          }
+          'im.message.reaction.created_v1': async () => {}
         })
       });
     } catch (error) {
