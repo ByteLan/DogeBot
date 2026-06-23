@@ -232,7 +232,7 @@ export async function replyText(bot: FeishuBot, messageId: string, text: string)
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ msg_type: 'text', content: JSON.stringify({ text }) })
     });
-    console.log('[feishu] text reply send success', { botId: bot.id, messageId, textLength: text.length });
+    // console.log('[feishu] text reply send success', { botId: bot.id, messageId, textLength: text.length });
   } catch (error) {
     console.error('[feishu] text reply send failed', {
       botId: bot.id,
