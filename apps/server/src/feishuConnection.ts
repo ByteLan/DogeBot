@@ -69,6 +69,14 @@ class FeishuConnectionManager {
           verificationToken: bot.verification_token || undefined
         }).register({
           'im.message.receive_v1': async (data: any) => {
+            const event = data?.event || data;
+            console.log('[feishu] message event received', {
+              botId: bot.id,
+              messageId: event?.message?.message_id || '',
+              chatId: event?.message?.chat_id || '',
+              messageType: event?.message?.message_type || '',
+              mentionCount: Array.isArray(event?.message?.mentions) ? event.message.mentions.length : 0
+            });
             void handleFeishuMessage(bot, data?.event || data).catch((error) => {
               console.error(`[feishu] bot ${bot.id} message handling failed`, error);
             });
