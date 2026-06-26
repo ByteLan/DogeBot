@@ -3,10 +3,56 @@ const { contextBridge, ipcRenderer } = require('electron');
 const hookSource = 'dogebot-douyin-hook';
 const hookEvent = 'dogebot-douyin-hook-event';
 const collectListEndpoint = 'https://www.douyin.com/aweme/v1/web/collects/video/list/';
+const collectListConfigStorageKey = 'dogebot.douyinCollectListEndpoints';
 
 function sendCapturedCollectsVideoList(payload) {
   if (!payload || typeof payload !== 'object') return;
   ipcRenderer.send('douyin:collects-video-list-captured', payload);
+}
+
+function normalizeCollectListEndpoints(value) {
+  if (!Array.isArray(value)) return [collectListEndpoint];
+  const result = [];
+  const seen = new Set();
+  for (const item of value) {
+    const next = typeof item === 'string' ? item.trim() : '';
+    if (!next || seen.has(next)) continue;
+    seen.add(next);
+    result.push(next);
+  }
+  return result.length > 0 ? result : [collectListEndpoint];
+}
+
+function readStoredCollectListEndpoints() {
+  try {
+    return normalizeCollectListEndpoints(JSON.parse(window.localStorage.getItem(collectListConfigStorageKey) || '[]'));
+  } catch {
+    return [collectListEndpoint];
+  }
+}
+
+let collectListEndpoints = readStoredCollectListEndpoints();
+
+function appendPageScript(source) {
+  const target = document.documentElement || document.head || document.body;
+  if (!target) return false;
+  const script = document.createElement('script');
+  script.textContent = source;
+  target.appendChild(script);
+  script.remove();
+  return true;
+}
+
+function injectCaptureConfig(endpoints) {
+  const source = `
+    (() => {
+      window.__dogebotDouyinCollectListEndpoints = ${JSON.stringify(endpoints)};
+      try {
+        window.localStorage.setItem(${JSON.stringify(collectListConfigStorageKey)}, JSON.stringify(${JSON.stringify(endpoints)}));
+      } catch {}
+    })();
+  `;
+  return appendPageScript(source);
 }
 
 contextBridge.exposeInMainWorld('__dogebotDouyinCapture', {
@@ -41,12 +87,22 @@ function injectPageHook() {
       window.__dogebotDouyinCaptureHookInstalled = true;
       const hookSource = ${JSON.stringify(hookSource)};
       const hookEvent = ${JSON.stringify(hookEvent)};
-      const collectListEndpoint = ${JSON.stringify(collectListEndpoint)};
+      const defaultCollectListEndpoint = ${JSON.stringify(collectListEndpoint)};
+      const getCollectListEndpoints = () => {
+        const endpoints = Array.isArray(window.__dogebotDouyinCollectListEndpoints) ? window.__dogebotDouyinCollectListEndpoints : [];
+          if (endpoints.length > 0) return endpoints;
+          try {
+            const stored = JSON.parse(window.localStorage.getItem(${JSON.stringify(collectListConfigStorageKey)}) || '[]');
+            return Array.isArray(stored) && stored.length > 0 ? stored : [defaultCollectListEndpoint];
+          } catch {
+            return [defaultCollectListEndpoint];
+          }
+      };
       const isCollectListApiUrl = (url) => {
         if (!url) return false;
         try {
           const parsed = new URL(String(url), location.href);
-          return parsed.origin + parsed.pathname === collectListEndpoint;
+          return getCollectListEndpoints().includes(parsed.origin + parsed.pathname);
         } catch {
           return false;
         }
@@ -158,28 +214,44 @@ function injectPageHook() {
       };
       hookLog('preload script installed', {
         href: location.href,
+        collectListEndpoints: getCollectListEndpoints(),
         hasFetch: typeof originalFetch === 'function',
         hasXhr: typeof XMLHttpRequest !== 'undefined'
       });
     })();
   `;
-  const script = document.createElement('script');
-  script.textContent = source;
-  (document.documentElement || document.head || document.body).appendChild(script);
-  script.remove();
+  return appendPageScript(source);
+}
+
+function installPageHookWithConfig() {
+  if (!document.documentElement && !document.head && !document.body) return false;
+  injectCaptureConfig(collectListEndpoints);
+  injectPageHook();
+  return true;
 }
 
 ipcRenderer.send('douyin:preload-ready', { href: location.href });
 try {
-  if (document.documentElement || document.head || document.body) {
-    injectPageHook();
-  } else {
-    window.addEventListener('DOMContentLoaded', injectPageHook, { once: true });
-  }
+  if (!installPageHookWithConfig()) window.addEventListener('DOMContentLoaded', installPageHookWithConfig, { once: true });
 } catch (error) {
   ipcRenderer.send('douyin:hook-log', {
     message: 'preload script inject failed',
     data: error instanceof Error ? error.message : String(error)
   });
 }
+ipcRenderer.on('douyin:update-capture-config', (_event, payload) => {
+  collectListEndpoints = normalizeCollectListEndpoints(payload && payload.collectListEndpoints);
+  try {
+    const installed = installPageHookWithConfig();
+    ipcRenderer.send('douyin:hook-log', {
+      message: 'capture config updated',
+      data: { collectListEndpoints, installed }
+    });
+  } catch (error) {
+    ipcRenderer.send('douyin:hook-log', {
+      message: 'capture config update failed',
+      data: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
 console.log('[douyin page preload] loaded');

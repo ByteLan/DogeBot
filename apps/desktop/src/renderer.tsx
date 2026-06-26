@@ -226,6 +226,10 @@ function buildUrlHistory(defaultValue: string, values: Array<string | undefined>
   return result;
 }
 
+function mergeHistoryValues(defaultValue: string, current: string[], values: Array<string | undefined>) {
+  return buildUrlHistory(defaultValue, [...current, ...values]).filter((value) => value !== defaultValue);
+}
+
 function isValidHttpUrl(url: string) {
   try {
     const parsed = new URL(url);
@@ -275,8 +279,9 @@ function App() {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [qrRegistration, setQrRegistration] = useState<QrBegin | undefined>();
   const [douyinTasks, setDouyinTasks] = useState<DouyinTask[]>(() => readStoredTasks());
-  const [favoriteUrlHistory, setFavoriteUrlHistory] = useState<string[]>(() => readStoredStringList('dogebot.douyinFavoriteUrlHistory', [defaultFavoriteUrl]));
-  const [collectListUrlHistory, setCollectListUrlHistory] = useState<string[]>(() => readStoredStringList('dogebot.douyinCollectListUrlHistory', [defaultCollectListUrl]));
+  const [favoriteUrlHistory, setFavoriteUrlHistory] = useState<string[]>(() => readStoredStringList('dogebot.douyinFavoriteUrlHistory'));
+  const [collectListUrlHistory, setCollectListUrlHistory] = useState<string[]>(() => readStoredStringList('dogebot.douyinCollectListUrlHistory'));
+  const [requestUrlFilterHistory, setRequestUrlFilterHistory] = useState<string[]>(() => readStoredStringList('dogebot.douyinRequestUrlFilterHistory'));
   const [douyinRunHidden, setDouyinRunHidden] = useState(() => localStorage.getItem('dogebot.douyinRunHidden') === '1');
   const [douyinShowOnClickFailure, setDouyinShowOnClickFailure] = useState(() => localStorage.getItem('dogebot.douyinShowOnClickFailure') === '1');
   const [douyinShortIntervalSeconds, setDouyinShortIntervalSeconds] = useState(() => readPositiveNumber('dogebot.douyinShortIntervalSeconds', 10));
@@ -304,12 +309,16 @@ function App() {
   const connectionMap = useMemo(() => new Map(connections.map((connection) => [connection.botId, connection])), [connections]);
   const activeDouyinTasks = useMemo(() => douyinTasks.filter((task) => task.enabled), [douyinTasks]);
   const favoriteUrlOptions = useMemo(
-    () => buildUrlHistory(defaultFavoriteUrl, [...favoriteUrlHistory, ...douyinTasks.map((task) => task.favoriteUrl)]),
-    [favoriteUrlHistory, douyinTasks]
+    () => buildUrlHistory(defaultFavoriteUrl, favoriteUrlHistory),
+    [favoriteUrlHistory]
   );
   const collectListUrlOptions = useMemo(
-    () => buildUrlHistory(defaultCollectListUrl, [...collectListUrlHistory, ...douyinTasks.map((task) => task.collectListUrl)]),
-    [collectListUrlHistory, douyinTasks]
+    () => buildUrlHistory(defaultCollectListUrl, collectListUrlHistory),
+    [collectListUrlHistory]
+  );
+  const requestUrlFilterOptions = useMemo(
+    () => buildUrlHistory(defaultRequestUrlFilter, requestUrlFilterHistory),
+    [requestUrlFilterHistory]
   );
 
   useEffect(() => {
@@ -317,17 +326,16 @@ function App() {
   }, [douyinTasks]);
 
   useEffect(() => {
-    setFavoriteUrlHistory((current) => buildUrlHistory(defaultFavoriteUrl, [...current, ...douyinTasks.map((task) => task.favoriteUrl)]));
-    setCollectListUrlHistory((current) => buildUrlHistory(defaultCollectListUrl, [...current, ...douyinTasks.map((task) => task.collectListUrl)]));
-  }, [douyinTasks]);
+    localStorage.setItem('dogebot.douyinFavoriteUrlHistory', JSON.stringify(favoriteUrlHistory));
+  }, [favoriteUrlHistory]);
 
   useEffect(() => {
-    localStorage.setItem('dogebot.douyinFavoriteUrlHistory', JSON.stringify(favoriteUrlOptions));
-  }, [favoriteUrlOptions]);
+    localStorage.setItem('dogebot.douyinCollectListUrlHistory', JSON.stringify(collectListUrlHistory));
+  }, [collectListUrlHistory]);
 
   useEffect(() => {
-    localStorage.setItem('dogebot.douyinCollectListUrlHistory', JSON.stringify(collectListUrlOptions));
-  }, [collectListUrlOptions]);
+    localStorage.setItem('dogebot.douyinRequestUrlFilterHistory', JSON.stringify(requestUrlFilterHistory));
+  }, [requestUrlFilterHistory]);
 
   useEffect(() => {
     localStorage.setItem('dogebot.douyinRunHidden', douyinRunHidden ? '1' : '0');
@@ -420,14 +428,17 @@ function App() {
       const payload = data as DouyinCollectResult;
       const taskId = typeof payload.taskId === 'string' ? payload.taskId : '';
       if (!taskId) return;
+      const isTimeoutEvent = payload.source === 'monitor-timeout';
       const body = parseCollectListBody(payload);
       const awemeIds = Array.isArray(payload.awemeIds)
         ? payload.awemeIds.map((id) => String(id || '').trim()).filter(Boolean)
         : extractAwemeIds(body);
       const taskText = payload.taskClickText || '未命名任务';
-      addTaskEvent(taskId, `${taskText} · ${payload.url || payload.taskCollectListUrl || 'collects/video/list'}`, body ?? payload);
+      if (!isTimeoutEvent) {
+        addTaskEvent(taskId, `${taskText} · ${payload.url || payload.taskCollectListUrl || 'collects/video/list'}`, body ?? payload);
+      }
       if (payload.error) {
-        const errorText = `接口捕获失败：${payload.error}`;
+        const errorText = isTimeoutEvent ? payload.error : `接口捕获失败：${payload.error}`;
         setDouyinTaskStatusMap((records) => ({ ...records, [taskId]: errorText }));
         setDouyinStatus(`${taskText}：${errorText}`);
         return;
@@ -598,6 +609,15 @@ function App() {
     });
   };
 
+  const deleteHistoryValue = (
+    currentValue: string,
+    setHistory: React.Dispatch<React.SetStateAction<string[]>>
+  ) => {
+    const target = currentValue.trim();
+    if (!target) return;
+    setHistory((items) => items.filter((item) => item !== target));
+  };
+
   const openDouyinLogin = async () => {
     try {
       console.log('[douyin renderer] click login');
@@ -632,6 +652,9 @@ function App() {
         setDouyinStatus('请至少启用一个任务');
         return;
       }
+      setFavoriteUrlHistory((current) => mergeHistoryValues(defaultFavoriteUrl, current, tasks.map((task) => task.favoriteUrl)));
+      setCollectListUrlHistory((current) => mergeHistoryValues(defaultCollectListUrl, current, tasks.map((task) => task.collectListUrl)));
+      setRequestUrlFilterHistory((current) => mergeHistoryValues(defaultRequestUrlFilter, current, tasks.map((task) => task.requestUrlFilter)));
       setDouyinTaskStatusMap((records) => {
         const next = { ...records };
         for (const task of tasks) next[task.id] = '等待执行';
@@ -870,51 +893,70 @@ function App() {
                       <Row gutter={12}>
                         <Col span={12}>
                           <Form.Item label="favoriteUrl">
-                            <Select
-                              showSearch
-                              allowCreate
-                              value={task.favoriteUrl}
-                              placeholder="请输入或选择历史 favoriteUrl"
-                              onChange={(value) => updateDouyinTask(task.id, { favoriteUrl: String(value || '') })}
-                            >
-                              {favoriteUrlOptions.map((option) => (
-                                <Select.Option key={option} value={option}>
-                                  {option}
-                                </Select.Option>
-                              ))}
-                            </Select>
+                            <div className="history-select-row">
+                              <div className="history-select-main">
+                                <Select
+                                  showSearch
+                                  allowCreate
+                                  value={task.favoriteUrl}
+                                  placeholder="请输入或选择历史 favoriteUrl"
+                                  onChange={(value) => updateDouyinTask(task.id, { favoriteUrl: String(value || '') })}
+                                >
+                                  {favoriteUrlOptions.map((option) => (
+                                    <Select.Option key={option} value={option}>
+                                      {option}
+                                    </Select.Option>
+                                  ))}
+                                </Select>
+                              </div>
+                              <Button size="mini" onClick={() => deleteHistoryValue(task.favoriteUrl, setFavoriteUrlHistory)}>删除历史</Button>
+                            </div>
                           </Form.Item>
                         </Col>
                         <Col span={12}>
                           <Form.Item label="collectListUrl">
-                            <Select
-                              showSearch
-                              allowCreate
-                              value={task.collectListUrl}
-                              placeholder="请输入或选择历史 collectListUrl"
-                              onChange={(value) => updateDouyinTask(task.id, { collectListUrl: String(value || '') })}
-                            >
-                              {collectListUrlOptions.map((option) => (
-                                <Select.Option key={option} value={option}>
-                                  {option}
-                                </Select.Option>
-                              ))}
-                            </Select>
+                            <div className="history-select-row">
+                              <div className="history-select-main">
+                                <Select
+                                  showSearch
+                                  allowCreate
+                                  value={task.collectListUrl}
+                                  placeholder="请输入或选择历史 collectListUrl"
+                                  onChange={(value) => updateDouyinTask(task.id, { collectListUrl: String(value || '') })}
+                                >
+                                  {collectListUrlOptions.map((option) => (
+                                    <Select.Option key={option} value={option}>
+                                      {option}
+                                    </Select.Option>
+                                  ))}
+                                </Select>
+                              </div>
+                              <Button size="mini" onClick={() => deleteHistoryValue(task.collectListUrl, setCollectListUrlHistory)}>删除历史</Button>
+                            </div>
                           </Form.Item>
                         </Col>
                       </Row>
                       <Row gutter={12}>
                         <Col span={12}>
                           <Form.Item label="请求 URL 筛选字符串">
-                            <Select
-                              value={task.requestUrlFilter}
-                              placeholder="请选择请求 URL 筛选字符串"
-                              onChange={(value) => updateDouyinTask(task.id, { requestUrlFilter: String(value || defaultRequestUrlFilter) })}
-                            >
-                              <Select.Option value={defaultRequestUrlFilter}>
-                                {defaultRequestUrlFilter}
-                              </Select.Option>
-                            </Select>
+                            <div className="history-select-row">
+                              <div className="history-select-main">
+                                <Select
+                                  showSearch
+                                  allowCreate
+                                  value={task.requestUrlFilter}
+                                  placeholder="请输入或选择历史请求 URL 筛选字符串"
+                                  onChange={(value) => updateDouyinTask(task.id, { requestUrlFilter: String(value || defaultRequestUrlFilter) })}
+                                >
+                                  {requestUrlFilterOptions.map((option) => (
+                                    <Select.Option key={option} value={option}>
+                                      {option}
+                                    </Select.Option>
+                                  ))}
+                                </Select>
+                              </div>
+                              <Button size="mini" onClick={() => deleteHistoryValue(task.requestUrlFilter, setRequestUrlFilterHistory)}>删除历史</Button>
+                            </div>
                           </Form.Item>
                         </Col>
                         <Col span={12}>

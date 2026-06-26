@@ -9,7 +9,7 @@ const defaultCollectListUrl = 'https://www.douyin.com/aweme/v1/web/collects/vide
 const favoriteUrl = defaultFavoriteUrl;
 const collectListUrl = defaultCollectListUrl;
 type DouyinCollectCaptureMode = 'page-hook' | 'fetch-debugger';
-const douyinCollectCaptureMode = 'fetch-debugger' as DouyinCollectCaptureMode;
+const douyinCollectCaptureMode = 'page-hook' as DouyinCollectCaptureMode;
 const douyinUsePageHookCapture = douyinCollectCaptureMode === 'page-hook';
 const douyinUseFetchDebuggerCapture = douyinCollectCaptureMode === 'fetch-debugger';
 const douyinUseCdpPageHookCapture = false;
@@ -17,8 +17,9 @@ const douyinPartition = 'persist:dogebot-douyin';
 const chromeVersion = process.versions.chrome || '120.0.0.0';
 const douyinUserAgent = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`;
 const blockedDeeplinkSchemes = ['bitbrowser'];
-const douyinCaptureWaitMs = 4_000;
-const douyinPostTaskPauseMs = 300;
+const douyinCaptureWaitMs = 5_000;
+const douyinPageReadyWaitMs = 5_000;
+const douyinPostTaskPauseMs = 5_000;
 const douyinUaMetadata = {
   brands: [
     { brand: 'Chromium', version: chromeVersion.split('.')[0] },
@@ -83,6 +84,7 @@ let douyinCurrentTaskLabel = '';
 let douyinPendingCapture: DouyinPendingCapture | undefined;
 const douyinTaskLastIdsKey = new Map<string, string>();
 const debugListenerAttached = new WeakSet<BrowserWindow>();
+const debuggerDetachListenerAttached = new WeakSet<BrowserWindow>();
 const devToolsShortcutAttached = new WeakSet<BrowserWindow>();
 let douyinSessionConfigured = false;
 
@@ -201,6 +203,26 @@ function applyDouyinWindowVisibility(win: BrowserWindow) {
   }
   win.show();
   win.focus();
+}
+
+function currentCollectListEndpoints() {
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const task of douyinTasks) {
+    const next = normalizeCollectListBaseUrl(task.collectListUrl);
+    if (!next || seen.has(next)) continue;
+    seen.add(next);
+    result.push(next);
+  }
+  if (result.length === 0) result.push(defaultCollectListUrl);
+  return result;
+}
+
+function syncDouyinCaptureConfig(win: BrowserWindow) {
+  if (!douyinUsePageHookCapture) return;
+  const collectListEndpoints = currentCollectListEndpoints();
+  win.webContents.send('douyin:update-capture-config', { collectListEndpoints });
+  logDouyin('capture config synced', { collectListEndpoints });
 }
 
 function showDouyinWindowNow(win: BrowserWindow) {
@@ -410,6 +432,7 @@ function ensureDouyinWindow() {
   if (douyinWindow && !douyinWindow.isDestroyed()) {
     logDouyin('reuse window', { hidden: douyinRunHidden });
     applyDouyinWindowVisibility(douyinWindow);
+    syncDouyinCaptureConfig(douyinWindow);
     return douyinWindow;
   }
   logDouyin('create window', { hidden: douyinRunHidden });
@@ -471,6 +494,7 @@ function ensureDouyinWindow() {
   win.webContents.on('did-start-loading', () => logDouyin('did-start-loading', win.webContents.getURL()));
   win.webContents.on('did-finish-load', () => {
     logDouyin('did-finish-load', win.webContents.getURL());
+    syncDouyinCaptureConfig(win);
     win.webContents
       .executeJavaScript('({ userAgent: navigator.userAgent, platform: navigator.platform, webdriver: navigator.webdriver, userAgentData: navigator.userAgentData })')
       .then((snapshot) => logDouyin('navigator snapshot', snapshot))
@@ -507,11 +531,14 @@ function attachDouyinDebugger(win: BrowserWindow) {
   if (!devtools.isAttached()) {
     try {
       devtools.attach('1.3');
-      devtools.on('detach', (_event: any, reason: string) => {
-        logDouyin('debugger detached', reason);
-        debugListenerAttached.delete(win);
-        setTimeout(() => attachDouyinDebugger(win), 1000);
-      });
+      if (!debuggerDetachListenerAttached.has(win)) {
+        debuggerDetachListenerAttached.add(win);
+        devtools.on('detach', (_event: any, reason: string) => {
+          logDouyin('debugger detached', reason);
+          debugListenerAttached.delete(win);
+          setTimeout(() => attachDouyinDebugger(win), 1000);
+        });
+      }
       if (douyinUseFetchDebuggerCapture) {
         devtools.sendCommand('Network.enable', {
           maxResourceBufferSize: 1024 * 1024 * 50,
@@ -788,45 +815,6 @@ function attachDouyinDebugger(win: BrowserWindow) {
     }
   }
   debugListenerAttached.add(win);
-  if (douyinUseFetchDebuggerCapture) {
-    devtools.on('message', (_event: any, method: string, params: any) => {
-      if (method !== 'Fetch.requestPaused') return;
-      const requestId = params.requestId;
-      const url = params.request?.url;
-      const currentTask = douyinPendingCapture?.task;
-      const continueRequest = () => {
-        devtools.sendCommand('Fetch.continueRequest', { requestId }).catch(() => undefined);
-      };
-      if (!currentTask || typeof url !== 'string' || params.request?.method === 'OPTIONS' || !isCollectListUrl(url, currentTask)) {
-        continueRequest();
-        return;
-      }
-      logDouyin('Fetch matched response', { requestId, url, taskId: currentTask.id });
-      devtools.sendCommand('Fetch.getResponseBody', { requestId })
-        .then((result) => {
-          const body = result.base64Encoded ? Buffer.from(result.body, 'base64').toString('utf8') : result.body;
-          logDouyin('Fetch response body captured', { requestId, taskId: currentTask.id, length: body.length });
-          handleCapturedCollectsVideoList({
-            source: 'fetch-debugger',
-            url,
-            status: 200,
-            body,
-            receivedAt: new Date().toISOString()
-          });
-        })
-        .catch((error) => {
-          logDouyin('Fetch response body failed', error instanceof Error ? error.message : error);
-          handleCapturedCollectsVideoList({
-            source: 'fetch-debugger',
-            url,
-            status: 0,
-            error: error instanceof Error ? error.message : '读取响应失败',
-            receivedAt: new Date().toISOString()
-          });
-        })
-        .finally(continueRequest);
-    });
-  }
 }
 
 function extractAwemeIdsFromBody(body: string) {
@@ -842,36 +830,34 @@ function extractAwemeIdsFromBody(body: string) {
   }
 }
 
-function handleCapturedCollectsVideoList(payload: unknown) {
-  if (!payload || typeof payload !== 'object') return;
-  const pending = douyinPendingCapture;
-  if (!pending) {
-    logDouyin('ignored collect list payload without pending task');
-    return;
-  }
-  const data = payload as { url?: unknown; status?: unknown; body?: unknown; error?: unknown; source?: unknown; receivedAt?: unknown };
-  if (typeof data.url !== 'string' || !isCollectListUrl(data.url, pending.task)) {
-    logDouyin('ignored collect list payload', { url: data.url, source: data.source, taskId: pending.task.id });
-    return;
-  }
-  const result = {
-    taskId: pending.task.id,
-    taskClickText: pending.task.clickText,
-    taskFavoriteUrl: pending.task.favoriteUrl,
-    taskCollectListUrl: pending.task.collectListUrl,
-    taskRequestUrlFilter: pending.task.requestUrlFilter,
-    url: data.url,
+function buildCollectListResult(task: DouyinTaskConfig, data: { url?: unknown; status?: unknown; body?: unknown; error?: unknown; source?: unknown; receivedAt?: unknown }) {
+  return {
+    taskId: task.id,
+    taskClickText: task.clickText,
+    taskFavoriteUrl: task.favoriteUrl,
+    taskCollectListUrl: task.collectListUrl,
+    taskRequestUrlFilter: task.requestUrlFilter,
+    url: typeof data.url === 'string' ? data.url : task.collectListUrl,
     status: typeof data.status === 'number' ? data.status : Number(data.status || 0),
     body: typeof data.body === 'string' ? data.body : '',
     error: typeof data.error === 'string' ? data.error : undefined,
     source: typeof data.source === 'string' ? data.source : 'page-hook',
     receivedAt: typeof data.receivedAt === 'string' ? data.receivedAt : new Date().toISOString()
   };
+}
+
+function findMatchedTaskByUrl(url: string, preferredTask?: DouyinTaskConfig) {
+  if (preferredTask && isCollectListUrl(url, preferredTask)) return preferredTask;
+  return douyinTasks.find((task) => isCollectListUrl(url, task));
+}
+
+function emitCollectListResult(task: DouyinTaskConfig, data: { url?: unknown; status?: unknown; body?: unknown; error?: unknown; source?: unknown; receivedAt?: unknown }) {
+  const result = buildCollectListResult(task, data);
   const awemeIds = result.body ? extractAwemeIdsFromBody(result.body) : [];
   const idsKey = JSON.stringify(awemeIds);
-  const lastIdsKey = douyinTaskLastIdsKey.get(pending.task.id) || '';
+  const lastIdsKey = douyinTaskLastIdsKey.get(task.id) || '';
   const changed = idsKey !== lastIdsKey;
-  if (changed) douyinTaskLastIdsKey.set(pending.task.id, idsKey);
+  if (changed) douyinTaskLastIdsKey.set(task.id, idsKey);
   logDouyin('collect list response captured', {
     taskId: result.taskId,
     url: result.url,
@@ -883,7 +869,30 @@ function handleCapturedCollectsVideoList(payload: unknown) {
     awemeCount: awemeIds.length
   });
   mainWindow?.webContents.send('douyin:collects-video-list', { ...result, awemeIds });
-  clearPendingCapture({ captured: true, changed, awemeIds });
+  return { changed, awemeIds };
+}
+
+function handleCapturedCollectsVideoList(payload: unknown) {
+  if (!payload || typeof payload !== 'object') return;
+  const data = payload as { url?: unknown; status?: unknown; body?: unknown; error?: unknown; source?: unknown; receivedAt?: unknown };
+  const pending = douyinPendingCapture;
+  if (typeof data.url !== 'string') {
+    logDouyin('ignored collect list payload without url', { source: data.source });
+    return;
+  }
+  const matchedTask = findMatchedTaskByUrl(data.url, pending?.task);
+  if (!matchedTask) {
+    logDouyin('ignored collect list payload', { url: data.url, source: data.source });
+    return;
+  }
+  if (!douyinMonitorRunning && (!pending || matchedTask.id !== pending.task.id)) {
+    logDouyin('ignored collect list payload while monitor stopped', { url: data.url, taskId: matchedTask.id });
+    return;
+  }
+  const result = emitCollectListResult(matchedTask, data);
+  if (pending && matchedTask.id === pending.task.id) {
+    clearPendingCapture({ captured: true, changed: result.changed, awemeIds: result.awemeIds });
+  }
 }
 
 function createPendingCapture(task: DouyinTaskConfig) {
@@ -899,9 +908,8 @@ function createPendingCapture(task: DouyinTaskConfig) {
         taskRequestUrlFilter: task.requestUrlFilter,
         url: task.collectListUrl,
         status: 0,
-        body: '',
         error: '等待 collect list 接口返回超时',
-        source: 'fetch-debugger',
+        source: 'monitor-timeout',
         receivedAt: new Date().toISOString(),
         awemeIds: []
       });
@@ -978,7 +986,7 @@ async function runSingleTask(task: DouyinTaskConfig) {
   setCurrentTask(task);
   const capturePromise = createPendingCapture(task);
   await win.loadURL(task.favoriteUrl, { userAgent: douyinUserAgent });
-  await wait(1500);
+  await wait(douyinPageReadyWaitMs);
   if (task.skipClick) {
     mainWindow?.webContents.send('douyin:click-result', {
       taskId: task.id,
@@ -1113,6 +1121,7 @@ ipcMain.handle('douyin:start-monitor', async (_event: any, tasksInput: unknown, 
   douyinRetryLimit = toPositiveInteger(sharedConfigInput?.retryLimit, 3);
   douyinTasks = tasks;
   douyinTaskLastIdsKey.clear();
+  if (douyinWindow && !douyinWindow.isDestroyed()) syncDouyinCaptureConfig(douyinWindow);
   resetMonitorIntervalState();
   douyinMonitorRunning = true;
   douyinNextRunAt = '';

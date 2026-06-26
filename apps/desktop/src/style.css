@@ -46,6 +46,17 @@ code {
   margin-bottom: 16px;
 }
 
+.history-select-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.history-select-main {
+  flex: 1;
+  min-width: 0;
+}
+
 .json-empty,
 .json-card {
   background: #111827;
