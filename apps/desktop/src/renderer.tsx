@@ -88,6 +88,7 @@ type DouyinCollectResult = {
   source?: string;
   receivedAt?: string;
   awemeIds?: string[];
+  changed?: boolean;
 };
 
 type DouyinClickResult = {
@@ -447,6 +448,12 @@ function App() {
         const emptyText = '接口已返回，但未提取到 aweme_id';
         setDouyinTaskStatusMap((records) => ({ ...records, [taskId]: emptyText }));
         setDouyinStatus(`${taskText}：${emptyText}`);
+        return;
+      }
+      if (payload.changed === false) {
+        const skipText = `已收集 ${awemeIds.length} 个 aweme_id，全部已见过，跳过上传`;
+        setDouyinTaskStatusMap((records) => ({ ...records, [taskId]: skipText }));
+        setDouyinStatus(`${taskText}：${skipText}`);
         return;
       }
       api<{ inserted: number; total: number }>('/api/douyin/aweme-records', {

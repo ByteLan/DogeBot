@@ -82,7 +82,8 @@ let douyinTasks: DouyinTaskConfig[] = [];
 let douyinCurrentTaskId = '';
 let douyinCurrentTaskLabel = '';
 let douyinPendingCapture: DouyinPendingCapture | undefined;
-const douyinTaskLastIdsKey = new Map<string, string>();
+const douyinTaskSeenIds = new Map<string, string[]>();
+const DOUYIN_TASK_SEEN_IDS_MAX = 200;
 const debugListenerAttached = new WeakSet<BrowserWindow>();
 const debuggerDetachListenerAttached = new WeakSet<BrowserWindow>();
 const devToolsShortcutAttached = new WeakSet<BrowserWindow>();
@@ -851,13 +852,29 @@ function findMatchedTaskByUrl(url: string, preferredTask?: DouyinTaskConfig) {
   return douyinTasks.find((task) => isCollectListUrl(url, task));
 }
 
+function checkAndUpdateSeenIds(taskId: string, awemeIds: string[]) {
+  if (awemeIds.length === 0) return false;
+  let seenList = douyinTaskSeenIds.get(taskId) || [];
+  const seenSet = new Set(seenList);
+  const hasNew = awemeIds.some((id) => !seenSet.has(id));
+  if (!hasNew) return false;
+  for (const id of awemeIds) {
+    if (!seenSet.has(id)) {
+      seenSet.add(id);
+      seenList.push(id);
+    }
+  }
+  if (seenList.length > DOUYIN_TASK_SEEN_IDS_MAX) {
+    seenList = seenList.slice(seenList.length - DOUYIN_TASK_SEEN_IDS_MAX);
+  }
+  douyinTaskSeenIds.set(taskId, seenList);
+  return true;
+}
+
 function emitCollectListResult(task: DouyinTaskConfig, data: { url?: unknown; status?: unknown; body?: unknown; error?: unknown; source?: unknown; receivedAt?: unknown }) {
   const result = buildCollectListResult(task, data);
   const awemeIds = result.body ? extractAwemeIdsFromBody(result.body) : [];
-  const idsKey = JSON.stringify(awemeIds);
-  const lastIdsKey = douyinTaskLastIdsKey.get(task.id) || '';
-  const changed = idsKey !== lastIdsKey;
-  if (changed) douyinTaskLastIdsKey.set(task.id, idsKey);
+  const changed = checkAndUpdateSeenIds(task.id, awemeIds);
   logDouyin('collect list response captured', {
     taskId: result.taskId,
     url: result.url,
@@ -866,9 +883,10 @@ function emitCollectListResult(task: DouyinTaskConfig, data: { url?: unknown; st
     length: result.body.length,
     error: result.error,
     changed,
-    awemeCount: awemeIds.length
+    awemeCount: awemeIds.length,
+    seenCount: (douyinTaskSeenIds.get(task.id) || []).length
   });
-  mainWindow?.webContents.send('douyin:collects-video-list', { ...result, awemeIds });
+  mainWindow?.webContents.send('douyin:collects-video-list', { ...result, awemeIds, changed });
   return { changed, awemeIds };
 }
 
@@ -1120,7 +1138,7 @@ ipcMain.handle('douyin:start-monitor', async (_event: any, tasksInput: unknown, 
   douyinLongIntervalMs = toPositiveInteger(sharedConfigInput?.longIntervalSeconds, 60) * 1000;
   douyinRetryLimit = toPositiveInteger(sharedConfigInput?.retryLimit, 3);
   douyinTasks = tasks;
-  douyinTaskLastIdsKey.clear();
+  douyinTaskSeenIds.clear();
   if (douyinWindow && !douyinWindow.isDestroyed()) syncDouyinCaptureConfig(douyinWindow);
   resetMonitorIntervalState();
   douyinMonitorRunning = true;
