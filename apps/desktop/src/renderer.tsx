@@ -30,23 +30,40 @@ type Connection = {
   error?: string;
 };
 
+type DouyinTask = {
+  id: string;
+  enabled: boolean;
+  favoriteUrl: string;
+  collectListUrl: string;
+  requestUrlFilter: string;
+  clickText: string;
+  skipClick: boolean;
+};
+
+type DouyinMonitorTaskPayload = {
+  id: string;
+  favoriteUrl: string;
+  collectListUrl: string;
+  requestUrlFilter: string;
+  clickText: string;
+  skipClick: boolean;
+};
+
+type DouyinMonitorSharedConfig = {
+  hidden?: boolean;
+  showOnClickFailure?: boolean;
+  shortIntervalSeconds?: number;
+  longIntervalSeconds?: number;
+  retryLimit?: number;
+};
+
 type DouyinBridge = {
   openLogin: () => Promise<void>;
-  startMonitor: (
-    clickText: string,
-    hidden?: boolean,
-    showOnClickFailure?: boolean,
-    collectsId?: string,
-    skipClick?: boolean,
-    shortIntervalSeconds?: number,
-    longIntervalSeconds?: number,
-    retryLimit?: number
-  ) => Promise<void>;
+  startMonitor: (tasks: DouyinMonitorTaskPayload[], sharedConfig?: DouyinMonitorSharedConfig) => Promise<void>;
   stopMonitor: () => Promise<void>;
   refreshNow: () => Promise<void>;
   getMonitorState: () => Promise<DouyinMonitorState>;
   setHidden: (hidden: boolean) => Promise<void>;
-  reportAwemeIds: (ids: string[]) => Promise<void>;
   onClickResult: (listener: (data: unknown) => void) => () => void;
   onCollectsVideoList: (listener: (data: unknown) => void) => () => void;
   onMonitorState: (listener: (data: DouyinMonitorState) => void) => () => void;
@@ -56,6 +73,31 @@ type DouyinEvent = {
   id: string;
   title: string;
   data: unknown;
+};
+
+type DouyinCollectResult = {
+  taskId?: string;
+  taskClickText?: string;
+  taskFavoriteUrl?: string;
+  taskCollectListUrl?: string;
+  taskRequestUrlFilter?: string;
+  url?: string;
+  status?: number;
+  body?: string;
+  error?: string;
+  source?: string;
+  receivedAt?: string;
+  awemeIds?: string[];
+};
+
+type DouyinClickResult = {
+  taskId?: string;
+  taskClickText?: string;
+  clicked?: boolean;
+  reason?: string;
+  text?: string;
+  skipped?: boolean;
+  clickedAt?: string;
 };
 
 type DouyinMonitorState = {
@@ -68,6 +110,9 @@ type DouyinMonitorState = {
   retryLimit: number;
   nextRunAt: string;
   tickRunning: boolean;
+  taskCount: number;
+  activeTaskId: string;
+  activeTaskLabel: string;
 };
 
 declare global {
@@ -79,7 +124,9 @@ declare global {
 const { Title, Text, Paragraph } = Typography;
 const { Row, Col } = Grid;
 const initialServerUrl = localStorage.getItem('dogebot.serverUrl') || 'http://127.0.0.1:3000';
-const douyinCollectListUrl = 'https://www.douyin.com/aweme/v1/web/collects/video/list/';
+const defaultFavoriteUrl = 'https://www.douyin.com/user/self?from_tab_name=main&showSubTab=favorite_folder&showTab=favorite_collection';
+const defaultCollectListUrl = 'https://www.douyin.com/aweme/v1/web/collects/video/list/';
+const defaultRequestUrlFilter = 'collects_id=7648523880352618283';
 
 function readPositiveNumber(key: string, fallback: number) {
   const parsed = Number(localStorage.getItem(key));
@@ -94,20 +141,103 @@ function parseJson(value: string) {
   }
 }
 
-function isDouyinCollectListUrl(url: unknown) {
-  if (typeof url !== 'string') return false;
+function createTaskId() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createDefaultTask(partial: Partial<DouyinTask> = {}): DouyinTask {
+  return {
+    id: partial.id || createTaskId(),
+    enabled: partial.enabled ?? true,
+    favoriteUrl: partial.favoriteUrl || defaultFavoriteUrl,
+    collectListUrl: partial.collectListUrl || defaultCollectListUrl,
+    requestUrlFilter: partial.requestUrlFilter || defaultRequestUrlFilter,
+    clickText: partial.clickText || '',
+    skipClick: partial.skipClick ?? false
+  };
+}
+
+function normalizeStoredTask(value: unknown): DouyinTask | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const record = value as Record<string, unknown>;
+  return createDefaultTask({
+    id: typeof record.id === 'string' && record.id.trim() ? record.id.trim() : createTaskId(),
+    enabled: record.enabled !== false,
+    favoriteUrl: typeof record.favoriteUrl === 'string' && record.favoriteUrl.trim() ? record.favoriteUrl.trim() : defaultFavoriteUrl,
+    collectListUrl: typeof record.collectListUrl === 'string' && record.collectListUrl.trim() ? record.collectListUrl.trim() : defaultCollectListUrl,
+    requestUrlFilter: typeof record.requestUrlFilter === 'string' && record.requestUrlFilter.trim()
+      ? record.requestUrlFilter.trim()
+      : typeof record.collectsId === 'string' && record.collectsId.trim()
+        ? record.collectsId.trim()
+        : defaultRequestUrlFilter,
+    clickText: typeof record.clickText === 'string' ? record.clickText.trim() : '',
+    skipClick: Boolean(record.skipClick)
+  });
+}
+
+function readStoredTasks() {
+  const stored = localStorage.getItem('dogebot.douyinTasks');
+  if (stored) {
+    try {
+      const parsed = JSON.parse(stored);
+      if (Array.isArray(parsed)) {
+        const tasks = parsed.map(normalizeStoredTask).filter(Boolean) as DouyinTask[];
+        if (tasks.length > 0) return tasks;
+      }
+    } catch {
+      // ignore malformed storage
+    }
+  }
+  const legacyClickText = localStorage.getItem('dogebot.douyinClickText') || '';
+  const legacyCollectsId = localStorage.getItem('dogebot.douyinCollectsId') || '';
+  const legacySkipClick = localStorage.getItem('dogebot.douyinSkipClick') === '1';
+  if (legacyClickText || legacyCollectsId) {
+    return [createDefaultTask({ clickText: legacyClickText, requestUrlFilter: legacyCollectsId, skipClick: legacySkipClick })];
+  }
+  return [createDefaultTask()];
+}
+
+function readStoredStringList(key: string, fallback: string[] = []) {
+  const stored = localStorage.getItem(key);
+  if (!stored) return fallback;
+  try {
+    const parsed = JSON.parse(stored);
+    if (!Array.isArray(parsed)) return fallback;
+    return parsed.flatMap((item) => {
+      const value = typeof item === 'string' ? item.trim() : '';
+      return value ? [value] : [];
+    });
+  } catch {
+    return fallback;
+  }
+}
+
+function buildUrlHistory(defaultValue: string, values: Array<string | undefined>) {
+  const result: string[] = [];
+  const seen = new Set<string>();
+  const push = (value: string | undefined) => {
+    const next = typeof value === 'string' ? value.trim() : '';
+    if (!next || seen.has(next)) return;
+    seen.add(next);
+    result.push(next);
+  };
+  push(defaultValue);
+  for (const value of values) push(value);
+  return result;
+}
+
+function isValidHttpUrl(url: string) {
   try {
     const parsed = new URL(url);
-    return `${parsed.origin}${parsed.pathname}` === douyinCollectListUrl;
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
   } catch {
     return false;
   }
 }
 
-function parseCollectListBody(data: unknown): unknown | undefined {
+function parseCollectListBody(data: unknown): unknown {
   if (!data || typeof data !== 'object' || !('body' in data)) return data;
   const record = data as Record<string, unknown>;
-  if (!isDouyinCollectListUrl(record.url)) return undefined;
   return typeof record.body === 'string' ? parseJson(record.body) : record.body;
 }
 
@@ -119,6 +249,13 @@ function extractAwemeIds(body: unknown) {
     const awemeId = item && typeof item === 'object' ? String((item as { aweme_id?: unknown }).aweme_id || '').trim() : '';
     return awemeId ? [awemeId] : [];
   });
+}
+
+function appendEventRecord(records: Record<string, DouyinEvent[]>, taskId: string, event: DouyinEvent) {
+  return {
+    ...records,
+    [taskId]: [event, ...(records[taskId] || [])].slice(0, 10)
+  };
 }
 
 function App() {
@@ -137,11 +274,11 @@ function App() {
   const [bots, setBots] = useState<Bot[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [qrRegistration, setQrRegistration] = useState<QrBegin | undefined>();
-  const [douyinClickText, setDouyinClickText] = useState(() => localStorage.getItem('dogebot.douyinClickText') || '');
-  const [douyinCollectsId, setDouyinCollectsId] = useState(() => localStorage.getItem('dogebot.douyinCollectsId') || '');
+  const [douyinTasks, setDouyinTasks] = useState<DouyinTask[]>(() => readStoredTasks());
+  const [favoriteUrlHistory, setFavoriteUrlHistory] = useState<string[]>(() => readStoredStringList('dogebot.douyinFavoriteUrlHistory', [defaultFavoriteUrl]));
+  const [collectListUrlHistory, setCollectListUrlHistory] = useState<string[]>(() => readStoredStringList('dogebot.douyinCollectListUrlHistory', [defaultCollectListUrl]));
   const [douyinRunHidden, setDouyinRunHidden] = useState(() => localStorage.getItem('dogebot.douyinRunHidden') === '1');
   const [douyinShowOnClickFailure, setDouyinShowOnClickFailure] = useState(() => localStorage.getItem('dogebot.douyinShowOnClickFailure') === '1');
-  const [douyinSkipClick, setDouyinSkipClick] = useState(() => localStorage.getItem('dogebot.douyinSkipClick') === '1');
   const [douyinShortIntervalSeconds, setDouyinShortIntervalSeconds] = useState(() => readPositiveNumber('dogebot.douyinShortIntervalSeconds', 10));
   const [douyinLongIntervalSeconds, setDouyinLongIntervalSeconds] = useState(() => readPositiveNumber('dogebot.douyinLongIntervalSeconds', 60));
   const [douyinRetryLimit, setDouyinRetryLimit] = useState(() => readPositiveNumber('dogebot.douyinRetryLimit', 3));
@@ -155,12 +292,62 @@ function App() {
     sameIdsCount: 0,
     retryLimit: douyinRetryLimit,
     nextRunAt: '',
-    tickRunning: false
+    tickRunning: false,
+    taskCount: 0,
+    activeTaskId: '',
+    activeTaskLabel: ''
   });
-  const [douyinEvents, setDouyinEvents] = useState<DouyinEvent[]>([]);
+  const [douyinTaskStatusMap, setDouyinTaskStatusMap] = useState<Record<string, string>>({});
+  const [douyinTaskEvents, setDouyinTaskEvents] = useState<Record<string, DouyinEvent[]>>({});
 
   const loggedIn = Boolean(token);
   const connectionMap = useMemo(() => new Map(connections.map((connection) => [connection.botId, connection])), [connections]);
+  const activeDouyinTasks = useMemo(() => douyinTasks.filter((task) => task.enabled), [douyinTasks]);
+  const favoriteUrlOptions = useMemo(
+    () => buildUrlHistory(defaultFavoriteUrl, [...favoriteUrlHistory, ...douyinTasks.map((task) => task.favoriteUrl)]),
+    [favoriteUrlHistory, douyinTasks]
+  );
+  const collectListUrlOptions = useMemo(
+    () => buildUrlHistory(defaultCollectListUrl, [...collectListUrlHistory, ...douyinTasks.map((task) => task.collectListUrl)]),
+    [collectListUrlHistory, douyinTasks]
+  );
+
+  useEffect(() => {
+    localStorage.setItem('dogebot.douyinTasks', JSON.stringify(douyinTasks));
+  }, [douyinTasks]);
+
+  useEffect(() => {
+    setFavoriteUrlHistory((current) => buildUrlHistory(defaultFavoriteUrl, [...current, ...douyinTasks.map((task) => task.favoriteUrl)]));
+    setCollectListUrlHistory((current) => buildUrlHistory(defaultCollectListUrl, [...current, ...douyinTasks.map((task) => task.collectListUrl)]));
+  }, [douyinTasks]);
+
+  useEffect(() => {
+    localStorage.setItem('dogebot.douyinFavoriteUrlHistory', JSON.stringify(favoriteUrlOptions));
+  }, [favoriteUrlOptions]);
+
+  useEffect(() => {
+    localStorage.setItem('dogebot.douyinCollectListUrlHistory', JSON.stringify(collectListUrlOptions));
+  }, [collectListUrlOptions]);
+
+  useEffect(() => {
+    localStorage.setItem('dogebot.douyinRunHidden', douyinRunHidden ? '1' : '0');
+  }, [douyinRunHidden]);
+
+  useEffect(() => {
+    localStorage.setItem('dogebot.douyinShowOnClickFailure', douyinShowOnClickFailure ? '1' : '0');
+  }, [douyinShowOnClickFailure]);
+
+  useEffect(() => {
+    localStorage.setItem('dogebot.douyinShortIntervalSeconds', String(douyinShortIntervalSeconds));
+  }, [douyinShortIntervalSeconds]);
+
+  useEffect(() => {
+    localStorage.setItem('dogebot.douyinLongIntervalSeconds', String(douyinLongIntervalSeconds));
+  }, [douyinLongIntervalSeconds]);
+
+  useEffect(() => {
+    localStorage.setItem('dogebot.douyinRetryLimit', String(douyinRetryLimit));
+  }, [douyinRetryLimit]);
 
   const apiUrl = useCallback((path: string) => `${serverUrl.replace(/\/$/, '')}${path}`, [serverUrl]);
 
@@ -205,37 +392,76 @@ function App() {
     if (!window.douyin) return;
     console.log('[douyin renderer] bridge ready');
     window.douyin.getMonitorState().then(setDouyinMonitorState).catch((error) => console.error('[douyin renderer] get monitor state failed', error));
-    const addCollectListBody = (data: unknown) => {
-      const body = parseCollectListBody(data);
-      if (body === undefined) return;
-      const awemeIds = extractAwemeIds(body);
-      window.douyin?.reportAwemeIds(awemeIds).catch((error) => console.error('[douyin renderer] report aweme ids failed', error));
-      setDouyinEvents((items) => [{ id: `${Date.now()}-collects-video-list`, title: douyinCollectListUrl, data: body }, ...items].slice(0, 10));
-      if (awemeIds.length === 0) return;
-      const clickText = douyinClickText.trim();
-      if (!clickText) return;
+
+    const addTaskEvent = (taskId: string, title: string, data: unknown) => {
+      const event: DouyinEvent = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        title,
+        data
+      };
+      setDouyinTaskEvents((records) => appendEventRecord(records, taskId, event));
+    };
+
+    const offClick = window.douyin.onClickResult((data) => {
+      const result = data as DouyinClickResult;
+      const taskId = typeof result.taskId === 'string' ? result.taskId : '';
+      if (!taskId) return;
+      const taskText = result.taskClickText || '未命名任务';
+      const messageText = result.skipped
+        ? '已刷新页面并跳过点击，继续等待接口返回'
+        : result.clicked
+          ? `已点击：${result.text || taskText}`
+          : `点击失败：${result.reason || '未知原因'}`;
+      setDouyinTaskStatusMap((records) => ({ ...records, [taskId]: messageText }));
+      setDouyinStatus(`${taskText}：${messageText}`);
+    });
+
+    const offList = window.douyin.onCollectsVideoList((data) => {
+      const payload = data as DouyinCollectResult;
+      const taskId = typeof payload.taskId === 'string' ? payload.taskId : '';
+      if (!taskId) return;
+      const body = parseCollectListBody(payload);
+      const awemeIds = Array.isArray(payload.awemeIds)
+        ? payload.awemeIds.map((id) => String(id || '').trim()).filter(Boolean)
+        : extractAwemeIds(body);
+      const taskText = payload.taskClickText || '未命名任务';
+      addTaskEvent(taskId, `${taskText} · ${payload.url || payload.taskCollectListUrl || 'collects/video/list'}`, body ?? payload);
+      if (payload.error) {
+        const errorText = `接口捕获失败：${payload.error}`;
+        setDouyinTaskStatusMap((records) => ({ ...records, [taskId]: errorText }));
+        setDouyinStatus(`${taskText}：${errorText}`);
+        return;
+      }
+      if (awemeIds.length === 0) {
+        const emptyText = '接口已返回，但未提取到 aweme_id';
+        setDouyinTaskStatusMap((records) => ({ ...records, [taskId]: emptyText }));
+        setDouyinStatus(`${taskText}：${emptyText}`);
+        return;
+      }
       api<{ inserted: number; total: number }>('/api/douyin/aweme-records', {
         method: 'POST',
-        body: JSON.stringify({ clickText, awemeIds })
+        body: JSON.stringify({ clickText: taskText, awemeIds })
       })
-        .then((result) => setDouyinStatus(`已同步 ${awemeIds.length} 个 aweme_id，新增 ${result.inserted} 个，当前累计 ${result.total} 个`))
+        .then((result) => {
+          const successText = `已同步 ${awemeIds.length} 个 aweme_id，新增 ${result.inserted} 个，当前累计 ${result.total} 个`;
+          setDouyinTaskStatusMap((records) => ({ ...records, [taskId]: successText }));
+          setDouyinStatus(`${taskText}：${successText}`);
+        })
         .catch((error) => {
           console.error('[douyin renderer] upload aweme ids failed', error);
-          setDouyinStatus(error instanceof Error ? `同步 aweme_id 失败：${error.message}` : '同步 aweme_id 失败');
+          const errorText = error instanceof Error ? `同步 aweme_id 失败：${error.message}` : '同步 aweme_id 失败';
+          setDouyinTaskStatusMap((records) => ({ ...records, [taskId]: errorText }));
+          setDouyinStatus(`${taskText}：${errorText}`);
         });
-    };
-    const offClick = window.douyin.onClickResult((data) => {
-      const result = data as { clicked?: boolean; reason?: string; text?: string; skipped?: boolean };
-      setDouyinStatus(result.skipped ? '已刷新页面并跳过点击，继续监听 API' : result.clicked ? `已点击：${result.text || douyinClickText}` : `点击失败：${result.reason || '未知原因'}`);
     });
-    const offList = window.douyin.onCollectsVideoList(addCollectListBody);
+
     const offState = window.douyin.onMonitorState(setDouyinMonitorState);
     return () => {
       offClick();
       offList();
       offState();
     };
-  }, [api, douyinClickText]);
+  }, [api]);
 
   const requireDouyinBridge = () => {
     if (window.douyin) return window.douyin;
@@ -350,6 +576,28 @@ function App() {
     };
   }, [api, loadBots, qrRegistration]);
 
+  const updateDouyinTask = (taskId: string, patch: Partial<DouyinTask>) => {
+    setDouyinTasks((tasks) => tasks.map((task) => (task.id === taskId ? { ...task, ...patch } : task)));
+  };
+
+  const addDouyinTask = () => {
+    setDouyinTasks((tasks) => [...tasks, createDefaultTask()]);
+  };
+
+  const removeDouyinTask = (taskId: string) => {
+    setDouyinTasks((tasks) => tasks.filter((task) => task.id !== taskId));
+    setDouyinTaskStatusMap((records) => {
+      const next = { ...records };
+      delete next[taskId];
+      return next;
+    });
+    setDouyinTaskEvents((records) => {
+      const next = { ...records };
+      delete next[taskId];
+      return next;
+    });
+  };
+
   const openDouyinLogin = async () => {
     try {
       console.log('[douyin renderer] click login');
@@ -363,37 +611,48 @@ function App() {
 
   const startDouyinMonitor = async () => {
     try {
-      const text = douyinClickText.trim();
-      if (!text) {
-        setDouyinStatus('请先填写模拟点击字样');
+      const tasks = activeDouyinTasks.map((task, index) => {
+        const normalized: DouyinMonitorTaskPayload = {
+          id: task.id,
+          favoriteUrl: task.favoriteUrl.trim(),
+          collectListUrl: task.collectListUrl.trim(),
+          requestUrlFilter: task.requestUrlFilter.trim(),
+          clickText: task.clickText.trim(),
+          skipClick: task.skipClick
+        };
+        if (!normalized.favoriteUrl) throw new Error(`任务 ${index + 1} 缺少 favoriteUrl`);
+        if (!normalized.collectListUrl) throw new Error(`任务 ${index + 1} 缺少 collectListUrl`);
+        if (!normalized.requestUrlFilter) throw new Error(`任务 ${index + 1} 缺少 URL 筛选字符串`);
+        if (!normalized.clickText) throw new Error(`任务 ${index + 1} 缺少 clickText`);
+        if (!isValidHttpUrl(normalized.favoriteUrl)) throw new Error(`任务 ${index + 1} 的 favoriteUrl 不是有效 URL`);
+        if (!isValidHttpUrl(normalized.collectListUrl)) throw new Error(`任务 ${index + 1} 的 collectListUrl 不是有效 URL`);
+        return normalized;
+      });
+      if (tasks.length === 0) {
+        setDouyinStatus('请至少启用一个任务');
         return;
       }
-      const collectsId = douyinCollectsId.trim();
-      if (!collectsId) {
-        setDouyinStatus('请先填写 collects_id');
-        return;
-      }
-      localStorage.setItem('dogebot.douyinClickText', text);
-      localStorage.setItem('dogebot.douyinCollectsId', collectsId);
-      localStorage.setItem('dogebot.douyinRunHidden', douyinRunHidden ? '1' : '0');
-      localStorage.setItem('dogebot.douyinShowOnClickFailure', douyinShowOnClickFailure ? '1' : '0');
-      localStorage.setItem('dogebot.douyinSkipClick', douyinSkipClick ? '1' : '0');
-      localStorage.setItem('dogebot.douyinShortIntervalSeconds', String(douyinShortIntervalSeconds));
-      localStorage.setItem('dogebot.douyinLongIntervalSeconds', String(douyinLongIntervalSeconds));
-      localStorage.setItem('dogebot.douyinRetryLimit', String(douyinRetryLimit));
+      setDouyinTaskStatusMap((records) => {
+        const next = { ...records };
+        for (const task of tasks) next[task.id] = '等待执行';
+        return next;
+      });
       console.log('[douyin renderer] start monitor', {
-        text,
+        taskCount: tasks.length,
         hidden: douyinRunHidden,
         showOnClickFailure: douyinShowOnClickFailure,
-        collectsId,
-        skipClick: douyinSkipClick,
         shortIntervalSeconds: douyinShortIntervalSeconds,
         longIntervalSeconds: douyinLongIntervalSeconds,
         retryLimit: douyinRetryLimit
       });
-      const intervalText = `短间隔 ${douyinShortIntervalSeconds}s，长间隔 ${douyinLongIntervalSeconds}s，retry ${douyinRetryLimit} 次`;
-      setDouyinStatus(douyinSkipClick ? `监听中：按 ${intervalText} 刷新收藏页，不执行点击，只监听 API` : douyinRunHidden ? `后台监听中：按 ${intervalText} 跳转收藏页并模拟点击` : `前台监听中：按 ${intervalText} 跳转收藏页并模拟点击`);
-      await requireDouyinBridge().startMonitor(text, douyinRunHidden, douyinShowOnClickFailure, collectsId, douyinSkipClick, douyinShortIntervalSeconds, douyinLongIntervalSeconds, douyinRetryLimit);
+      setDouyinStatus(`监听中：共 ${tasks.length} 个活跃任务，按顺序执行`);
+      await requireDouyinBridge().startMonitor(tasks, {
+        hidden: douyinRunHidden,
+        showOnClickFailure: douyinShowOnClickFailure,
+        shortIntervalSeconds: douyinShortIntervalSeconds,
+        longIntervalSeconds: douyinLongIntervalSeconds,
+        retryLimit: douyinRetryLimit
+      });
     } catch (error) {
       setDouyinStatus(error instanceof Error ? error.message : '开始监听失败');
     }
@@ -508,13 +767,13 @@ function App() {
                   >
                     <List.Item.Meta
                       title={bot.name}
-                      description={
+                      description={(
                         <Space direction="vertical" size={2}>
                           <Text type="secondary">{bot.botName || '未探测'} · {bot.domain}</Text>
                           <Text>长连接: {status}{error}</Text>
                           <Text>Webhook: <code>{apiUrl(bot.webhookPath)}</code></Text>
                         </Space>
-                      }
+                      )}
                     />
                   </List.Item>
                 );
@@ -523,62 +782,24 @@ function App() {
           </Card>
 
           <Card title="抖音收藏监听">
-            <Paragraph type="secondary">登录态保存在本机 Electron 持久会话中。开始监听后，按短/长间隔打开收藏页并点击页面上包含指定字样的组件，然后捕获 <code>collects/video/list</code> 接口返回值。</Paragraph>
+            <Paragraph type="secondary">
+              登录态保存在本机 Electron 持久会话中。共享配置包括刷新间隔、retry、隐藏窗口和点击失败后是否弹到前台；每个活跃任务会按顺序执行，并各自维护接口返回日志。
+            </Paragraph>
             <Form layout="vertical">
-              <Form.Item label="模拟点击字样">
-                <Input value={douyinClickText} placeholder="例如：默认收藏夹" onChange={setDouyinClickText} />
-              </Form.Item>
-              <Form.Item label="collects_id">
-                <Input
-                  value={douyinCollectsId}
-                  placeholder="只收集 URL 参数匹配该 collects_id 的返回"
-                  onChange={(value) => {
-                    setDouyinCollectsId(value);
-                    localStorage.setItem('dogebot.douyinCollectsId', value.trim());
-                  }}
-                />
-              </Form.Item>
               <Row gutter={12}>
                 <Col span={8}>
                   <Form.Item label="短间隔（秒）">
-                    <InputNumber
-                      min={1}
-                      precision={0}
-                      value={douyinShortIntervalSeconds}
-                      onChange={(value) => {
-                        const next = Number(value) > 0 ? Number(value) : 10;
-                        setDouyinShortIntervalSeconds(next);
-                        localStorage.setItem('dogebot.douyinShortIntervalSeconds', String(next));
-                      }}
-                    />
+                    <InputNumber min={1} precision={0} value={douyinShortIntervalSeconds} onChange={(value) => setDouyinShortIntervalSeconds(Number(value) > 0 ? Number(value) : 10)} />
                   </Form.Item>
                 </Col>
                 <Col span={8}>
                   <Form.Item label="长间隔（秒）">
-                    <InputNumber
-                      min={1}
-                      precision={0}
-                      value={douyinLongIntervalSeconds}
-                      onChange={(value) => {
-                        const next = Number(value) > 0 ? Number(value) : 60;
-                        setDouyinLongIntervalSeconds(next);
-                        localStorage.setItem('dogebot.douyinLongIntervalSeconds', String(next));
-                      }}
-                    />
+                    <InputNumber min={1} precision={0} value={douyinLongIntervalSeconds} onChange={(value) => setDouyinLongIntervalSeconds(Number(value) > 0 ? Number(value) : 60)} />
                   </Form.Item>
                 </Col>
                 <Col span={8}>
                   <Form.Item label="retry 次数">
-                    <InputNumber
-                      min={1}
-                      precision={0}
-                      value={douyinRetryLimit}
-                      onChange={(value) => {
-                        const next = Number(value) > 0 ? Number(value) : 3;
-                        setDouyinRetryLimit(next);
-                        localStorage.setItem('dogebot.douyinRetryLimit', String(next));
-                      }}
-                    />
+                    <InputNumber min={1} precision={0} value={douyinRetryLimit} onChange={(value) => setDouyinRetryLimit(Number(value) > 0 ? Number(value) : 3)} />
                   </Form.Item>
                 </Col>
               </Row>
@@ -589,7 +810,6 @@ function App() {
                       checked={douyinRunHidden}
                       onChange={(checked) => {
                         setDouyinRunHidden(checked);
-                        localStorage.setItem('dogebot.douyinRunHidden', checked ? '1' : '0');
                         window.douyin?.setHidden(checked).catch((error) => {
                           console.error('[douyin renderer] set hidden failed', error);
                           setDouyinStatus(error instanceof Error ? error.message : '切换 Douyin 窗口显示状态失败');
@@ -599,29 +819,14 @@ function App() {
                     <Text type="secondary">{douyinRunHidden ? '隐藏 Douyin 窗口后台执行' : '显示 Douyin 窗口前台执行'}</Text>
                   </Space>
                   <Space>
-                    <Switch
-                      checked={douyinShowOnClickFailure}
-                      onChange={(checked) => {
-                        setDouyinShowOnClickFailure(checked);
-                        localStorage.setItem('dogebot.douyinShowOnClickFailure', checked ? '1' : '0');
-                      }}
-                    />
+                    <Switch checked={douyinShowOnClickFailure} onChange={setDouyinShowOnClickFailure} />
                     <Text type="secondary">点击失败立即弹到前台</Text>
-                  </Space>
-                  <Space>
-                    <Switch
-                      checked={douyinSkipClick}
-                      onChange={(checked) => {
-                        setDouyinSkipClick(checked);
-                        localStorage.setItem('dogebot.douyinSkipClick', checked ? '1' : '0');
-                      }}
-                    />
-                    <Text type="secondary">不点击，仅刷新页面并监听 API</Text>
                   </Space>
                 </Space>
               </Form.Item>
               <Space>
                 <Button type="primary" onClick={openDouyinLogin}>登录 douyin.com</Button>
+                <Button onClick={addDouyinTask}>新增任务</Button>
                 <Button onClick={startDouyinMonitor}>开始监听</Button>
                 <Button onClick={refreshDouyinNow} disabled={!douyinMonitorState.running || douyinMonitorState.tickRunning}>立即刷新</Button>
                 <Button onClick={stopDouyinMonitor}>停止监听</Button>
@@ -636,31 +841,121 @@ function App() {
                   <Text>
                     当前刷新间隔：{douyinMonitorState.currentIntervalSeconds}s（{douyinMonitorState.mode === 'short' ? '短间隔' : '长间隔'}）；
                     retry：{douyinMonitorState.sameIdsCount}/{douyinMonitorState.retryLimit}；
+                    活跃任务：{douyinMonitorState.taskCount}；
                     状态：{douyinMonitorState.tickRunning ? '刷新中' : douyinMonitorState.running ? '等待下次刷新' : '未运行'}
+                    {douyinMonitorState.activeTaskLabel ? `；当前任务：${douyinMonitorState.activeTaskLabel}` : ''}
                     {douyinMonitorState.nextRunAt ? `；下次刷新：${new Date(douyinMonitorState.nextRunAt).toLocaleString()}` : ''}
                   </Text>
                 </Space>
               )}
             />
-            <Title heading={5}>接口返回</Title>
-            {douyinEvents.length === 0 ? (
-              <div className="json-empty">暂无</div>
-            ) : (
-              <Space direction="vertical" className="json-list">
-                {douyinEvents.map((event) => (
-                  <Card key={event.id} className="json-card" title={`${new Date(Number(event.id.split('-')[0])).toLocaleString()} · ${event.title}`}>
-                    <Tabs defaultActiveTab="awemeIds">
-                      <Tabs.TabPane key="awemeIds" title="aweme_id">
-                        <JsonView data={extractAwemeIds(event.data)} shouldExpandNode={allExpanded} style={darkStyles} />
-                      </Tabs.TabPane>
-                      <Tabs.TabPane key="body" title="Body">
-                        <JsonView data={event.data} shouldExpandNode={collapseAllNested} style={darkStyles} />
-                      </Tabs.TabPane>
-                    </Tabs>
+
+            <Space direction="vertical" className="douyin-task-list">
+              {douyinTasks.map((task, index) => {
+                const taskEvents = douyinTaskEvents[task.id] || [];
+                return (
+                  <Card
+                    key={task.id}
+                    className="douyin-task-card"
+                    title={`任务 ${index + 1}`}
+                    extra={(
+                      <Space>
+                        <Switch checked={task.enabled} onChange={(enabled) => updateDouyinTask(task.id, { enabled })} />
+                        <Text type="secondary">{task.enabled ? '活跃' : '停用'}</Text>
+                        <Button size="mini" status="danger" onClick={() => removeDouyinTask(task.id)}>删除</Button>
+                      </Space>
+                    )}
+                  >
+                    <Form layout="vertical">
+                      <Row gutter={12}>
+                        <Col span={12}>
+                          <Form.Item label="favoriteUrl">
+                            <Select
+                              showSearch
+                              allowCreate
+                              value={task.favoriteUrl}
+                              placeholder="请输入或选择历史 favoriteUrl"
+                              onChange={(value) => updateDouyinTask(task.id, { favoriteUrl: String(value || '') })}
+                            >
+                              {favoriteUrlOptions.map((option) => (
+                                <Select.Option key={option} value={option}>
+                                  {option}
+                                </Select.Option>
+                              ))}
+                            </Select>
+                          </Form.Item>
+                        </Col>
+                        <Col span={12}>
+                          <Form.Item label="collectListUrl">
+                            <Select
+                              showSearch
+                              allowCreate
+                              value={task.collectListUrl}
+                              placeholder="请输入或选择历史 collectListUrl"
+                              onChange={(value) => updateDouyinTask(task.id, { collectListUrl: String(value || '') })}
+                            >
+                              {collectListUrlOptions.map((option) => (
+                                <Select.Option key={option} value={option}>
+                                  {option}
+                                </Select.Option>
+                              ))}
+                            </Select>
+                          </Form.Item>
+                        </Col>
+                      </Row>
+                      <Row gutter={12}>
+                        <Col span={12}>
+                          <Form.Item label="请求 URL 筛选字符串">
+                            <Select
+                              value={task.requestUrlFilter}
+                              placeholder="请选择请求 URL 筛选字符串"
+                              onChange={(value) => updateDouyinTask(task.id, { requestUrlFilter: String(value || defaultRequestUrlFilter) })}
+                            >
+                              <Select.Option value={defaultRequestUrlFilter}>
+                                {defaultRequestUrlFilter}
+                              </Select.Option>
+                            </Select>
+                          </Form.Item>
+                        </Col>
+                        <Col span={12}>
+                          <Form.Item label="clickText">
+                            <Input value={task.clickText} onChange={(value) => updateDouyinTask(task.id, { clickText: value })} />
+                          </Form.Item>
+                        </Col>
+                      </Row>
+                      <Form.Item label="执行动作">
+                        <Space>
+                          <Switch checked={task.skipClick} onChange={(skipClick) => updateDouyinTask(task.id, { skipClick })} />
+                          <Text type="secondary">{task.skipClick ? '不点击，仅刷新页面并监听 API' : '刷新页面后点击 clickText'}</Text>
+                        </Space>
+                      </Form.Item>
+                    </Form>
+                    <Paragraph className="douyin-task-status" type="secondary">
+                      当前状态：{douyinTaskStatusMap[task.id] || '未开始'}
+                    </Paragraph>
+                    <Title heading={6}>接口返回</Title>
+                    {taskEvents.length === 0 ? (
+                      <div className="json-empty">暂无</div>
+                    ) : (
+                      <Space direction="vertical" className="json-list">
+                        {taskEvents.map((event) => (
+                          <Card key={event.id} className="json-card" title={`${new Date(Number(event.id.split('-')[0])).toLocaleString()} · ${event.title}`}>
+                            <Tabs defaultActiveTab="awemeIds">
+                              <Tabs.TabPane key="awemeIds" title="aweme_id">
+                                <JsonView data={extractAwemeIds(event.data)} shouldExpandNode={allExpanded} style={darkStyles} />
+                              </Tabs.TabPane>
+                              <Tabs.TabPane key="body" title="Body">
+                                <JsonView data={event.data} shouldExpandNode={collapseAllNested} style={darkStyles} />
+                              </Tabs.TabPane>
+                            </Tabs>
+                          </Card>
+                        ))}
+                      </Space>
+                    )}
                   </Card>
-                ))}
-              </Space>
-            )}
+                );
+              })}
+            </Space>
           </Card>
         </>
       )}

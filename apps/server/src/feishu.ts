@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import type { AuthenticatedRequest } from './auth.js';
 import { db } from './db.js';
-import { randomDouyinAwemeIds, softDeleteDouyinAwemeRecords } from './douyin.js';
+import { randomDouyinAwemeIds, setDouyinAwemeNotifier, softDeleteDouyinAwemeRecords } from './douyin.js';
 
 const FEISHU_BASE: Record<string, string> = {
   feishu: 'https://open.feishu.cn',
@@ -55,10 +55,14 @@ type DouyinCommand = {
   isDouyin: boolean;
   clickText: string;
   count: number;
+  hasCountFlag: boolean;
   shouldDelete: boolean;
+  shouldSubscribe: boolean;
+  shouldUnsubscribe: boolean;
   deleteAwemeId: string;
   hasInvalidCount: boolean;
   hasInvalidDelete: boolean;
+  hasConflictingAction: boolean;
 };
 
 type SetDefaultCommand = {
@@ -88,6 +92,13 @@ type ChatCronTask = {
   cron_expr: string;
   command_text: string;
   next_run_at: string;
+};
+
+type DouyinSubscriptionRecord = {
+  id: number;
+  bot_id: number;
+  chat_id: string;
+  click_text: string;
 };
 
 type CronField = {
@@ -593,14 +604,21 @@ function parseDouyinCommand(text: string): DouyinCommand {
       isDouyin: false,
       clickText: '',
       count: 1,
+      hasCountFlag: false,
       shouldDelete: false,
+      shouldSubscribe: false,
+      shouldUnsubscribe: false,
       deleteAwemeId: '',
       hasInvalidCount: false,
-      hasInvalidDelete: false
+      hasInvalidDelete: false,
+      hasConflictingAction: false
     };
   }
   const argsText = text.slice(commandIndex + '/douyin'.length).trim();
   const hasDeleteFlag = /(?:^|\s)--delete(?:\s|$)/.test(argsText);
+  const hasSubscribeFlag = /(?:^|\s)--subscribe(?:\s|$)/.test(argsText);
+  const hasUnsubscribeFlag = /(?:^|\s)--unsubscribe(?:\s|$)/.test(argsText);
+  const actionCount = [hasDeleteFlag, hasSubscribeFlag, hasUnsubscribeFlag].filter(Boolean).length;
   const deleteMatch = argsText.match(/(?:^|\s)--delete\s+(\S+)/);
   const deleteAwemeId = deleteMatch?.[1] || '';
   const hasInvalidDelete = hasDeleteFlag && !/^\d{6,}$/.test(deleteAwemeId);
@@ -608,18 +626,24 @@ function parseDouyinCommand(text: string): DouyinCommand {
   const countMatch = argsText.match(/(?:^|\s)--count\s+(\S+)/);
   const clickText = argsText
     .replace(/(?:^|\s)--delete(?:\s+\S+)?/, ' ')
+    .replace(/(?:^|\s)--subscribe(?:\s|$)/, ' ')
+    .replace(/(?:^|\s)--unsubscribe(?:\s|$)/, ' ')
     .replace(/(?:^|\s)--count(?:\s+\S+)?/, ' ')
     .trim()
     .replace(/\s+/g, ' ');
   if (!hasCountFlag) {
     return {
       isDouyin: true,
-      clickText: hasDeleteFlag ? clickText : argsText,
+      clickText: actionCount > 0 ? clickText : argsText,
       count: 1,
+      hasCountFlag,
       shouldDelete: hasDeleteFlag,
+      shouldSubscribe: hasSubscribeFlag,
+      shouldUnsubscribe: hasUnsubscribeFlag,
       deleteAwemeId,
       hasInvalidCount: false,
-      hasInvalidDelete
+      hasInvalidDelete,
+      hasConflictingAction: actionCount > 1
     };
   }
   if (!countMatch) {
@@ -627,10 +651,14 @@ function parseDouyinCommand(text: string): DouyinCommand {
       isDouyin: true,
       clickText,
       count: 1,
+      hasCountFlag,
       shouldDelete: hasDeleteFlag,
+      shouldSubscribe: hasSubscribeFlag,
+      shouldUnsubscribe: hasUnsubscribeFlag,
       deleteAwemeId,
       hasInvalidCount: true,
-      hasInvalidDelete
+      hasInvalidDelete,
+      hasConflictingAction: actionCount > 1
     };
   }
   const count = Number(countMatch[1]);
@@ -638,10 +666,14 @@ function parseDouyinCommand(text: string): DouyinCommand {
     isDouyin: true,
     clickText,
     count: Number.isInteger(count) && count > 0 ? count : 1,
+    hasCountFlag,
     shouldDelete: hasDeleteFlag,
+    shouldSubscribe: hasSubscribeFlag,
+    shouldUnsubscribe: hasUnsubscribeFlag,
     deleteAwemeId,
     hasInvalidCount: !Number.isInteger(count) || count <= 0,
-    hasInvalidDelete
+    hasInvalidDelete,
+    hasConflictingAction: actionCount > 1
   };
 }
 
@@ -803,6 +835,34 @@ function addCronTask(botId: number, chatId: string, cronExpr: string, commandTex
   return { id: Number(result.lastInsertRowid), nextRunAt };
 }
 
+function addDouyinSubscription(botId: number, chatId: string, clickText: string) {
+  const result = db.prepare(`
+    INSERT INTO feishu_douyin_subscriptions (bot_id, chat_id, click_text)
+    VALUES (?, ?, ?)
+    ON CONFLICT(bot_id, chat_id, click_text) DO UPDATE SET
+      updated_at = CURRENT_TIMESTAMP
+  `).run(botId, chatId, clickText);
+  return { created: result.changes > 0 };
+}
+
+function removeDouyinSubscription(botId: number, chatId: string, clickText: string) {
+  const result = db.prepare(`
+    DELETE FROM feishu_douyin_subscriptions
+    WHERE bot_id = ? AND chat_id = ? AND click_text = ?
+  `).run(botId, chatId, clickText);
+  return { deleted: result.changes };
+}
+
+function getDouyinSubscriptionsByUserAndClickText(userId: number, clickText: string) {
+  return db.prepare(`
+    SELECT s.id, s.bot_id, s.chat_id, s.click_text
+    FROM feishu_douyin_subscriptions s
+    INNER JOIN feishu_bots b ON b.id = s.bot_id
+    WHERE b.user_id = ? AND b.enabled = 1 AND s.click_text = ?
+    ORDER BY s.id ASC
+  `).all(userId, clickText) as DouyinSubscriptionRecord[];
+}
+
 function getDefaultCommandRecord(botId: number): DefaultCommandRecord | undefined {
   const row = db.prepare('SELECT default_command, admin_user_id FROM feishu_bot_default_commands WHERE bot_id = ?').get(botId) as
     | { default_command: string; admin_user_id: string | null }
@@ -834,6 +894,40 @@ function setDefaultCommand(botId: number, defaultCommand: string, adminUserId: s
   `).run(botId, defaultCommand, adminUserId);
   return { ok: true, assignedAdmin };
 }
+
+async function notifyDouyinSubscriptions(payload: { userId: number; clickText: string; awemeIds: string[] }) {
+  if (!payload.clickText || payload.awemeIds.length === 0) return;
+  const subscriptions = getDouyinSubscriptionsByUserAndClickText(payload.userId, payload.clickText);
+  if (subscriptions.length === 0) return;
+
+  for (const subscription of subscriptions) {
+    const bot = getBot(subscription.bot_id);
+    if (!bot || !bot.enabled) continue;
+
+    for (const [index, awemeId] of payload.awemeIds.entries()) {
+      try {
+        await sendTextToChat(bot, subscription.chat_id, `https://www.douyin.com/video/${awemeId}`);
+      } catch (error) {
+        console.error('[feishu] douyin subscription send failed', {
+          botId: bot.id,
+          userId: payload.userId,
+          chatId: subscription.chat_id,
+          clickText: payload.clickText,
+          awemeId,
+          currentIndex: index + 1,
+          totalCount: payload.awemeIds.length,
+          error: error instanceof Error ? error.message : String(error)
+        });
+        break;
+      }
+      if (index < payload.awemeIds.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    }
+  }
+}
+
+setDouyinAwemeNotifier(notifyDouyinSubscriptions);
 
 function getDefaultCommand(botId: number) {
   return getDefaultCommandRecord(botId)?.defaultCommand || '';
@@ -1050,6 +1144,7 @@ async function replyUsersCard(bot: FeishuBot, messageId: string, records: AtReco
 
 async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string, text: string, options: { allowSetDefault: boolean }): Promise<boolean> {
   const message = event?.message;
+  const chatId = String(message?.chat_id || '').trim();
   if (options.allowSetDefault) {
     const addCron = parseAddCronCommand(text);
     if (addCron.isAddCron) {
@@ -1057,7 +1152,6 @@ async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string
         await replyText(bot, messageId, '用法：/add-cron "*/5 * * * *" "/douyin 123 [--count n]"');
         return true;
       }
-      const chatId = String(message?.chat_id || '').trim();
       if (!chatId) {
         await replyText(bot, messageId, '当前消息缺少 chat_id，无法创建会话定时任务');
         return true;
@@ -1103,6 +1197,10 @@ async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string
   }
   const douyinCommand = parseDouyinCommand(text);
   if (douyinCommand.isDouyin) {
+    if (douyinCommand.hasConflictingAction) {
+      await replyText(bot, messageId, '用法冲突：/douyin 同时只能使用一种动作参数（--delete、--subscribe、--unsubscribe）');
+      return true;
+    }
     if (douyinCommand.shouldDelete) {
       const sender = senderIdentity(event);
       if (!sender.id || sender.id === 'unknown') {
@@ -1136,6 +1234,48 @@ async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string
         return true;
       }
       await replyText(bot, messageId, `已删除 aweme_id=${douyinCommand.deleteAwemeId} 的抖音收藏记录，共 ${result.deleted} 条`);
+      return true;
+    }
+    if (douyinCommand.shouldSubscribe) {
+      if (!douyinCommand.clickText) {
+        await replyText(bot, messageId, '用法：/douyin --subscribe {模拟点击文案}');
+        return true;
+      }
+      if (douyinCommand.hasCountFlag) {
+        await replyText(bot, messageId, '订阅模式不支持 --count，请使用 /douyin --subscribe {模拟点击文案}');
+        return true;
+      }
+      if (!chatId) {
+        await replyText(bot, messageId, '当前消息缺少 chat_id，无法订阅抖音更新');
+        return true;
+      }
+      if (bot.user_id == null) {
+        await replyText(bot, messageId, '当前机器人未绑定用户，无法订阅抖音更新');
+        return true;
+      }
+      addDouyinSubscription(bot.id, chatId, douyinCommand.clickText);
+      await replyText(bot, messageId, `已订阅当前会话的“${douyinCommand.clickText}”更新；后续数据库新增记录时会自动发送`);
+      return true;
+    }
+    if (douyinCommand.shouldUnsubscribe) {
+      if (!douyinCommand.clickText) {
+        await replyText(bot, messageId, '用法：/douyin --unsubscribe {模拟点击文案}');
+        return true;
+      }
+      if (douyinCommand.hasCountFlag) {
+        await replyText(bot, messageId, '取消订阅模式不支持 --count，请使用 /douyin --unsubscribe {模拟点击文案}');
+        return true;
+      }
+      if (!chatId) {
+        await replyText(bot, messageId, '当前消息缺少 chat_id，无法取消订阅抖音更新');
+        return true;
+      }
+      const result = removeDouyinSubscription(bot.id, chatId, douyinCommand.clickText);
+      if (result.deleted === 0) {
+        await replyText(bot, messageId, `当前会话未订阅“${douyinCommand.clickText}”`);
+        return true;
+      }
+      await replyText(bot, messageId, `已取消当前会话对“${douyinCommand.clickText}”的订阅`);
       return true;
     }
     if (!douyinCommand.clickText) {
@@ -1271,6 +1411,7 @@ export function deleteOwnedFeishuBot(botId: number, userId: number) {
   if (!getOwnedBot(botId, userId)) return false;
   db.prepare('DELETE FROM feishu_bot_default_commands WHERE bot_id = ?').run(botId);
   db.prepare('DELETE FROM feishu_chat_cron_tasks WHERE bot_id = ?').run(botId);
+  db.prepare('DELETE FROM feishu_douyin_subscriptions WHERE bot_id = ?').run(botId);
   db.prepare('DELETE FROM feishu_bots WHERE id = ? AND user_id = ?').run(botId, userId);
   tokenCache.delete(botId);
   return true;

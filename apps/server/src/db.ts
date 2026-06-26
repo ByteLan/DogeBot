@@ -91,6 +91,16 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE TABLE IF NOT EXISTS feishu_douyin_subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bot_id INTEGER NOT NULL,
+    chat_id TEXT NOT NULL,
+    click_text TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(bot_id, chat_id, click_text)
+  );
 `);
 
 const defaultCommandColumns = db.prepare('PRAGMA table_info(feishu_bot_default_commands)').all() as Array<{ name: string }>;
@@ -114,4 +124,5 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_douyin_aweme_records_lookup ON douyin_aweme_records(user_id, click_text);
   CREATE INDEX IF NOT EXISTS idx_douyin_aweme_records_user_aweme_status ON douyin_aweme_records(user_id, aweme_id, status);
   CREATE INDEX IF NOT EXISTS idx_feishu_chat_cron_tasks_due ON feishu_chat_cron_tasks(enabled, next_run_at);
+  CREATE INDEX IF NOT EXISTS idx_feishu_douyin_subscriptions_lookup ON feishu_douyin_subscriptions(bot_id, chat_id, click_text);
 `);

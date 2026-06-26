@@ -33,6 +33,19 @@ code {
   margin-top: 16px;
 }
 
+.douyin-task-list {
+  display: flex;
+  width: 100%;
+}
+
+.douyin-task-card {
+  width: 100%;
+}
+
+.douyin-task-status {
+  margin-bottom: 16px;
+}
+
 .json-empty,
 .json-card {
   background: #111827;

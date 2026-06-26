@@ -6,7 +6,16 @@ type DouyinAwemeRecord = {
   aweme_id: string;
 };
 
+type DouyinAwemeSaveResult = {
+  inserted: number;
+  total: number;
+  insertedAwemeIds: string[];
+};
+
+type DouyinAwemeNotifier = (payload: { userId: number; clickText: string; awemeIds: string[] }) => Promise<void>;
+
 const ACTIVE_DOUYIN_RECORD_FILTER = "COALESCE(status, '') <> 'delete'";
+let douyinAwemeNotifier: DouyinAwemeNotifier | undefined;
 
 function normalizeClickText(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
@@ -22,23 +31,34 @@ function normalizeAwemeIds(value: unknown) {
   return [...seen];
 }
 
-export function saveDouyinAwemeRecords(userId: number, clickText: string, awemeIds: string[]) {
-  if (!clickText || awemeIds.length === 0) return { inserted: 0, total: 0 };
+export function saveDouyinAwemeRecords(userId: number, clickText: string, awemeIds: string[]): DouyinAwemeSaveResult {
+  if (!clickText || awemeIds.length === 0) return { inserted: 0, total: 0, insertedAwemeIds: [] };
   const stmt = db.prepare(`
     INSERT OR IGNORE INTO douyin_aweme_records (user_id, click_text, aweme_id)
     VALUES (?, ?, ?)
   `);
-  const tx = db.transaction((ids: string[]) => ids.reduce((inserted, awemeId) => inserted + stmt.run(userId, clickText, awemeId).changes, 0));
-  const inserted = tx(awemeIds) as number;
+  const tx = db.transaction((ids: string[]) => {
+    const insertedAwemeIds: string[] = [];
+    for (const awemeId of ids) {
+      const result = stmt.run(userId, clickText, awemeId);
+      if (result.changes > 0) insertedAwemeIds.push(awemeId);
+    }
+    return insertedAwemeIds;
+  });
+  const insertedAwemeIds = tx(awemeIds) as string[];
   const total = (db.prepare(`
     SELECT COUNT(*) AS value
     FROM douyin_aweme_records
     WHERE user_id = ? AND click_text = ? AND ${ACTIVE_DOUYIN_RECORD_FILTER}
   `).get(userId, clickText) as { value: number }).value;
-  return { inserted, total };
+  return { inserted: insertedAwemeIds.length, total, insertedAwemeIds };
 }
 
-export function uploadDouyinAwemeRecords(req: AuthenticatedRequest, res: Response) {
+export function setDouyinAwemeNotifier(notifier: DouyinAwemeNotifier | undefined) {
+  douyinAwemeNotifier = notifier;
+}
+
+export async function uploadDouyinAwemeRecords(req: AuthenticatedRequest, res: Response) {
   if (!req.user) {
     res.status(401).json({ error: 'unauthorized' });
     return;
@@ -53,7 +73,20 @@ export function uploadDouyinAwemeRecords(req: AuthenticatedRequest, res: Respons
     res.status(400).json({ error: 'awemeIds is required' });
     return;
   }
-  res.json(saveDouyinAwemeRecords(req.user.id, clickText, awemeIds));
+  const result = saveDouyinAwemeRecords(req.user.id, clickText, awemeIds);
+  if (result.insertedAwemeIds.length > 0 && douyinAwemeNotifier) {
+    try {
+      await douyinAwemeNotifier({ userId: req.user.id, clickText, awemeIds: result.insertedAwemeIds });
+    } catch (error) {
+      console.error('[douyin] notify subscribers failed', {
+        userId: req.user.id,
+        clickText,
+        inserted: result.insertedAwemeIds.length,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+  res.json(result);
 }
 
 export function randomDouyinAwemeId(userId: number, clickText: string) {

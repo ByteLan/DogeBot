@@ -156,6 +156,7 @@ pm2 restart dogebot-server --update-env
 - `feishu_bots`：飞书 bot 绑定信息，包含 `user_id`，用于隔离不同用户的 bot。
 - `at_users_record`：`/users` 命令记录，按 `bot_id + at_by + at_who` 唯一记录，支持 `sort_order` 排序和 `deleted_at` 软删除。
 - `douyin_aweme_records`：抖音收藏记录，支持通过 `status = 'delete'` 和 `deleted_at` 软删除；随机读取会排除删除状态。
+- `feishu_douyin_subscriptions`：飞书会话级抖音订阅，按 `bot_id + chat_id + click_text` 记录当前群聊或单聊订阅了哪些模拟点击文案。
 - `feishu_bot_default_commands`：每个 bot 的默认兜底指令，以及首次设置 `/set-default` 的飞书用户管理员。
 
 ## REST API
@@ -211,6 +212,8 @@ pm2 restart dogebot-server --update-env
 
 - `/douyin {模拟点击文案} [--count n]`：随机发送匹配文案的抖音收藏视频。
 - `/douyin --delete {aweme_id}`：软删除当前 bot 绑定用户名下的指定抖音收藏记录，`aweme_id` 必须是大于 5 位的数字，且只有该 bot 的 `/set-default` 管理员可以执行。
+- `/douyin --subscribe {模拟点击文案}`：为当前发消息的群聊或与 bot 的单聊订阅该文案；后续数据库新增匹配记录时，会自动把新增视频链接发到当前会话。
+- `/douyin --unsubscribe {模拟点击文案}`：取消当前会话对该文案的订阅。
 
 ## `/set-default` 命令
 

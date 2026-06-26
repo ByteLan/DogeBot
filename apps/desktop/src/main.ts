@@ -4,17 +4,21 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const douyinUrl = 'https://www.douyin.com';
-const favoriteUrl = 'https://www.douyin.com/user/self?from_tab_name=main&showSubTab=favorite_folder&showTab=favorite_collection';
-const collectListUrl = 'https://www.douyin.com/aweme/v1/web/collects/video/list/';
+const defaultFavoriteUrl = 'https://www.douyin.com/user/self?from_tab_name=main&showSubTab=favorite_folder&showTab=favorite_collection';
+const defaultCollectListUrl = 'https://www.douyin.com/aweme/v1/web/collects/video/list/';
+const favoriteUrl = defaultFavoriteUrl;
+const collectListUrl = defaultCollectListUrl;
 type DouyinCollectCaptureMode = 'page-hook' | 'fetch-debugger';
-const douyinCollectCaptureMode = 'page-hook' as DouyinCollectCaptureMode;
+const douyinCollectCaptureMode = 'fetch-debugger' as DouyinCollectCaptureMode;
 const douyinUsePageHookCapture = douyinCollectCaptureMode === 'page-hook';
 const douyinUseFetchDebuggerCapture = douyinCollectCaptureMode === 'fetch-debugger';
 const douyinUseCdpPageHookCapture = false;
 const douyinPartition = 'persist:dogebot-douyin';
-const chromeVersion = process.versions.chrome;
+const chromeVersion = process.versions.chrome || '120.0.0.0';
 const douyinUserAgent = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`;
 const blockedDeeplinkSchemes = ['bitbrowser'];
+const douyinCaptureWaitMs = 4_000;
+const douyinPostTaskPauseMs = 300;
 const douyinUaMetadata = {
   brands: [
     { brand: 'Chromium', version: chromeVersion.split('.')[0] },
@@ -25,6 +29,36 @@ const douyinUaMetadata = {
   platform: 'macOS'
 };
 
+type DouyinTaskConfig = {
+  id: string;
+  favoriteUrl: string;
+  collectListUrl: string;
+  requestUrlFilter: string;
+  clickText: string;
+  skipClick: boolean;
+};
+
+type DouyinMonitorSharedConfig = {
+  hidden?: boolean;
+  showOnClickFailure?: boolean;
+  shortIntervalSeconds?: number;
+  longIntervalSeconds?: number;
+  retryLimit?: number;
+};
+
+type DouyinTaskRunResult = {
+  captured: boolean;
+  changed: boolean;
+  awemeIds: string[];
+};
+
+type DouyinPendingCapture = {
+  task: DouyinTaskConfig;
+  resolve: (result: DouyinTaskRunResult) => void;
+  timer: NodeJS.Timeout;
+  settled: boolean;
+};
+
 app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
 app.commandLine.appendSwitch('lang', 'zh-CN');
 
@@ -33,20 +67,21 @@ let douyinWindow: BrowserWindow | undefined;
 let monitorTimer: NodeJS.Timeout | undefined;
 let tray: Tray | undefined;
 let appQuitting = false;
-let clickText = '';
 let douyinRunHidden = false;
 let douyinShowOnClickFailure = false;
-let douyinSkipClick = false;
-let douyinCollectsId = '';
 let douyinShortIntervalMs = 10_000;
 let douyinLongIntervalMs = 60_000;
 let douyinRetryLimit = 3;
 let douyinIntervalMode: 'short' | 'long' = 'short';
 let douyinSameIdsCount = 0;
-let douyinLastIdsKey = '';
 let douyinMonitorRunning = false;
 let douyinTickRunning = false;
 let douyinNextRunAt = '';
+let douyinTasks: DouyinTaskConfig[] = [];
+let douyinCurrentTaskId = '';
+let douyinCurrentTaskLabel = '';
+let douyinPendingCapture: DouyinPendingCapture | undefined;
+const douyinTaskLastIdsKey = new Map<string, string>();
 const debugListenerAttached = new WeakSet<BrowserWindow>();
 const devToolsShortcutAttached = new WeakSet<BrowserWindow>();
 let douyinSessionConfigured = false;
@@ -62,7 +97,7 @@ function logDouyin(message: string, data?: unknown) {
 function installDevToolsShortcut(win: BrowserWindow) {
   if (devToolsShortcutAttached.has(win)) return;
   devToolsShortcutAttached.add(win);
-  win.webContents.on('before-input-event', (event, input) => {
+  win.webContents.on('before-input-event', (event: any, input: any) => {
     if (input.type !== 'keyDown' || input.key !== 'F12') return;
     event.preventDefault();
     if (win.webContents.isDevToolsOpened()) {
@@ -103,10 +138,57 @@ function isBlockedDeeplinkUrl(url: string) {
   }
 }
 
-function isCollectListUrl(url: string) {
+function normalizeUrl(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeCollectListBaseUrl(url: string) {
   try {
     const parsed = new URL(url);
-    return `${parsed.origin}${parsed.pathname}` === collectListUrl && parsed.searchParams.getAll('collects_id').includes(douyinCollectsId);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return '';
+  }
+}
+
+function isValidHttpUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function taskLabel(task: DouyinTaskConfig) {
+  return task.clickText || task.requestUrlFilter || task.id;
+}
+
+function normalizeDouyinTask(task: unknown): DouyinTaskConfig | undefined {
+  if (!task || typeof task !== 'object') return undefined;
+  const record = task as Record<string, unknown>;
+  const normalized: DouyinTaskConfig = {
+    id: typeof record.id === 'string' && record.id.trim() ? record.id.trim() : `task-${Date.now()}`,
+    favoriteUrl: normalizeUrl(record.favoriteUrl),
+    collectListUrl: normalizeUrl(record.collectListUrl),
+    requestUrlFilter: typeof record.requestUrlFilter === 'string'
+      ? record.requestUrlFilter.trim()
+      : typeof record.collectsId === 'string'
+        ? record.collectsId.trim()
+        : '',
+    clickText: typeof record.clickText === 'string' ? record.clickText.trim() : '',
+    skipClick: Boolean(record.skipClick)
+  };
+  if (!normalized.favoriteUrl || !normalized.collectListUrl || !normalized.requestUrlFilter || !normalized.clickText) return undefined;
+  if (!isValidHttpUrl(normalized.favoriteUrl) || !isValidHttpUrl(normalized.collectListUrl)) return undefined;
+  return normalized;
+}
+
+function isCollectListUrl(url: string, task: DouyinTaskConfig) {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname}` === normalizeCollectListBaseUrl(task.collectListUrl)
+      && url.includes(task.requestUrlFilter);
   } catch {
     return false;
   }
@@ -131,6 +213,10 @@ function toPositiveInteger(value: unknown, fallback: number) {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }
 
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function currentMonitorIntervalMs() {
   return douyinIntervalMode === 'long' ? douyinLongIntervalMs : douyinShortIntervalMs;
 }
@@ -145,7 +231,10 @@ function currentMonitorState() {
     sameIdsCount: douyinSameIdsCount,
     retryLimit: douyinRetryLimit,
     nextRunAt: douyinNextRunAt,
-    tickRunning: douyinTickRunning
+    tickRunning: douyinTickRunning,
+    taskCount: douyinTasks.length,
+    activeTaskId: douyinCurrentTaskId,
+    activeTaskLabel: douyinCurrentTaskLabel
   };
 }
 
@@ -210,11 +299,27 @@ function createTray() {
 function resetMonitorIntervalState() {
   douyinIntervalMode = 'short';
   douyinSameIdsCount = 0;
-  douyinLastIdsKey = '';
+}
+
+function setCurrentTask(task?: DouyinTaskConfig) {
+  douyinCurrentTaskId = task?.id || '';
+  douyinCurrentTaskLabel = task ? taskLabel(task) : '';
+  sendMonitorState();
+}
+
+function clearPendingCapture(result?: DouyinTaskRunResult) {
+  if (!douyinPendingCapture) return;
+  clearTimeout(douyinPendingCapture.timer);
+  const pending = douyinPendingCapture;
+  douyinPendingCapture = undefined;
+  if (!pending.settled) {
+    pending.settled = true;
+    pending.resolve(result || { captured: false, changed: false, awemeIds: [] });
+  }
 }
 
 function registerBlockedDeeplinkHandlers() {
-  if (process.defaultApp) {
+  if ((process as NodeJS.Process & { defaultApp?: boolean }).defaultApp) {
     logDouyin('skip deeplink handler registration in dev mode', {
       executable: process.execPath,
       args: process.argv.slice(1)
@@ -238,7 +343,7 @@ function configureDouyinSession() {
   if (douyinSessionConfigured) return ses;
   douyinSessionConfigured = true;
   ses.setUserAgent(douyinUserAgent);
-  ses.webRequest.onBeforeSendHeaders({ urls: ['*://www.douyin.com/*', '*://*.douyin.com/*'] }, (details, callback) => {
+  ses.webRequest.onBeforeSendHeaders({ urls: ['*://www.douyin.com/*', '*://*.douyin.com/*'] }, (details: any, callback: any) => {
     const headers = { ...details.requestHeaders };
     headers['User-Agent'] = douyinUserAgent;
     headers['Accept-Language'] = 'zh-CN,zh;q=0.9,en;q=0.8';
@@ -252,7 +357,7 @@ function configureDouyinSession() {
     delete headers['Sec-Ch-Ua-Platform'];
     callback({ requestHeaders: headers });
   });
-  ses.webRequest.onBeforeRequest((details, callback) => {
+  ses.webRequest.onBeforeRequest((details: any, callback: any) => {
     if (isAllowedNavigationUrl(details.url)) {
       callback({});
       return;
@@ -264,13 +369,13 @@ function configureDouyinSession() {
   return ses;
 }
 
-app.on('open-url', (event, url) => {
+app.on('open-url', (event: any, url: string) => {
   if (!isBlockedDeeplinkUrl(url)) return;
   event.preventDefault();
   logDouyin('swallowed registered deeplink', url);
 });
 
-app.on('browser-window-created', (_event, win) => {
+app.on('browser-window-created', (_event: any, win: BrowserWindow) => {
   installDevToolsShortcut(win);
 });
 
@@ -286,7 +391,7 @@ function createWindow() {
     }
   });
   mainWindow = win;
-  win.on('close', (event) => {
+  win.on('close', (event: any) => {
     if (appQuitting) return;
     event.preventDefault();
     hideMainWindowToTray();
@@ -326,7 +431,7 @@ function ensureDouyinWindow() {
   });
   douyinWindow = win;
   applyDouyinWindowVisibility(win);
-  win.webContents.setWindowOpenHandler((details) => {
+    win.webContents.setWindowOpenHandler((details: any) => {
     if (isAllowedWindowOpenUrl(details.url)) {
       return {
         action: 'allow',
@@ -348,17 +453,17 @@ function ensureDouyinWindow() {
     logDouyin('blocked deeplink window.open', details.url);
     return { action: 'deny' };
   });
-  win.webContents.on('will-navigate', (event, url) => {
+  win.webContents.on('will-navigate', (event: any, url: string) => {
     if (isAllowedNavigationUrl(url)) return;
     event.preventDefault();
     logDouyin('blocked deeplink will-navigate', url);
   });
-  win.webContents.on('will-redirect', (event, url) => {
+  win.webContents.on('will-redirect', (event: any, url: string) => {
     if (isAllowedNavigationUrl(url)) return;
     event.preventDefault();
     logDouyin('blocked deeplink will-redirect', url);
   });
-  (win.webContents as any).on('will-frame-navigate', (event: Electron.Event, url: string, isMainFrame: boolean, frameProcessId: number, frameRoutingId: number) => {
+  (win.webContents as any).on('will-frame-navigate', (event: any, url: string, isMainFrame: boolean, frameProcessId: number, frameRoutingId: number) => {
     if (isAllowedNavigationUrl(url)) return;
     event.preventDefault();
     logDouyin('blocked deeplink will-frame-navigate', { url, isMainFrame, frameProcessId, frameRoutingId });
@@ -371,10 +476,10 @@ function ensureDouyinWindow() {
       .then((snapshot) => logDouyin('navigator snapshot', snapshot))
       .catch((error) => logDouyin('navigator snapshot failed', error instanceof Error ? error.message : error));
   });
-  win.webContents.on('did-fail-load', (_event, code, description, validatedURL) => {
+  win.webContents.on('did-fail-load', (_event: any, code: number, description: string, validatedURL: string) => {
     logDouyin('did-fail-load', { code, description, validatedURL });
   });
-  win.on('close', (event) => {
+  win.on('close', (event: any) => {
     if (appQuitting || !douyinMonitorRunning) return;
     event.preventDefault();
     douyinRunHidden = true;
@@ -402,7 +507,7 @@ function attachDouyinDebugger(win: BrowserWindow) {
   if (!devtools.isAttached()) {
     try {
       devtools.attach('1.3');
-      devtools.on('detach', (_event, reason) => {
+      devtools.on('detach', (_event: any, reason: string) => {
         logDouyin('debugger detached', reason);
         debugListenerAttached.delete(win);
         setTimeout(() => attachDouyinDebugger(win), 1000);
@@ -684,22 +789,23 @@ function attachDouyinDebugger(win: BrowserWindow) {
   }
   debugListenerAttached.add(win);
   if (douyinUseFetchDebuggerCapture) {
-    devtools.on('message', (_event, method, params) => {
+    devtools.on('message', (_event: any, method: string, params: any) => {
       if (method !== 'Fetch.requestPaused') return;
       const requestId = params.requestId;
       const url = params.request?.url;
+      const currentTask = douyinPendingCapture?.task;
       const continueRequest = () => {
         devtools.sendCommand('Fetch.continueRequest', { requestId }).catch(() => undefined);
       };
-      if (typeof url !== 'string' || params.request?.method === 'OPTIONS' || !isCollectListUrl(url)) {
+      if (!currentTask || typeof url !== 'string' || params.request?.method === 'OPTIONS' || !isCollectListUrl(url, currentTask)) {
         continueRequest();
         return;
       }
-      logDouyin('Fetch matched response', { requestId, url });
+      logDouyin('Fetch matched response', { requestId, url, taskId: currentTask.id });
       devtools.sendCommand('Fetch.getResponseBody', { requestId })
         .then((result) => {
           const body = result.base64Encoded ? Buffer.from(result.body, 'base64').toString('utf8') : result.body;
-          logDouyin('Fetch response body captured', { requestId, length: body.length });
+          logDouyin('Fetch response body captured', { requestId, taskId: currentTask.id, length: body.length });
           handleCapturedCollectsVideoList({
             source: 'fetch-debugger',
             url,
@@ -723,14 +829,37 @@ function attachDouyinDebugger(win: BrowserWindow) {
   }
 }
 
+function extractAwemeIdsFromBody(body: string) {
+  try {
+    const parsed = JSON.parse(body) as { aweme_list?: Array<{ aweme_id?: unknown }> };
+    if (!Array.isArray(parsed.aweme_list)) return [];
+    return parsed.aweme_list.flatMap((item) => {
+      const awemeId = String(item?.aweme_id || '').trim();
+      return awemeId ? [awemeId] : [];
+    });
+  } catch {
+    return [];
+  }
+}
+
 function handleCapturedCollectsVideoList(payload: unknown) {
   if (!payload || typeof payload !== 'object') return;
+  const pending = douyinPendingCapture;
+  if (!pending) {
+    logDouyin('ignored collect list payload without pending task');
+    return;
+  }
   const data = payload as { url?: unknown; status?: unknown; body?: unknown; error?: unknown; source?: unknown; receivedAt?: unknown };
-  if (typeof data.url !== 'string' || !isCollectListUrl(data.url)) {
-    logDouyin('ignored collect list payload', { url: data.url, source: data.source });
+  if (typeof data.url !== 'string' || !isCollectListUrl(data.url, pending.task)) {
+    logDouyin('ignored collect list payload', { url: data.url, source: data.source, taskId: pending.task.id });
     return;
   }
   const result = {
+    taskId: pending.task.id,
+    taskClickText: pending.task.clickText,
+    taskFavoriteUrl: pending.task.favoriteUrl,
+    taskCollectListUrl: pending.task.collectListUrl,
+    taskRequestUrlFilter: pending.task.requestUrlFilter,
     url: data.url,
     status: typeof data.status === 'number' ? data.status : Number(data.status || 0),
     body: typeof data.body === 'string' ? data.body : '',
@@ -738,26 +867,65 @@ function handleCapturedCollectsVideoList(payload: unknown) {
     source: typeof data.source === 'string' ? data.source : 'page-hook',
     receivedAt: typeof data.receivedAt === 'string' ? data.receivedAt : new Date().toISOString()
   };
-  logDouyin('page hook response captured', {
+  const awemeIds = result.body ? extractAwemeIdsFromBody(result.body) : [];
+  const idsKey = JSON.stringify(awemeIds);
+  const lastIdsKey = douyinTaskLastIdsKey.get(pending.task.id) || '';
+  const changed = idsKey !== lastIdsKey;
+  if (changed) douyinTaskLastIdsKey.set(pending.task.id, idsKey);
+  logDouyin('collect list response captured', {
+    taskId: result.taskId,
     url: result.url,
     status: result.status,
     source: result.source,
     length: result.body.length,
-    error: result.error
+    error: result.error,
+    changed,
+    awemeCount: awemeIds.length
   });
-  mainWindow?.webContents.send('douyin:collects-video-list', result);
+  mainWindow?.webContents.send('douyin:collects-video-list', { ...result, awemeIds });
+  clearPendingCapture({ captured: true, changed, awemeIds });
 }
 
-async function clickTextOnPage(win: BrowserWindow) {
-  if (!clickText.trim()) {
-    logDouyin('skip click: empty text');
+function createPendingCapture(task: DouyinTaskConfig) {
+  clearPendingCapture();
+  return new Promise<DouyinTaskRunResult>((resolve) => {
+    const timer = setTimeout(() => {
+      logDouyin('collect list wait timeout', { taskId: task.id, task: taskLabel(task) });
+      mainWindow?.webContents.send('douyin:collects-video-list', {
+        taskId: task.id,
+        taskClickText: task.clickText,
+        taskFavoriteUrl: task.favoriteUrl,
+        taskCollectListUrl: task.collectListUrl,
+        taskRequestUrlFilter: task.requestUrlFilter,
+        url: task.collectListUrl,
+        status: 0,
+        body: '',
+        error: '等待 collect list 接口返回超时',
+        source: 'fetch-debugger',
+        receivedAt: new Date().toISOString(),
+        awemeIds: []
+      });
+      clearPendingCapture({ captured: false, changed: false, awemeIds: [] });
+    }, douyinCaptureWaitMs);
+    douyinPendingCapture = {
+      task,
+      resolve,
+      timer,
+      settled: false
+    };
+  });
+}
+
+async function clickTextOnPage(win: BrowserWindow, task: DouyinTaskConfig) {
+  if (!task.clickText.trim()) {
+    logDouyin('skip click: empty text', { taskId: task.id });
     return;
   }
-  logDouyin('click text on page', clickText.trim());
+  logDouyin('click text on page', { taskId: task.id, clickText: task.clickText.trim() });
   const result = await win.webContents.executeJavaScript(
     `
       (() => {
-        const keyword = ${JSON.stringify(clickText.trim())};
+        const keyword = ${JSON.stringify(task.clickText.trim())};
         const candidates = Array.from(document.querySelectorAll('p'));
         const target = candidates.find((element) => {
           const rect = element.getBoundingClientRect();
@@ -796,8 +964,45 @@ async function clickTextOnPage(win: BrowserWindow) {
   } else if (douyinShowOnClickFailure) {
     showDouyinWindowNow(win);
   }
-  logDouyin('click result', result);
-  mainWindow?.webContents.send('douyin:click-result', { ...result, clickedAt: new Date().toISOString() });
+  logDouyin('click result', { taskId: task.id, ...result });
+  mainWindow?.webContents.send('douyin:click-result', {
+    taskId: task.id,
+    taskClickText: task.clickText,
+    ...result,
+    clickedAt: new Date().toISOString()
+  });
+}
+
+async function runSingleTask(task: DouyinTaskConfig) {
+  const win = ensureDouyinWindow();
+  setCurrentTask(task);
+  const capturePromise = createPendingCapture(task);
+  await win.loadURL(task.favoriteUrl, { userAgent: douyinUserAgent });
+  await wait(1500);
+  if (task.skipClick) {
+    mainWindow?.webContents.send('douyin:click-result', {
+      taskId: task.id,
+      taskClickText: task.clickText,
+      clicked: true,
+      text: task.clickText,
+      skipped: true,
+      clickedAt: new Date().toISOString()
+    });
+  } else {
+    await clickTextOnPage(win, task).catch((error) => {
+      if (douyinShowOnClickFailure) showDouyinWindowNow(win);
+      mainWindow?.webContents.send('douyin:click-result', {
+        taskId: task.id,
+        taskClickText: task.clickText,
+        clicked: false,
+        reason: error instanceof Error ? error.message : '模拟点击失败',
+        clickedAt: new Date().toISOString()
+      });
+    });
+  }
+  const result = await capturePromise;
+  await wait(douyinPostTaskPauseMs);
+  return result;
 }
 
 function scheduleMonitorTick() {
@@ -811,7 +1016,8 @@ function scheduleMonitorTick() {
     mode: douyinIntervalMode,
     delayMs,
     sameIdsCount: douyinSameIdsCount,
-    retryLimit: douyinRetryLimit
+    retryLimit: douyinRetryLimit,
+    taskCount: douyinTasks.length
   });
 }
 
@@ -824,31 +1030,37 @@ async function runMonitorTick() {
   douyinTickRunning = true;
   douyinNextRunAt = '';
   sendMonitorState();
-  logDouyin('monitor tick start', { clickText, skipClick: douyinSkipClick });
+  logDouyin('monitor tick start', { taskCount: douyinTasks.length });
+  let hasChanged = false;
   try {
-    const win = ensureDouyinWindow();
-    await win.loadURL(favoriteUrl, { userAgent: douyinUserAgent });
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    if (douyinSkipClick) {
-      mainWindow?.webContents.send('douyin:click-result', {
-        clicked: true,
-        text: clickText,
-        skipped: true,
-        clickedAt: new Date().toISOString()
-      });
+    const tasks = [...douyinTasks];
+    if (tasks.length === 0) {
+      stopMonitor();
       return;
     }
-    await clickTextOnPage(win).catch((error) => {
-      if (douyinShowOnClickFailure) showDouyinWindowNow(win);
-      mainWindow?.webContents.send('douyin:click-result', {
-        clicked: false,
-        reason: error instanceof Error ? error.message : '模拟点击失败',
-        clickedAt: new Date().toISOString()
-      });
+    for (const task of tasks) {
+      if (!douyinMonitorRunning) break;
+      const result = await runSingleTask(task);
+      if (result.changed) hasChanged = true;
+    }
+    if (hasChanged) {
+      douyinIntervalMode = 'short';
+      douyinSameIdsCount = 0;
+    } else {
+      douyinSameIdsCount = Math.min(douyinSameIdsCount + 1, douyinRetryLimit);
+      if (douyinSameIdsCount >= douyinRetryLimit) douyinIntervalMode = 'long';
+    }
+    logDouyin('monitor tick done', {
+      taskCount: tasks.length,
+      hasChanged,
+      mode: douyinIntervalMode,
+      sameIdsCount: douyinSameIdsCount
     });
   } finally {
+    clearPendingCapture();
     douyinTickRunning = false;
-    scheduleMonitorTick();
+    setCurrentTask(undefined);
+    if (douyinMonitorRunning) scheduleMonitorTick();
   }
 }
 
@@ -857,11 +1069,13 @@ function stopMonitor() {
   if (monitorTimer) clearTimeout(monitorTimer);
   monitorTimer = undefined;
   douyinNextRunAt = '';
+  clearPendingCapture();
+  setCurrentTask(undefined);
   sendMonitorState();
   logDouyin('monitor stopped');
 }
 
-ipcMain.on('douyin:collects-video-list-captured', (event, payload: unknown) => {
+ipcMain.on('douyin:collects-video-list-captured', (event: any, payload: unknown) => {
   if (!douyinWindow || event.sender !== douyinWindow.webContents) {
     logDouyin('ignored collect list payload from unknown sender');
     return;
@@ -869,12 +1083,12 @@ ipcMain.on('douyin:collects-video-list-captured', (event, payload: unknown) => {
   handleCapturedCollectsVideoList(payload);
 });
 
-ipcMain.on('douyin:hook-log', (event, payload: unknown) => {
+ipcMain.on('douyin:hook-log', (event: any, payload: unknown) => {
   if (!douyinWindow || event.sender !== douyinWindow.webContents) return;
   logDouyin('page hook log', payload);
 });
 
-ipcMain.on('douyin:preload-ready', (event, payload: unknown) => {
+ipcMain.on('douyin:preload-ready', (event: any, payload: unknown) => {
   if (!douyinWindow || event.sender !== douyinWindow.webContents) return;
   logDouyin('page preload ready', payload);
 });
@@ -889,81 +1103,41 @@ ipcMain.handle('douyin:open-login', async () => {
   logDouyin('open-login done');
 });
 
-ipcMain.handle('douyin:start-monitor', async (
-  _event,
-  text: string,
-  hidden?: boolean,
-  showOnClickFailure?: boolean,
-  collectsId?: string,
-  skipClick?: boolean,
-  shortIntervalSeconds?: number,
-  longIntervalSeconds?: number,
-  retryLimit?: number
-) => {
-  douyinRunHidden = Boolean(hidden);
-  douyinShowOnClickFailure = Boolean(showOnClickFailure);
-  douyinSkipClick = Boolean(skipClick);
-  douyinCollectsId = String(collectsId || '').trim();
-  douyinShortIntervalMs = toPositiveInteger(shortIntervalSeconds, 10) * 1000;
-  douyinLongIntervalMs = toPositiveInteger(longIntervalSeconds, 60) * 1000;
-  douyinRetryLimit = toPositiveInteger(retryLimit, 3);
+ipcMain.handle('douyin:start-monitor', async (_event: any, tasksInput: unknown, sharedConfigInput?: DouyinMonitorSharedConfig) => {
+  const tasks = Array.isArray(tasksInput) ? tasksInput.map(normalizeDouyinTask).filter(Boolean) as DouyinTaskConfig[] : [];
+  if (tasks.length === 0) throw new Error('请至少配置一个有效任务');
+  douyinRunHidden = Boolean(sharedConfigInput?.hidden);
+  douyinShowOnClickFailure = Boolean(sharedConfigInput?.showOnClickFailure);
+  douyinShortIntervalMs = toPositiveInteger(sharedConfigInput?.shortIntervalSeconds, 10) * 1000;
+  douyinLongIntervalMs = toPositiveInteger(sharedConfigInput?.longIntervalSeconds, 60) * 1000;
+  douyinRetryLimit = toPositiveInteger(sharedConfigInput?.retryLimit, 3);
+  douyinTasks = tasks;
+  douyinTaskLastIdsKey.clear();
   resetMonitorIntervalState();
   douyinMonitorRunning = true;
   douyinNextRunAt = '';
   sendMonitorState();
   logDouyin('ipc start-monitor', {
-    text,
     hidden: douyinRunHidden,
     showOnClickFailure: douyinShowOnClickFailure,
-    collectsId: douyinCollectsId,
-    skipClick: douyinSkipClick,
     shortIntervalMs: douyinShortIntervalMs,
     longIntervalMs: douyinLongIntervalMs,
-    retryLimit: douyinRetryLimit
+    retryLimit: douyinRetryLimit,
+    tasks: douyinTasks.map((task) => ({
+      id: task.id,
+      favoriteUrl: task.favoriteUrl,
+      collectListUrl: task.collectListUrl,
+        requestUrlFilter: task.requestUrlFilter,
+      clickText: task.clickText,
+      skipClick: task.skipClick
+    }))
   });
-  clickText = text;
   if (monitorTimer) clearTimeout(monitorTimer);
   monitorTimer = undefined;
   await runMonitorTick();
 });
 
-ipcMain.handle('douyin:report-aweme-ids', (_event, ids?: unknown[]) => {
-  if (!douyinMonitorRunning) return;
-  const awemeIds = Array.isArray(ids) ? ids.map((id) => String(id || '').trim()).filter(Boolean) : [];
-  const idsKey = JSON.stringify(awemeIds);
-  if (awemeIds.length === 0) {
-    if (douyinIntervalMode === 'long') {
-      resetMonitorIntervalState();
-      scheduleMonitorTick();
-    }
-    logDouyin('aweme ids empty', { mode: douyinIntervalMode, sameIdsCount: douyinSameIdsCount });
-    return;
-  }
-  if (!douyinLastIdsKey || idsKey !== douyinLastIdsKey) {
-    douyinLastIdsKey = idsKey;
-    douyinSameIdsCount = 0;
-    douyinIntervalMode = 'short';
-    scheduleMonitorTick();
-    logDouyin('aweme ids changed, switch short interval', { count: awemeIds.length });
-    return;
-  }
-  if (douyinIntervalMode === 'short') {
-    douyinSameIdsCount += 1;
-    if (douyinSameIdsCount >= douyinRetryLimit) {
-      douyinIntervalMode = 'long';
-      scheduleMonitorTick();
-    }
-  }
-  logDouyin('aweme ids same', {
-    mode: douyinIntervalMode,
-    count: awemeIds.length,
-    sameIdsCount: douyinSameIdsCount,
-    retryLimit: douyinRetryLimit
-  });
-  sendMonitorState();
-});
-
-ipcMain.handle('douyin:set-hidden', (_event, hidden?: boolean) => {
+ipcMain.handle('douyin:set-hidden', (_event: any, hidden?: boolean) => {
   douyinRunHidden = Boolean(hidden);
   logDouyin('ipc set-hidden', { hidden: douyinRunHidden });
   if (douyinWindow && !douyinWindow.isDestroyed()) applyDouyinWindowVisibility(douyinWindow);
