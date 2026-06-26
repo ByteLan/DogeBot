@@ -494,7 +494,7 @@ async function generateImitationReply(bot: FeishuBot, event: any, text: string, 
   const sender = senderIdentity(event);
   const chatId = messageChatId(event?.message);
   const historyBlock = chatHistoryLines(history).join('\n') || '(暂无历史消息)';
-  return openAIChat(config, [
+  const messages: Array<{ role: 'system' | 'user'; content: string }> = [
     {
       role: 'system',
       content: [
@@ -524,7 +524,9 @@ async function generateImitationReply(bot: FeishuBot, event: any, text: string, 
         '请给出一句自然的群聊接话。'
       ].join('\n')
     }
-  ]);
+  ];
+  console.log('[feishu] imitate messages input', JSON.stringify(messages, null, 2));
+  return openAIChat(config, messages);
 }
 
 async function sendPassiveText(bot: FeishuBot, event: any, messageId: string, text: string) {
@@ -566,6 +568,7 @@ async function runPassiveInteractions(bot: FeishuBot, event: any, messageId: str
     tasks.push((async () => {
       const reply = await generateImitationReply(bot, event, text, history, config);
       if (!reply) return;
+      console.log('[feishu] imitate reply', reply);
       await sendPassiveText(bot, event, messageId, reply);
     })());
   }
