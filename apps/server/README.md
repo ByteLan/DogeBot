@@ -156,7 +156,7 @@ pm2 restart dogebot-server --update-env
 - `feishu_bots`：飞书 bot 绑定信息，包含 `user_id`，用于隔离不同用户的 bot。
 - `at_users_record`：`/users` 命令记录，按 `bot_id + at_by + at_who` 唯一记录，支持 `sort_order` 排序和 `deleted_at` 软删除。
 - `douyin_aweme_records`：抖音收藏记录，支持通过 `status = 'delete'` 和 `deleted_at` 软删除；随机读取会排除删除状态。
-- `feishu_douyin_subscriptions`：飞书会话级抖音订阅，按 `bot_id + chat_id + click_text` 记录当前群聊或单聊订阅了哪些模拟点击文案。
+- `feishu_douyin_subscriptions`：飞书会话级抖音订阅，按 `bot_id + chat_id + click_text` 记录当前群聊或单聊订阅了哪些模拟点击文案；订阅触发条件是对应 `click_text` 下有新的 `aweme_id` 成功入库。
 - `feishu_bot_default_commands`：每个 bot 的默认兜底指令，以及首次设置 `/set-default` 的飞书用户管理员。
 
 ## REST API
@@ -212,8 +212,10 @@ pm2 restart dogebot-server --update-env
 
 - `/douyin {模拟点击文案} [--count n]`：随机发送匹配文案的抖音收藏视频。
 - `/douyin --delete {aweme_id}`：软删除当前 bot 绑定用户名下的指定抖音收藏记录，`aweme_id` 必须是大于 5 位的数字，且只有该 bot 的 `/set-default` 管理员可以执行。
-- `/douyin --subscribe {模拟点击文案}`：为当前发消息的群聊或与 bot 的单聊订阅该文案；后续数据库新增匹配记录时，会自动把新增视频链接发到当前会话。
-- `/douyin --unsubscribe {模拟点击文案}`：取消当前会话对该文案的订阅。
+- `/douyin --subscribe {模拟点击文案}`：为当前发消息的群聊或与 bot 的单聊订阅该 `click_text` 分组；后续桌面端同步时，只有该分组有新的 `aweme_id` 成功入库，才会把新增视频链接发到当前会话，已有库存不会补发。
+- `/douyin --unsubscribe {模拟点击文案}`：取消当前会话对该 `click_text` 分组的订阅。
+
+`/douyin --subscribe` 订阅的是服务端入库分组，不是桌面端任务 ID、`favoriteUrl`、`collectListUrl` 或请求 URL 筛选字符串。桌面端上报 `/api/douyin/aweme-records` 时会提交 `{ clickText, awemeIds }`，服务端按 `(user_id, click_text, aweme_id)` 去重；只有 `INSERT OR IGNORE` 实际插入的新 `aweme_id` 会触发订阅通知。
 
 ## `/set-default` 命令
 

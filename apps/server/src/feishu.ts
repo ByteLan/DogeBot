@@ -1198,7 +1198,7 @@ async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string
   const douyinCommand = parseDouyinCommand(text);
   if (douyinCommand.isDouyin) {
     if (douyinCommand.hasConflictingAction) {
-      await replyText(bot, messageId, '用法冲突：/douyin 同时只能使用一种动作参数（--delete、--subscribe、--unsubscribe）');
+      await replyText(bot, messageId, '用法冲突：/douyin 同时只能使用一种动作参数（--delete、--subscribe、--unsubscribe）。常用：/douyin {模拟点击文案} [--count n]；/douyin --subscribe {模拟点击文案}');
       return true;
     }
     if (douyinCommand.shouldDelete) {
@@ -1238,11 +1238,11 @@ async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string
     }
     if (douyinCommand.shouldSubscribe) {
       if (!douyinCommand.clickText) {
-        await replyText(bot, messageId, '用法：/douyin --subscribe {模拟点击文案}');
+        await replyText(bot, messageId, '用法：/douyin --subscribe {模拟点击文案}。订阅的是该文案对应的 clickText 分组，例如 /douyin --subscribe 随机甜妹');
         return true;
       }
       if (douyinCommand.hasCountFlag) {
-        await replyText(bot, messageId, '订阅模式不支持 --count，请使用 /douyin --subscribe {模拟点击文案}');
+        await replyText(bot, messageId, '订阅模式不支持 --count；订阅只监听该 clickText 分组后续新增入库记录，请使用 /douyin --subscribe {模拟点击文案}');
         return true;
       }
       if (!chatId) {
@@ -1254,12 +1254,12 @@ async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string
         return true;
       }
       addDouyinSubscription(bot.id, chatId, douyinCommand.clickText);
-      await replyText(bot, messageId, `已订阅当前会话的“${douyinCommand.clickText}”更新；后续数据库新增记录时会自动发送`);
+      await replyText(bot, messageId, `已订阅当前会话的“${douyinCommand.clickText}”更新（按 clickText 分组）。后续桌面端同步时，只有该分组有新的 aweme_id 成功入库才会自动发送；已有记录不会补发。`);
       return true;
     }
     if (douyinCommand.shouldUnsubscribe) {
       if (!douyinCommand.clickText) {
-        await replyText(bot, messageId, '用法：/douyin --unsubscribe {模拟点击文案}');
+        await replyText(bot, messageId, '用法：/douyin --unsubscribe {模拟点击文案}。取消的是当前会话对该 clickText 分组的订阅。');
         return true;
       }
       if (douyinCommand.hasCountFlag) {
@@ -1272,14 +1272,14 @@ async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string
       }
       const result = removeDouyinSubscription(bot.id, chatId, douyinCommand.clickText);
       if (result.deleted === 0) {
-        await replyText(bot, messageId, `当前会话未订阅“${douyinCommand.clickText}”`);
+        await replyText(bot, messageId, `当前会话未订阅“${douyinCommand.clickText}”这个 clickText 分组`);
         return true;
       }
-      await replyText(bot, messageId, `已取消当前会话对“${douyinCommand.clickText}”的订阅`);
+      await replyText(bot, messageId, `已取消当前会话对“${douyinCommand.clickText}”这个 clickText 分组的订阅`);
       return true;
     }
     if (!douyinCommand.clickText) {
-      await replyText(bot, messageId, '用法：/douyin {模拟点击文案} [--count n]');
+      await replyText(bot, messageId, '用法：/douyin {模拟点击文案} [--count n]；订阅新增记录：/douyin --subscribe {模拟点击文案}；取消订阅：/douyin --unsubscribe {模拟点击文案}');
       return true;
     }
     if (douyinCommand.hasInvalidCount) {
