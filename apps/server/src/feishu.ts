@@ -514,7 +514,7 @@ async function generateImitationReply(bot: FeishuBot, event: any, text: string, 
       content: [
         `bot_id: ${bot.id}`,
         `chat_id: ${chatId}`,
-        `当前发言人: ${sender.name || sender.id}`,
+        `当前发言人: ${[sender.name, sender.id].filter(Boolean).join(' (') + (sender.name && sender.id ? ')' : '')}`,
         '',
         '最近群聊：',
         historyBlock,
