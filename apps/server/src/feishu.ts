@@ -85,6 +85,21 @@ type AddCronCommand = {
   commandText: string;
 };
 
+type PassiveFeature = 'reaction' | 'repeat' | 'llm_reply';
+
+type PassiveToggleCommand =
+  | { isPassiveToggle: false }
+  | {
+    isPassiveToggle: true;
+    command: string;
+    feature: PassiveFeature;
+    featureName: string;
+    shouldEnable: boolean;
+    shouldDisable: boolean;
+    hasConflictingAction: boolean;
+    hasUnknownArgs: boolean;
+  };
+
 type ChatCronTask = {
   id: number;
   bot_id: number;
@@ -135,6 +150,11 @@ const recentFeishuEventKeys = new Map<string, number>();
 const USERS_CARD_PERSON_LIST_CHUNK_SIZE = 100;
 const RECENT_CHAT_MEMORY_LIMIT = 30;
 const DEFAULT_REACTION_EMOJIS = ['OK', 'DONE', 'THUMBSUP', 'HEART', 'LAUGH'];
+const PASSIVE_TOGGLE_COMMANDS = [
+  { command: '/reaction', feature: 'reaction', featureName: '贴表情' },
+  { command: '/repeat', feature: 'repeat', featureName: '复读' },
+  { command: '/llm-reply', feature: 'llm_reply', featureName: '大模型接话' }
+] as const;
 const recentChatMessages = new Map<string, RecentChatMessage[]>();
 
 function cleanupRecentFeishuEventKeys(now: number) {
@@ -545,6 +565,7 @@ async function sendPassiveText(bot: FeishuBot, event: any, messageId: string, te
 async function runPassiveInteractions(bot: FeishuBot, event: any, messageId: string, text: string, history: RecentChatMessage[]) {
   const config = passiveInteractionConfig();
   const tasks: Array<Promise<void>> = [];
+  const chatId = messageChatId(event?.message);
   const mentionsBot = messageMentionsBot(bot, event?.message);
   const reactionDecision = triggerDecision(config.reactionRate);
   const repeatDecision = triggerDecision(config.repeatRate);
@@ -555,16 +576,16 @@ async function runPassiveInteractions(bot: FeishuBot, event: any, messageId: str
   const imitateEligible = !mentionsBot;
   const imitateTriggered = imitateEligible && imitateDecision.triggered;
 
-  if (reactionTriggered) {
+  if (reactionTriggered && isPassiveFeatureEnabled(bot.id, chatId, 'reaction')) {
     const emoji = randomItem(config.reactionEmojis);
     tasks.push(addReaction(bot, messageId, emoji));
   }
 
-  if (repeatTriggered) {
+  if (repeatTriggered && isPassiveFeatureEnabled(bot.id, chatId, 'repeat')) {
     tasks.push(sendPassiveText(bot, event, messageId, text));
   }
 
-  if (imitateTriggered) {
+  if (imitateTriggered && isPassiveFeatureEnabled(bot.id, chatId, 'llm_reply')) {
     tasks.push((async () => {
       const reply = await generateImitationReply(bot, event, text, history, config);
       if (!reply) return;
@@ -769,6 +790,29 @@ function parseAddCronCommand(text: string): AddCronCommand {
   };
 }
 
+function parsePassiveToggleCommand(text: string): PassiveToggleCommand {
+  const matches = PASSIVE_TOGGLE_COMMANDS
+    .map((item) => ({ ...item, index: text.indexOf(item.command) }))
+    .filter((item) => item.index >= 0)
+    .sort((left, right) => left.index - right.index);
+  const match = matches[0];
+  if (!match) return { isPassiveToggle: false };
+
+  const args = text.slice(match.index + match.command.length).trim().split(/\s+/).filter(Boolean);
+  const shouldEnable = args.includes('--enable');
+  const shouldDisable = args.includes('--disable');
+  return {
+    isPassiveToggle: true,
+    command: match.command,
+    feature: match.feature,
+    featureName: match.featureName,
+    shouldEnable,
+    shouldDisable,
+    hasConflictingAction: shouldEnable && shouldDisable,
+    hasUnknownArgs: args.some((arg) => arg !== '--enable' && arg !== '--disable')
+  };
+}
+
 function parseCronField(raw: string, min: number, max: number): CronField {
   const values = new Set<number>();
   const parts = raw.split(',').map((part) => part.trim()).filter(Boolean);
@@ -854,6 +898,26 @@ function removeDouyinSubscription(botId: number, chatId: string, clickText: stri
     WHERE bot_id = ? AND chat_id = ? AND click_text = ?
   `).run(botId, chatId, clickText);
   return { deleted: result.changes };
+}
+
+function setPassiveFeatureEnabled(botId: number, chatId: string, feature: PassiveFeature, enabled: boolean) {
+  db.prepare(`
+    INSERT INTO feishu_chat_passive_settings (bot_id, chat_id, feature, enabled)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(bot_id, chat_id, feature) DO UPDATE SET
+      enabled = excluded.enabled,
+      updated_at = CURRENT_TIMESTAMP
+  `).run(botId, chatId, feature, enabled ? 1 : 0);
+}
+
+function isPassiveFeatureEnabled(botId: number, chatId: string, feature: PassiveFeature) {
+  if (!chatId) return true;
+  const row = db.prepare(`
+    SELECT enabled
+    FROM feishu_chat_passive_settings
+    WHERE bot_id = ? AND chat_id = ? AND feature = ?
+  `).get(botId, chatId, feature) as { enabled: number } | undefined;
+  return row ? row.enabled === 1 : true;
 }
 
 function getDouyinSubscriptionsByUserAndClickText(userId: number, clickText: string) {
@@ -1198,6 +1262,22 @@ async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string
       return true;
     }
   }
+  const passiveToggle = parsePassiveToggleCommand(text);
+  if (passiveToggle.isPassiveToggle) {
+    if (passiveToggle.hasConflictingAction || passiveToggle.hasUnknownArgs || (!passiveToggle.shouldEnable && !passiveToggle.shouldDisable)) {
+      await replyText(bot, messageId, `用法：${passiveToggle.command} --enable 或 ${passiveToggle.command} --disable`);
+      return true;
+    }
+    if (!chatId) {
+      await replyText(bot, messageId, '当前消息缺少 chat_id，无法设置当前会话的被动交互开关');
+      return true;
+    }
+    const enabled = passiveToggle.shouldEnable;
+    setPassiveFeatureEnabled(bot.id, chatId, passiveToggle.feature, enabled);
+    await replyText(bot, messageId, `当前会话已${enabled ? '开启' : '关闭'}${passiveToggle.featureName}`);
+    return true;
+  }
+
   const douyinCommand = parseDouyinCommand(text);
   if (douyinCommand.isDouyin) {
     if (douyinCommand.hasConflictingAction) {
@@ -1415,6 +1495,7 @@ export function deleteOwnedFeishuBot(botId: number, userId: number) {
   db.prepare('DELETE FROM feishu_bot_default_commands WHERE bot_id = ?').run(botId);
   db.prepare('DELETE FROM feishu_chat_cron_tasks WHERE bot_id = ?').run(botId);
   db.prepare('DELETE FROM feishu_douyin_subscriptions WHERE bot_id = ?').run(botId);
+  db.prepare('DELETE FROM feishu_chat_passive_settings WHERE bot_id = ?').run(botId);
   db.prepare('DELETE FROM feishu_bots WHERE id = ? AND user_id = ?').run(botId, userId);
   tokenCache.delete(botId);
   return true;
