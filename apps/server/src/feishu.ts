@@ -1215,8 +1215,13 @@ async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string
   if (options.allowSetDefault) {
     const addCron = parseAddCronCommand(text);
     if (addCron.isAddCron) {
-      if (!addCron.cronExpr || !addCron.commandText) {
-        await replyText(bot, messageId, '用法：/add-cron "*/5 * * * *" "/douyin 123 [--count n]"');
+      if (!addCron.cronExpr) {
+        await replyText(bot, messageId, '用法：/add-cron "*/5 * * * *" "/douyin 123 [--count n]"；如果已设置 /set-default，也可以省略第二个参数');
+        return true;
+      }
+      const commandText = addCron.commandText || getDefaultCommand(bot.id);
+      if (!commandText) {
+        await replyText(bot, messageId, '用法：/add-cron "*/5 * * * *" "/douyin 123 [--count n]"；当前机器人未设置 /set-default，不能省略第二个参数');
         return true;
       }
       if (!chatId) {
@@ -1224,8 +1229,8 @@ async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string
         return true;
       }
       try {
-        const task = addCronTask(bot.id, chatId, addCron.cronExpr, addCron.commandText);
-        await replyText(bot, messageId, `已添加定时任务 #${task.id}，下次执行：${task.nextRunAt}\n${addCron.cronExpr} -> ${addCron.commandText}`);
+        const task = addCronTask(bot.id, chatId, addCron.cronExpr, commandText);
+        await replyText(bot, messageId, `已添加定时任务 #${task.id}，下次执行：${task.nextRunAt}\n${addCron.cronExpr} -> ${commandText}`);
       } catch (error) {
         await replyText(bot, messageId, error instanceof Error ? `添加定时任务失败：${error.message}` : '添加定时任务失败');
       }
