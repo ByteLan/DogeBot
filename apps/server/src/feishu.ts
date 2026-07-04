@@ -148,6 +148,7 @@ let cronSchedulerRunning = false;
 const FEISHU_EVENT_DEDUP_TTL_MS = 10 * 60 * 1000;
 const recentFeishuEventKeys = new Map<string, number>();
 const USERS_CARD_PERSON_LIST_CHUNK_SIZE = 100;
+const CARD_REFERENCE_READY_DELAY_MS = 1000;
 const RECENT_CHAT_MEMORY_LIMIT = 30;
 const DEFAULT_REACTION_EMOJIS = ['OK', 'DONE', 'THUMBSUP', 'HEART', 'LAUGH'];
 const PASSIVE_TOGGLE_COMMANDS = [
@@ -169,6 +170,10 @@ function rememberFeishuEventKey(eventKey: string) {
   if (recentFeishuEventKeys.has(eventKey)) return false;
   recentFeishuEventKeys.set(eventKey, now + FEISHU_EVENT_DEDUP_TTL_MS);
   return true;
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function openBase(domain: string) {
@@ -1161,6 +1166,7 @@ async function createCardEntity(client: Awaited<ReturnType<typeof feishuSdkClien
   });
   const cardId = createResult.data?.card_id;
   if (!cardId) throw new Error('failed to create card entity');
+  await sleep(CARD_REFERENCE_READY_DELAY_MS);
   return cardId;
 }
 
