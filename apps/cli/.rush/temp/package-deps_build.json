@@ -1,0 +1,14 @@
+{
+  "files": {
+    "apps/cli/.rush/temp/chunked-rush-logs/cli.build.chunks.jsonl": "c5eb36de59511e5a861a3a92f613aa25e91794f1",
+    "apps/cli/.rush/temp/shrinkwrap-deps.json": "783da156a2ecf3787ee6e263465cc301edb92faf",
+    "apps/cli/README.md": "23026364e3fd4f8a07a2d549578667f3df9f6eaa",
+    "apps/cli/package.json": "68a337befb6355ea035ebc850026b50536b0da69",
+    "apps/cli/pnpm-lock.yaml": "1f870121ca4dcc38c1056198fd0cc7cbe7e30a0b",
+    "apps/cli/pnpm-workspace.yaml": "7f5dfddca3cdb3a9ede5f10b383a4884d7968e7f",
+    "apps/cli/rush-logs/cli.build.log": "ccaa2b3dfa9c239a71fae6704fbab59541df537b",
+    "apps/cli/src/index.ts": "2c194d300b47f335b11cd67a5e18e1767e111ad6",
+    "apps/cli/tsconfig.json": "298be0a1389a6323e410cfc114c6394962498c88"
+  },
+  "arguments": "tsc -p tsconfig.json "
+}

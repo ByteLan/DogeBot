@@ -10,6 +10,7 @@
 | `/douyin` | 从当前机器人绑定用户的抖音收藏记录中随机返回一个视频链接 | `/douyin 123` |
 | `/set-default` | 设置当前机器人的未命中兜底指令 | `/set-default "/douyin 123"` |
 | `/add-cron` | 为当前聊天会话添加定时执行任务 | `/add-cron "*/5 * * * *" "/douyin 123"` |
+| 远程命令，如 `/cr` | 转发消息原文给已注册的远程客户端 | `/cr https://example.com/repo` |
 
 ## `/users`
 
@@ -158,3 +159,34 @@ https://www.douyin.com/video/{aweme_id}
 - 当前定时任务执行只支持 `/douyin {模拟点击文案}`。
 - 如果定时任务里的指令不是 `/douyin`，机器人会在目标会话提示该定时任务暂不支持该指令。
 - 删除机器人时会同步删除该机器人相关的定时任务。
+
+## 远程命令
+
+远程命令不是固定写死在服务端的命令，而是由登录后的远程客户端通过 `GET /api/remote-commands/connect` 注册到服务端内存中。注册只在长连接存活期间有效；客户端断开、服务端重启都会取消注册，直到客户端重连并重新注册。
+
+### 示例
+
+默认 CLI 客户端会注册 `/cr`：
+
+```bash
+cd apps/cli
+pnpm dev -- --username admin --password change-me --command /cr
+```
+
+之后向同一 DogeBot 用户绑定的飞书 bot 发送：
+
+```text
+/cr https://example.com/repo
+```
+
+服务端会把原始消息文本 `/cr https://example.com/repo` 转发给 CLI，CLI 默认直接打印：
+
+```text
+/cr https://example.com/repo
+```
+
+### 注意事项
+
+- 远程命令按 DogeBot 登录用户隔离；只有与 bot 绑定用户相同的远程客户端会收到转发。
+- 内置命令优先级高于远程命令，远程命令优先级高于默认兜底指令。
+- 同一用户可以注册多个远程客户端；多个客户端注册同一命令时会同时收到转发。

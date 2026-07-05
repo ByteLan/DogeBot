@@ -5,6 +5,7 @@ import { getRandomMmVideo, redirectRandomMmVideo, uploadDouyinAwemeRecords } fro
 import { createFeishuBotForUser, deleteOwnedFeishuBot, feishuWebhook, listFeishuBots, probeFeishuBot, publicBot, startFeishuCronScheduler, stopFeishuCronScheduler } from './feishu.js';
 import { feishuConnectionManager } from './feishuConnection.js';
 import { beginFeishuQrRegistration, pollFeishuQrRegistration } from './feishuOnboard.js';
+import { connectRemoteCommandClient, listRemoteCommandClients } from './remoteCommands.js';
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -30,6 +31,8 @@ app.get('/api/feishu/bots', requireAuth, listFeishuBots);
 app.get('/api/feishu/connections', requireAuth, (_req, res) => {
   res.json({ connections: feishuConnectionManager.snapshot() });
 });
+app.get('/api/remote-commands', requireAuth, listRemoteCommandClients);
+app.get('/api/remote-commands/connect', requireAuth, connectRemoteCommandClient);
 app.post('/api/douyin/aweme-records', requireAuth, uploadDouyinAwemeRecords);
 app.post('/api/feishu/bots', requireAuth, async (req: AuthenticatedRequest, res) => {
   if (!req.user) {

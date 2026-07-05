@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import type { AuthenticatedRequest } from './auth.js';
 import { db } from './db.js';
 import { randomDouyinAwemeIds, setDouyinAwemeNotifier, softDeleteDouyinAwemeRecords } from './douyin.js';
+import { dispatchRemoteCommand } from './remoteCommands.js';
 
 const FEISHU_BASE: Record<string, string> = {
   feishu: 'https://open.feishu.cn',
@@ -1384,6 +1385,30 @@ async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string
 
   const command = parseUsersCommand(text);
   if (!command.isUsers) {
+    const remoteCommand = dispatchRemoteCommand({
+      userId: bot.user_id,
+      text,
+      bot: {
+        id: bot.id,
+        name: bot.name
+      },
+      message: {
+        id: messageId,
+        chatId,
+        chatType: String(message?.chat_type || '').trim()
+      },
+      sender: senderIdentity(event)
+    });
+    if (remoteCommand.handled) {
+      await replyText(
+        bot,
+        messageId,
+        remoteCommand.delivered > 0
+          ? `已转发远程命令 ${remoteCommand.command} 到 ${remoteCommand.delivered} 个客户端`
+          : `远程命令 ${remoteCommand.command} 当前没有可用客户端`
+      );
+      return true;
+    }
     return false;
   }
 

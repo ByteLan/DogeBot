@@ -10,6 +10,7 @@
 - 扫码创建绑定：通过飞书 `/oauth/v1/app/registration` 注册流程创建新机器人，并自动绑定到当前用户。
 - 飞书长连接：每个 bot 对应一个独立 `WSClient`，服务启动后自动恢复已有连接。
 - `/users` 命令：记录某个 bot 下用户 at 过的人，并用飞书消息卡片返回历史列表。
+- 远程命令注册：登录后的客户端可通过 SSE 长连接把 `/cr` 这类 slash 命令注册到内存，连接断开或服务重启后自动失效。
 - SQLite 存储：用户、bot 绑定、at 用户记录都持久化到本地 SQLite。
 
 ## 目录结构
@@ -24,6 +25,7 @@ apps/server/
 │   ├── feishu.ts          # 飞书 bot API、消息处理、/users 命令
 │   ├── feishuConnection.ts # 飞书 WebSocket 长连接管理
 │   ├── feishuOnboard.ts    # 飞书扫码创建机器人注册流程
+│   ├── remoteCommands.ts   # 远程 slash 命令内存注册和 SSE 转发
 │   └── index.ts           # Express 服务入口
 ├── package.json
 ├── pnpm-lock.yaml
@@ -77,7 +79,7 @@ pnpm add-user <用户名> <密码>
 
 ## 宝塔面板长期运行
 
-推荐在宝塔里用 Node 项目或 PM2 管理器运行编译后的 `dist/index.js`，不要直接运行 TypeScript 开发命令。
+推荐在宝塔里用 Node 项目或 PM2 管理器运行编译后的 `dist/src/index.js`，不要直接运行 TypeScript 开发命令。
 
 首次部署：
 
@@ -103,8 +105,8 @@ DOGEBOT_DATA_DIR=/www/wwwroot/DogeBot-data pnpm add-user admin 'change-me'
 宝塔 Node 项目建议配置：
 
 - 项目目录：`/www/wwwroot/DogeBot/apps/server`
-- 启动文件：`dist/index.js`
-- 启动命令：`node dist/index.js`
+- 启动文件：`dist/src/index.js`
+- 启动命令：`node dist/src/index.js`
 - 端口：`3000`
 - Node 版本：建议 `22.x`
 - 环境变量：`PORT=3000`
@@ -126,7 +128,7 @@ DOGEBOT_FEISHU_DEBUG=0 \
 DOGEBOT_LLM_BASE_URL='https://api.openai.com/v1' \
 DOGEBOT_LLM_API_KEY='<OpenAI 兼容接口 Key>' \
 DOGEBOT_LLM_MODEL='<模型名>' \
-pm2 start dist/index.js --name dogebot-server --update-env
+pm2 start dist/src/index.js --name dogebot-server --update-env
 pm2 save
 ```
 
@@ -164,6 +166,8 @@ pm2 restart dogebot-server --update-env
 - `POST /api/login`：登录，入参为 `{ "username": "...", "password": "..." }`。
 - `GET /api/feishu/bots`：查询当前用户绑定的 bot。
 - `GET /api/feishu/connections`：查询服务端当前维护的飞书长连接状态。
+- `GET /api/remote-commands`：查询当前用户通过长连接注册的远程命令客户端。
+- `GET /api/remote-commands/connect?command=/cr`：建立 SSE 长连接并注册远程命令；需要 Bearer token，断开后注册自动取消。
 - `POST /api/feishu/bots`：绑定当前用户的 bot。
 - `POST /api/feishu/bots/:id/probe`：探测当前用户的 bot 凭证是否有效。
 - `POST /api/feishu/qr-registration/begin`：发起飞书扫码创建机器人流程，返回扫码链接和 `deviceCode`。
@@ -188,7 +192,8 @@ pm2 restart dogebot-server --update-env
 
 服务端默认使用飞书长连接接收事件。收到 `im.message.receive_v1` 后：
 
-- 如果是 `/users`、`/douyin`、`/set-default`、`/add-cron` 等命令，优先按命令逻辑处理。
+- 如果是 `/users`、`/douyin`、`/set-default`、`/add-cron` 等内置命令，优先按命令逻辑处理。
+- 如果命中当前 bot 绑定用户的远程客户端注册命令，例如 `/cr`，服务端会把原始消息文本转发给客户端并回复转发状态。
 - 如果配置了 bot 默认兜底指令，继续执行默认指令。
 - 普通文本消息不会要求 @ 机器人；服务端会按概率自动触发消息 reaction、复读、以及大模型模仿接话。
 - 大模型模仿接话需要配置 OpenAI 兼容接口的 URL、Key 和 model；未配置时只会跳过该项，不影响 reaction 和复读。

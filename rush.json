@@ -12,6 +12,10 @@
     {
       "packageName": "@dogebot/desktop",
       "projectFolder": "apps/desktop"
+    },
+    {
+      "packageName": "@dogebot/cli",
+      "projectFolder": "apps/cli"
     }
   ]
 }
