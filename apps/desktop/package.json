@@ -7,11 +7,13 @@
   "type": "module",
   "main": "dist/main.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json && vite build && node -e \"const fs=require('fs'); for (const file of ['preload.cjs','douyin-preload.cjs']) fs.copyFileSync('src/'+file, 'dist/'+file)\"",
+    "native:build": "cd native/clipboard-addon && node-gyp rebuild",
+    "native:clean": "cd native/clipboard-addon && node-gyp clean",
+    "build": "tsc -p tsconfig.json && vite build && node scripts/copy-runtime-assets.cjs",
     "dev": "pnpm build && electron dist/main.js",
     "package:dir": "pnpm build && electron-builder --dir",
     "package:mac": "pnpm build && electron-builder --mac",
-    "package:win": "pnpm build && electron-builder --win"
+    "package:win": "pnpm native:build && pnpm build && electron-builder --win"
   },
   "dependencies": {
     "@arco-design/web-react": "^2.66.15",
@@ -26,6 +28,7 @@
     "@vitejs/plugin-react": "^6.0.2",
     "electron": "^34.0.0",
     "electron-builder": "^26.15.0",
+    "node-gyp": "11.5.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
     "vite": "^8.0.16"

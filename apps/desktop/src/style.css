@@ -79,3 +79,120 @@ code {
 .json-card .arco-card-body {
   overflow: auto;
 }
+
+.clipboard-window-shell {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 28px;
+}
+
+.clipboard-window-shell > .arco-card {
+  margin-bottom: 18px;
+}
+
+.clipboard-status {
+  margin-bottom: 16px;
+}
+
+.clipboard-toolbar,
+.clipboard-library-tools,
+.clipboard-rename-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.clipboard-library-tools .arco-input-wrapper {
+  flex: 1;
+  min-width: 240px;
+}
+
+.clipboard-rename-row .arco-input-wrapper {
+  width: 320px;
+}
+
+.clipboard-paste-target {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 88px;
+  margin-bottom: 16px;
+  padding: 18px;
+  border: 1px dashed #60a5fa;
+  border-radius: 10px;
+  background: rgba(37, 99, 235, 0.14);
+  outline: none;
+}
+
+.clipboard-paste-target:focus {
+  border-style: solid;
+  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.24);
+}
+
+.clipboard-snapshot {
+  margin-bottom: 14px;
+  background: #111827;
+  border: 1px solid #374151;
+}
+
+.clipboard-meta {
+  margin-bottom: 12px;
+}
+
+.clipboard-items,
+.clipboard-snapshot-list {
+  display: flex;
+  width: 100%;
+}
+
+.clipboard-items {
+  flex-direction: column;
+  gap: 10px;
+}
+
+.clipboard-item {
+  padding: 12px;
+  border: 1px solid #374151;
+  border-radius: 8px;
+  background: #0f172a;
+}
+
+.clipboard-item-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.clipboard-text {
+  max-height: 220px;
+  margin: 10px 0 0;
+  padding: 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-radius: 8px;
+  background: #020617;
+  color: #e5e7eb;
+}
+
+.clipboard-image {
+  display: block;
+  max-width: 100%;
+  max-height: 320px;
+  margin-top: 10px;
+  border-radius: 8px;
+  object-fit: contain;
+}
+
+.clipboard-binary,
+.clipboard-empty {
+  padding: 14px;
+  border-radius: 8px;
+  background: #0f172a;
+  color: #9ca3af;
+}

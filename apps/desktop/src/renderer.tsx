@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Alert, Button, Card, Form, Grid, Input, InputNumber, Link, List, Select, Space, Switch, Tabs, Typography } from '@arco-design/web-react';
+import { Alert, Button, Card, Form, Grid, Input, InputNumber, Link, List, Message, Select, Space, Switch, Tabs, Tag, Typography } from '@arco-design/web-react';
 import '@arco-design/web-react/dist/css/arco.css';
 import { JsonView, allExpanded, collapseAllNested, darkStyles } from 'react-json-view-lite';
 import 'react-json-view-lite/dist/index.css';
@@ -69,6 +69,56 @@ type DouyinBridge = {
   onMonitorState: (listener: (data: DouyinMonitorState) => void) => () => void;
 };
 
+type ClipboardContentKind = 'text' | 'image' | 'binary';
+type ClipboardFilter = 'all' | ClipboardContentKind;
+
+type ClipboardContentItem = {
+  id: string;
+  type: string;
+  kind: ClipboardContentKind;
+  data: string;
+  size: number;
+  sourceKind?: string;
+  fileName?: string;
+  unavailable?: boolean;
+};
+
+type ClipboardSnapshot = {
+  id: string;
+  title: string;
+  createdAt: number;
+  items: ClipboardContentItem[];
+  source: 'paste' | 'native';
+};
+
+type ClipboardApplyResult = {
+  ok: boolean;
+  appliedTypes: string[];
+  skippedTypes: string[];
+  errors: Array<{ type: string; message: string }>;
+  verifiedFormats: string[];
+  textLength: number;
+};
+
+type ClipboardReadResult = {
+  ok: boolean;
+  title: string;
+  createdAt: number;
+  items: ClipboardContentItem[];
+  formats: string[];
+};
+
+type DogeBridge = {
+  _tools?: {
+    _clipboard?: {
+      _read_clipboard_content?: () => Promise<ClipboardReadResult>;
+      _apply_clipboard_content?: (
+        content: ClipboardSnapshot | { items: ClipboardContentItem[]; strategy?: 'safe' | 'custom-only' } | ClipboardContentItem[]
+      ) => Promise<ClipboardApplyResult>;
+    };
+  };
+};
+
 type DouyinEvent = {
   id: string;
   title: string;
@@ -119,6 +169,7 @@ type DouyinMonitorState = {
 declare global {
   interface Window {
     douyin?: DouyinBridge;
+    dogeBridge?: DogeBridge;
   }
 }
 
@@ -261,6 +312,416 @@ function appendEventRecord(records: Record<string, DouyinEvent[]>, taskId: strin
     ...records,
     [taskId]: [event, ...(records[taskId] || [])].slice(0, 10)
   };
+}
+
+const clipboardStorageKey = 'dogebot.tools.clipboard.snapshots';
+
+function createClipboardId() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function formatBytes(value: number) {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function getClipboardKind(type: string, sourceKind?: string): ClipboardContentKind {
+  if (sourceKind === 'string' || type.startsWith('text/')) return 'text';
+  if (type.startsWith('image/')) return 'image';
+  return 'binary';
+}
+
+function readClipboardString(item: DataTransferItem) {
+  return new Promise<string>((resolve) => item.getAsString((value) => resolve(value)));
+}
+
+function blobToDataUrl(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+function readStoredClipboardSnapshots() {
+  const raw = localStorage.getItem(clipboardStorageKey);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((item) => Array.isArray(item?.items)) as ClipboardSnapshot[] : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeStoredClipboardSnapshots(snapshots: ClipboardSnapshot[]) {
+  localStorage.setItem(clipboardStorageKey, JSON.stringify(snapshots));
+}
+
+function getClipboardKindLabel(kind: ClipboardContentKind) {
+  if (kind === 'text') return '文本';
+  if (kind === 'image') return '图片';
+  return '文件';
+}
+
+function getClipboardSnapshotSize(snapshot: ClipboardSnapshot) {
+  return snapshot.items.reduce((sum, item) => sum + item.size, 0);
+}
+
+function getClipboardSummary(snapshot: ClipboardSnapshot) {
+  const counts = snapshot.items.reduce<Record<ClipboardContentKind, number>>((result, item) => {
+    result[item.kind] += 1;
+    return result;
+  }, { text: 0, image: 0, binary: 0 });
+  return [
+    counts.text ? `${counts.text} 文本` : '',
+    counts.image ? `${counts.image} 图片` : '',
+    counts.binary ? `${counts.binary} 文件` : ''
+  ].filter(Boolean).join(' · ') || '空记录';
+}
+
+function snapshotMatches(snapshot: ClipboardSnapshot, query: string, filter: ClipboardFilter) {
+  const normalized = query.trim().toLowerCase();
+  if (filter !== 'all' && !snapshot.items.some((item) => item.kind === filter)) return false;
+  if (!normalized) return true;
+  return snapshot.title.toLowerCase().includes(normalized)
+    || snapshot.items.some((item) => item.type.toLowerCase().includes(normalized)
+      || item.sourceKind?.toLowerCase().includes(normalized)
+      || item.fileName?.toLowerCase().includes(normalized)
+      || (item.kind === 'text' && item.data.toLowerCase().includes(normalized)));
+}
+
+function normalizeClipboardReadResult(result: ClipboardReadResult): ClipboardSnapshot {
+  return {
+    id: createClipboardId(),
+    title: result.title || `系统剪切板 ${new Date().toLocaleString()}`,
+    createdAt: result.createdAt || Date.now(),
+    items: Array.isArray(result.items) ? result.items : [],
+    source: 'native'
+  };
+}
+
+async function readClipboardPasteSnapshot(clipboardData: DataTransfer): Promise<ClipboardSnapshot> {
+  const itemSnapshots: Array<
+    { type: string; sourceKind: 'string'; dataPromise: Promise<string> } |
+    { type: string; sourceKind: 'file'; file: File }
+  > = [];
+  const typeSnapshots: Array<{ type: string; data: string }> = [];
+  const fileKeys = new Set<string>();
+  const capturedTypes = new Set<string>();
+  const contents: ClipboardContentItem[] = [];
+
+  for (let index = 0; index < clipboardData.items.length; index += 1) {
+    const item = clipboardData.items[index];
+    const type = item.type || 'application/octet-stream';
+    if (item.kind === 'string') {
+      itemSnapshots.push({ type, sourceKind: 'string', dataPromise: readClipboardString(item) });
+      continue;
+    }
+    if (item.kind === 'file') {
+      const file = item.getAsFile();
+      if (!file) continue;
+      fileKeys.add(`${file.name}-${file.type}-${file.size}-${file.lastModified}`);
+      itemSnapshots.push({ type, sourceKind: 'file', file });
+    }
+  }
+
+  for (let index = 0; index < clipboardData.files.length; index += 1) {
+    const file = clipboardData.files[index];
+    const key = `${file.name}-${file.type}-${file.size}-${file.lastModified}`;
+    if (fileKeys.has(key)) continue;
+    fileKeys.add(key);
+    itemSnapshots.push({ type: file.type || 'application/octet-stream', sourceKind: 'file', file });
+  }
+
+  for (let index = 0; index < clipboardData.types.length; index += 1) {
+    const type = clipboardData.types[index];
+    typeSnapshots.push({ type, data: type === 'Files' ? '' : clipboardData.getData(type) });
+  }
+
+  for (const item of itemSnapshots) {
+    if (item.sourceKind === 'string') {
+      const data = await item.dataPromise;
+      contents.push({
+        id: createClipboardId(),
+        type: item.type,
+        kind: getClipboardKind(item.type, item.sourceKind),
+        data,
+        size: new Blob([data], { type: item.type }).size,
+        sourceKind: item.sourceKind
+      });
+      capturedTypes.add(item.type);
+      continue;
+    }
+    const type = item.file.type || item.type;
+    contents.push({
+      id: createClipboardId(),
+      type,
+      kind: getClipboardKind(type, item.sourceKind),
+      data: await blobToDataUrl(item.file),
+      size: item.file.size,
+      sourceKind: item.sourceKind,
+      fileName: item.file.name || undefined
+    });
+    capturedTypes.add(type);
+    capturedTypes.add(item.type);
+  }
+
+  for (const { type, data } of typeSnapshots) {
+    if (type === 'Files' || capturedTypes.has(type)) continue;
+    contents.push({
+      id: createClipboardId(),
+      type,
+      kind: getClipboardKind(type, 'string'),
+      data,
+      size: data ? new Blob([data], { type }).size : 0,
+      sourceKind: 'string',
+      unavailable: !data
+    });
+  }
+
+  return {
+    id: createClipboardId(),
+    title: `粘贴 ${new Date().toLocaleString()}`,
+    createdAt: Date.now(),
+    items: contents,
+    source: 'paste'
+  };
+}
+
+function ClipboardItemPreview({
+  item,
+  onApplyItem
+}: {
+  item: ClipboardContentItem;
+  onApplyItem: (item: ClipboardContentItem, strategy: 'safe' | 'custom-only') => void;
+}) {
+  return (
+    <div className="clipboard-item">
+      <div className="clipboard-item-head">
+        <Space wrap>
+          <Tag color={item.kind === 'text' ? 'green' : item.kind === 'image' ? 'blue' : 'gray'}>{getClipboardKindLabel(item.kind)}</Tag>
+          <Text type="secondary">{item.type}</Text>
+          {item.sourceKind ? <Text type="secondary">kind: {item.sourceKind}</Text> : null}
+          <Text type="secondary">{formatBytes(item.size)}</Text>
+          {item.fileName ? <Text type="secondary">{item.fileName}</Text> : null}
+        </Space>
+        <Space>
+          <Button size="mini" disabled={item.unavailable} onClick={() => onApplyItem(item, 'safe')}>标准写入</Button>
+          <Button size="mini" disabled={item.unavailable || ['text/plain', 'text/html', 'text/rtf'].includes(item.type)} onClick={() => onApplyItem(item, 'custom-only')}>自定义写入</Button>
+        </Space>
+      </div>
+      {item.kind === 'text' ? (
+        <pre className="clipboard-text">{item.unavailable ? '该类型只暴露了 MIME，未开放内容数据' : item.data || '空文本'}</pre>
+      ) : null}
+      {item.kind === 'image' ? <img className="clipboard-image" src={item.data} alt="clipboard" /> : null}
+      {item.kind === 'binary' ? <div className="clipboard-binary">二进制内容已保存</div> : null}
+    </div>
+  );
+}
+
+function ClipboardSnapshotCard({
+  snapshot,
+  onApply,
+  onDelete,
+  onRename
+}: {
+  snapshot: ClipboardSnapshot;
+  onApply: (snapshot: ClipboardSnapshot, strategy: 'safe' | 'custom-only') => void;
+  onDelete?: (id: string) => void;
+  onRename?: (snapshot: ClipboardSnapshot) => void;
+}) {
+  const totalBytes = getClipboardSnapshotSize(snapshot);
+  return (
+    <Card
+      className="clipboard-snapshot"
+      title={snapshot.title}
+      extra={(
+        <Space>
+          <Button size="small" type="primary" onClick={() => onApply(snapshot, 'safe')}>标准写入</Button>
+          <Button size="small" onClick={() => onApply(snapshot, 'custom-only')}>自定义 MIME 写入</Button>
+          {onRename ? <Button size="small" onClick={() => onRename(snapshot)}>重命名</Button> : null}
+          {onDelete ? <Button size="small" status="danger" onClick={() => onDelete(snapshot.id)}>删除</Button> : null}
+        </Space>
+      )}
+    >
+      <Space className="clipboard-meta" wrap>
+        <Text type="secondary">{snapshot.items.length} 项</Text>
+        <Text type="secondary">{getClipboardSummary(snapshot)}</Text>
+        <Text type="secondary">{formatBytes(totalBytes)}</Text>
+        <Text type="secondary">{new Date(snapshot.createdAt).toLocaleString()}</Text>
+      </Space>
+      <div className="clipboard-items">
+        {snapshot.items.map((item) => (
+          <ClipboardItemPreview
+            key={item.id}
+            item={item}
+            onApplyItem={(nextItem, strategy) => onApply({ ...snapshot, items: [nextItem] }, strategy)}
+          />
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function ClipboardToolWindow() {
+  const [snapshots, setSnapshots] = useState<ClipboardSnapshot[]>(() => readStoredClipboardSnapshots());
+  const [currentSnapshot, setCurrentSnapshot] = useState<ClipboardSnapshot | undefined>();
+  const [status, setStatus] = useState(window.dogeBridge?._tools?._clipboard?._apply_clipboard_content ? '剪切板 native bridge 已连接' : '剪切板 native bridge 未加载');
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<ClipboardFilter>('all');
+  const [saveTitle, setSaveTitle] = useState('');
+  const [renamingId, setRenamingId] = useState('');
+  const [renameTitle, setRenameTitle] = useState('');
+
+  const filteredSnapshots = useMemo(
+    () => snapshots.filter((snapshot) => snapshotMatches(snapshot, query, filter)),
+    [filter, query, snapshots]
+  );
+
+  const persistSnapshots = useCallback((nextSnapshots: ClipboardSnapshot[]) => {
+    writeStoredClipboardSnapshots(nextSnapshots);
+    setSnapshots(nextSnapshots);
+  }, []);
+
+  const handlePaste = useCallback(async (event: React.ClipboardEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const snapshot = await readClipboardPasteSnapshot(event.clipboardData);
+    setCurrentSnapshot(snapshot);
+    setSaveTitle(snapshot.title);
+    setStatus(`已捕获 ${snapshot.items.length} 项内容`);
+  }, []);
+
+  const readSystemClipboard = useCallback(async () => {
+    const read = window.dogeBridge?._tools?._clipboard?._read_clipboard_content;
+    if (!read) {
+      setStatus('native bridge 未加载，无法读取系统剪切板');
+      return;
+    }
+    try {
+      const snapshot = normalizeClipboardReadResult(await read());
+      setCurrentSnapshot(snapshot);
+      setSaveTitle(snapshot.title);
+      setStatus(`已读取系统剪切板：${snapshot.items.length} 项`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : '读取系统剪切板失败');
+    }
+  }, []);
+
+  const saveCurrent = useCallback(() => {
+    if (!currentSnapshot || currentSnapshot.items.length === 0) {
+      setStatus('没有可保存的内容');
+      return;
+    }
+    const nextSnapshot = {
+      ...currentSnapshot,
+      id: createClipboardId(),
+      title: saveTitle.trim() || currentSnapshot.title,
+      createdAt: Date.now()
+    };
+    persistSnapshots([nextSnapshot, ...snapshots]);
+    setStatus('已保存到本地');
+  }, [currentSnapshot, persistSnapshots, saveTitle, snapshots]);
+
+  const applySnapshot = useCallback(async (snapshot: ClipboardSnapshot, strategy: 'safe' | 'custom-only') => {
+    const apply = window.dogeBridge?._tools?._clipboard?._apply_clipboard_content;
+    if (!apply) {
+      Message.error('native bridge 未加载，无法写入系统剪切板');
+      return;
+    }
+    try {
+      const result = await apply({ items: snapshot.items, strategy });
+      const errors = result.errors.length ? `；错误：${result.errors.map((item) => `${item.type}: ${item.message}`).join('；')}` : '';
+      const skipped = result.skippedTypes.length ? `；跳过：${result.skippedTypes.join('、')}` : '';
+      const verified = result.verifiedFormats.length ? `；系统格式：${result.verifiedFormats.join('、')}` : '';
+      const message = `${strategy === 'custom-only' ? '自定义 MIME' : '标准'}${result.ok ? '写入成功' : '写入失败'}：${result.appliedTypes.join('、') || '无'}${skipped}${errors}${verified}`;
+      if (result.ok) {
+        Message.info(message);
+        return;
+      }
+      Message.error(message);
+    } catch (error) {
+      Message.error(error instanceof Error ? error.message : '写入系统剪切板失败');
+    }
+  }, []);
+
+  const deleteSnapshot = useCallback((id: string) => {
+    persistSnapshots(snapshots.filter((snapshot) => snapshot.id !== id));
+  }, [persistSnapshots, snapshots]);
+
+  const startRename = useCallback((snapshot: ClipboardSnapshot) => {
+    setRenamingId(snapshot.id);
+    setRenameTitle(snapshot.title);
+  }, []);
+
+  const commitRename = useCallback(() => {
+    const title = renameTitle.trim();
+    if (!renamingId || !title) return;
+    persistSnapshots(snapshots.map((snapshot) => snapshot.id === renamingId ? { ...snapshot, title } : snapshot));
+    setRenamingId('');
+    setRenameTitle('');
+  }, [persistSnapshots, renameTitle, renamingId, snapshots]);
+
+  return (
+    <main className="clipboard-window-shell">
+      <Title heading={2}>剪切板工具</Title>
+      <Alert className="clipboard-status" type="info" content={status} />
+
+      <Card title="粘贴捕获">
+        <Space className="clipboard-toolbar" wrap>
+          <Button type="primary" onClick={readSystemClipboard}>读取系统剪切板</Button>
+          <Input value={saveTitle} placeholder="记录名称" onChange={setSaveTitle} style={{ width: 280 }} />
+          <Button type="primary" onClick={saveCurrent} disabled={!currentSnapshot}>保存当前内容</Button>
+        </Space>
+        <div className="clipboard-paste-target" tabIndex={0} onPaste={handlePaste}>
+          <Text bold>Ctrl + V</Text>
+          <Text type="secondary">捕获文本、图片、文件和自定义 MIME</Text>
+        </div>
+        {currentSnapshot ? (
+          <ClipboardSnapshotCard snapshot={currentSnapshot} onApply={applySnapshot} />
+        ) : (
+          <div className="clipboard-empty">暂无捕获内容</div>
+        )}
+      </Card>
+
+      <Card title="本地记录">
+        <div className="clipboard-library-tools">
+          <Input value={query} placeholder="搜索名称、文本内容或 MIME" onChange={setQuery} />
+          <Select value={filter} onChange={(value) => setFilter(String(value) as ClipboardFilter)} style={{ width: 140 }}>
+            <Select.Option value="all">全部</Select.Option>
+            <Select.Option value="text">文本</Select.Option>
+            <Select.Option value="image">图片</Select.Option>
+            <Select.Option value="binary">文件</Select.Option>
+          </Select>
+          <Button status="danger" disabled={snapshots.length === 0} onClick={() => persistSnapshots([])}>清空</Button>
+        </div>
+        {renamingId ? (
+          <div className="clipboard-rename-row">
+            <Input value={renameTitle} placeholder="记录名称" onChange={setRenameTitle} />
+            <Button type="primary" onClick={commitRename}>保存名称</Button>
+            <Button onClick={() => setRenamingId('')}>取消</Button>
+          </div>
+        ) : null}
+        {filteredSnapshots.length === 0 ? (
+          <div className="clipboard-empty">暂无保存记录</div>
+        ) : (
+          <Space direction="vertical" className="clipboard-snapshot-list">
+            {filteredSnapshots.map((snapshot) => (
+              <ClipboardSnapshotCard
+                key={snapshot.id}
+                snapshot={snapshot}
+                onApply={applySnapshot}
+                onDelete={deleteSnapshot}
+                onRename={startRename}
+              />
+            ))}
+          </Space>
+        )}
+      </Card>
+    </main>
+  );
 }
 
 function App() {
@@ -1012,4 +1473,8 @@ function App() {
   );
 }
 
-createRoot(document.getElementById('root')!).render(<App />);
+const windowMode = new URLSearchParams(window.location.search).get('window');
+
+createRoot(document.getElementById('root')!).render(
+  windowMode === 'clipboard-tool' ? <ClipboardToolWindow /> : <App />
+);

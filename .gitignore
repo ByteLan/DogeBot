@@ -3,6 +3,7 @@ common/temp/
 common/autoinstallers/*/node_modules/
 dist/
 release/
+apps/desktop/native/clipboard-addon/build/
 .DS_Store
 .env
 # *.db

@@ -1,8 +1,11 @@
-import { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, session } from 'electron';
+import { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, session, clipboard } from 'electron';
+import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const requireNative = createRequire(import.meta.url);
 const douyinUrl = 'https://www.douyin.com';
 const defaultFavoriteUrl = 'https://www.douyin.com/user/self?from_tab_name=main&showSubTab=favorite_folder&showTab=favorite_collection';
 const defaultCollectListUrl = 'https://www.douyin.com/aweme/v1/web/collects/video/list/';
@@ -65,6 +68,7 @@ app.commandLine.appendSwitch('lang', 'zh-CN');
 
 let mainWindow: BrowserWindow | undefined;
 let douyinWindow: BrowserWindow | undefined;
+let clipboardWindow: BrowserWindow | undefined;
 let monitorTimer: NodeJS.Timeout | undefined;
 let tray: Tray | undefined;
 let appQuitting = false;
@@ -89,12 +93,60 @@ const debuggerDetachListenerAttached = new WeakSet<BrowserWindow>();
 const devToolsShortcutAttached = new WeakSet<BrowserWindow>();
 let douyinSessionConfigured = false;
 
+type ClipboardContentItem = {
+  id?: string;
+  type?: string;
+  kind?: 'text' | 'image' | 'binary';
+  data?: string;
+  size?: number;
+  sourceKind?: string;
+  fileName?: string;
+  unavailable?: boolean;
+};
+
+type ClipboardApplyContent = {
+  items?: ClipboardContentItem[];
+  strategy?: 'safe' | 'custom-only';
+} | ClipboardContentItem[];
+
+type ClipboardApplyResult = {
+  ok: boolean;
+  appliedTypes: string[];
+  skippedTypes: string[];
+  errors: Array<{ type: string; message: string }>;
+  verifiedFormats: string[];
+  textLength: number;
+};
+
+type ClipboardReadResult = {
+  ok: boolean;
+  title: string;
+  createdAt: number;
+  items: ClipboardContentItem[];
+  formats: string[];
+};
+
+type ClipboardNativeAddon = {
+  writeCustomFormats: (items: Array<{ type: string; data: Buffer }>) => { writtenTypes?: string[] };
+};
+
+let clipboardNativeAddonLoadAttempted = false;
+let clipboardNativeAddon: ClipboardNativeAddon | undefined;
+
 function logDouyin(message: string, data?: unknown) {
   if (data === undefined) {
     console.log(`[douyin] ${message}`);
     return;
   }
   console.log(`[douyin] ${message}`, data);
+}
+
+function logClipboard(message: string, data?: unknown) {
+  if (data === undefined) {
+    console.log(`[clipboard] ${message}`);
+    return;
+  }
+  console.log(`[clipboard] ${message}`, data);
 }
 
 function installDevToolsShortcut(win: BrowserWindow) {
@@ -287,6 +339,14 @@ function showMainWindow() {
   sendMonitorState();
 }
 
+function showClipboardToolWindow() {
+  if (!clipboardWindow || clipboardWindow.isDestroyed()) createClipboardToolWindow();
+  if (!clipboardWindow) return;
+  if (clipboardWindow.isMinimized()) clipboardWindow.restore();
+  clipboardWindow.show();
+  clipboardWindow.focus();
+}
+
 function hideMainWindowToTray() {
   mainWindow?.hide();
 }
@@ -295,6 +355,7 @@ function updateTrayMenu() {
   if (!tray) return;
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '显示 DogeBot', click: showMainWindow },
+    { label: '显示剪切板工具', click: showClipboardToolWindow },
     {
       label: '停止监听',
       click: () => stopMonitor(),
@@ -311,11 +372,20 @@ function updateTrayMenu() {
   ]));
 }
 
+function updateDockMenu() {
+  if (process.platform !== 'darwin' || !app.dock) return;
+  app.dock.setMenu(Menu.buildFromTemplate([
+    { label: '显示 DogeBot', click: showMainWindow },
+    { label: '显示剪切板工具', click: showClipboardToolWindow }
+  ]));
+}
+
 function createTray() {
   if (tray) return;
   tray = new Tray(buildTrayIcon());
   tray.setToolTip('DogeBot');
   updateTrayMenu();
+  updateDockMenu();
   tray.on('click', showMainWindow);
 }
 
@@ -426,6 +496,29 @@ function createWindow() {
     if (mainWindow === win) mainWindow = undefined;
   });
   win.loadFile(join(__dirname, 'index.html'));
+}
+
+function createClipboardToolWindow() {
+  const win = new BrowserWindow({
+    width: 1120,
+    height: 780,
+    title: 'DogeBot 剪切板工具',
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      preload: join(__dirname, 'preload.cjs')
+    }
+  });
+  clipboardWindow = win;
+  win.on('close', (event: any) => {
+    if (appQuitting) return;
+    event.preventDefault();
+    win.hide();
+  });
+  win.on('closed', () => {
+    if (clipboardWindow === win) clipboardWindow = undefined;
+  });
+  win.loadFile(join(__dirname, 'index.html'), { query: { window: 'clipboard-tool' } });
 }
 
 function ensureDouyinWindow() {
@@ -1101,6 +1194,465 @@ function stopMonitor() {
   logDouyin('monitor stopped');
 }
 
+function normalizeClipboardItems(input: unknown) {
+  const content = input as ClipboardApplyContent | undefined;
+  const items = Array.isArray(content) ? content : Array.isArray(content?.items) ? content.items : [];
+  return items.filter((item) => item && typeof item === 'object' && !item.unavailable);
+}
+
+function normalizeClipboardStrategy(input: unknown) {
+  if (Array.isArray(input) || !input || typeof input !== 'object') return 'safe';
+  const strategy = (input as { strategy?: unknown }).strategy;
+  return strategy === 'custom-only' ? 'custom-only' : 'safe';
+}
+
+function parseDataUrl(value: string) {
+  const match = /^data:([^;,]+)?(;base64)?,(.*)$/s.exec(value);
+  if (!match) return undefined;
+  const mimeType = match[1] || 'application/octet-stream';
+  const isBase64 = Boolean(match[2]);
+  const body = match[3] || '';
+  return {
+    mimeType,
+    buffer: Buffer.from(isBase64 ? body : decodeURIComponent(body), isBase64 ? 'base64' : 'utf8')
+  };
+}
+
+function itemToBuffer(item: ClipboardContentItem) {
+  const type = typeof item.type === 'string' && item.type.trim() ? item.type.trim() : 'application/octet-stream';
+  const data = typeof item.data === 'string' ? item.data : '';
+  if (data.startsWith('data:')) {
+    const parsed = parseDataUrl(data);
+    if (parsed) return { type, buffer: parsed.buffer };
+  }
+  return { type, buffer: Buffer.from(data, 'utf8') };
+}
+
+function loadClipboardNativeAddon() {
+  if (process.platform !== 'win32') return undefined;
+  if (clipboardNativeAddonLoadAttempted) return clipboardNativeAddon;
+  clipboardNativeAddonLoadAttempted = true;
+
+  const addonPath = join(__dirname, 'native', 'doge_clipboard_native.node');
+  try {
+    const addon = requireNative(addonPath) as ClipboardNativeAddon;
+    if (!addon || typeof addon.writeCustomFormats !== 'function') {
+      throw new Error('writeCustomFormats export is missing');
+    }
+    clipboardNativeAddon = addon;
+    logClipboard('native addon loaded', { addonPath });
+  } catch (error) {
+    logClipboard('native addon load failed', {
+      addonPath,
+      message: error instanceof Error ? error.message : error
+    });
+  }
+
+  return clipboardNativeAddon;
+}
+
+function writeWindowsCustomClipboardBuffers(buffers: Array<{ type: string; buffer: Buffer }>) {
+  const addon = loadClipboardNativeAddon();
+  if (!addon) {
+    throw new Error('Windows native clipboard addon 未加载，请先执行 pnpm native:build && pnpm build');
+  }
+
+  return addon.writeCustomFormats(buffers.map((item) => ({
+    type: item.type,
+    data: item.buffer
+  })));
+}
+
+function writeMacCustomClipboardBuffers(buffers: Array<{ type: string; buffer: Buffer }>) {
+  const payload = {
+    items: buffers.map((item) => ({
+      type: item.type,
+      base64: item.buffer.toString('base64')
+    }))
+  };
+  const script = `
+ObjC.import('AppKit');
+ObjC.import('Foundation');
+
+function unwrap(value) {
+  return ObjC.unwrap(value);
+}
+
+const inputData = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile;
+const inputString = unwrap($.NSString.alloc.initWithDataEncoding(inputData, $.NSUTF8StringEncoding));
+const payload = JSON.parse(inputString || '{"items":[]}');
+const pasteboard = $.NSPasteboard.generalPasteboard;
+pasteboard.clearContents;
+
+for (const item of payload.items) {
+  const data = $.NSData.alloc.initWithBase64EncodedStringOptions($(String(item.base64 || '')), 0);
+  if (!data) throw new Error('NSData decode failed: ' + item.type);
+  const ok = pasteboard.setDataForType(data, $(String(item.type || 'application/octet-stream')));
+  if (!ok) throw new Error('setData:forType failed: ' + item.type);
+}
+`;
+  const result = spawnSync('osascript', ['-l', 'JavaScript', '-e', script], {
+    input: JSON.stringify(payload),
+    encoding: 'utf8',
+    timeout: 10_000
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error((result.stderr || result.stdout || `osascript exited ${result.status}`).trim());
+  }
+}
+
+function hasNativeClipboardData(data: Electron.Data) {
+  return Boolean(data.text || data.html || data.rtf || data.image);
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function getClipboardWriteVerification(attemptedTypes: string[], skippedTypes: string[] = []) {
+  const verifiedFormats = clipboard.availableFormats();
+  const verifiedSet = new Set(verifiedFormats);
+  const text = clipboard.readText();
+  const finalSkippedTypes = [...skippedTypes];
+  for (const type of attemptedTypes) {
+    if (type === 'text/plain') {
+      if (text.length === 0 && !verifiedSet.has('text/plain')) finalSkippedTypes.push(type);
+      continue;
+    }
+    if (!verifiedSet.has(type)) finalSkippedTypes.push(type);
+  }
+  return {
+    verifiedFormats,
+    textLength: text.length,
+    skippedTypes: uniqueStrings(finalSkippedTypes)
+  };
+}
+
+function getCustomClipboardWriteVerification(buffers: Array<{ type: string; buffer: Buffer }>, skippedTypes: string[] = []) {
+  const finalSkippedTypes = [...skippedTypes];
+  for (const item of buffers) {
+    try {
+      const actual = clipboard.readBuffer(item.type);
+      logClipboard('verify custom buffer', {
+        type: item.type,
+        expectedBytes: item.buffer.byteLength,
+        actualBytes: actual.byteLength,
+        equals: actual.equals(item.buffer)
+      });
+      if (!actual.equals(item.buffer)) finalSkippedTypes.push(item.type);
+    } catch {
+      logClipboard('verify custom buffer failed', { type: item.type });
+      finalSkippedTypes.push(item.type);
+    }
+  }
+  return {
+    verifiedFormats: clipboard.availableFormats(),
+    textLength: clipboard.readText().length,
+    skippedTypes: uniqueStrings(finalSkippedTypes)
+  };
+}
+
+function applyClipboardContent(input: unknown): ClipboardApplyResult {
+  const items = normalizeClipboardItems(input);
+  const strategy = normalizeClipboardStrategy(input);
+  const appliedTypes: string[] = [];
+  const skippedTypes: string[] = [];
+  const errors: Array<{ type: string; message: string }> = [];
+  const nativeData: Electron.Data = {};
+  const standardTypes: string[] = [];
+  const customBuffers: Array<{ type: string; buffer: Buffer }> = [];
+  const seenTypes = new Set<string>();
+
+  logClipboard('apply start', {
+    strategy,
+    itemCount: items.length,
+    items: items.map((item) => ({
+      type: item.type,
+      kind: item.kind,
+      sourceKind: item.sourceKind,
+      size: item.size,
+      fileName: item.fileName,
+      unavailable: item.unavailable,
+      dataLength: typeof item.data === 'string' ? item.data.length : 0
+    }))
+  });
+
+  for (const item of items) {
+    const type = typeof item.type === 'string' && item.type.trim() ? item.type.trim() : 'application/octet-stream';
+    if (seenTypes.has(type)) continue;
+    seenTypes.add(type);
+    try {
+      if (type === 'text/plain') {
+        nativeData.text = typeof item.data === 'string' ? item.data : '';
+        standardTypes.push(type);
+        continue;
+      }
+      if (type === 'text/html') {
+        nativeData.html = typeof item.data === 'string' ? item.data : '';
+        standardTypes.push(type);
+        continue;
+      }
+      if (type === 'text/rtf') {
+        nativeData.rtf = typeof item.data === 'string' ? item.data : '';
+        standardTypes.push(type);
+        continue;
+      }
+      const { buffer } = itemToBuffer({ ...item, type });
+      if (type.startsWith('image/')) {
+        const image = nativeImage.createFromBuffer(buffer);
+        if (!image.isEmpty()) {
+          nativeData.image = image;
+          standardTypes.push(type);
+          customBuffers.push({ type, buffer });
+          continue;
+        }
+      }
+      customBuffers.push({ type, buffer });
+    } catch (error) {
+      logClipboard('prepare item failed', {
+        type,
+        message: error instanceof Error ? error.message : error
+      });
+      errors.push({ type, message: error instanceof Error ? error.message : '写入数据转换失败' });
+    }
+  }
+
+  if (!nativeData.text) {
+    const firstText = items.find((item) => item.kind === 'text' && typeof item.data === 'string' && item.data);
+    if (firstText?.data) {
+      nativeData.text = firstText.data;
+      if (!standardTypes.includes('text/plain')) standardTypes.push('text/plain');
+    }
+  }
+
+  if (items.length === 0 || (!hasNativeClipboardData(nativeData) && customBuffers.length === 0)) {
+    logClipboard('apply skipped: no writable content', {
+      currentFormats: clipboard.availableFormats(),
+      currentTextLength: clipboard.readText().length
+    });
+    return {
+      ok: false,
+      appliedTypes: [],
+      skippedTypes: [],
+      errors: [{ type: 'clipboard', message: '没有可写入的剪切板内容，已保留当前系统剪切板' }],
+      verifiedFormats: clipboard.availableFormats(),
+      textLength: clipboard.readText().length
+    };
+  }
+
+  if (strategy === 'custom-only' && customBuffers.length === 0) {
+    logClipboard('apply skipped: no custom buffers', {
+      currentFormats: clipboard.availableFormats(),
+      currentTextLength: clipboard.readText().length
+    });
+    return {
+      ok: false,
+      appliedTypes: [],
+      skippedTypes: [],
+      errors: [{ type: 'clipboard', message: '没有可写入的自定义 MIME 内容，已保留当前系统剪切板' }],
+      verifiedFormats: clipboard.availableFormats(),
+      textLength: clipboard.readText().length
+    };
+  }
+
+  const windowsNativeAddon = strategy === 'custom-only' && process.platform === 'win32'
+    ? loadClipboardNativeAddon()
+    : undefined;
+
+  if (strategy === 'custom-only' && process.platform === 'win32' && customBuffers.length > 1 && !windowsNativeAddon) {
+    const message = 'Windows native clipboard addon 未加载，无法一次写入多个自定义 MIME。请先执行 pnpm native:build && pnpm build。已保留当前系统剪切板。';
+    logClipboard('win32 custom write blocked: native helper required', {
+      customTypes: customBuffers.map((item) => ({ type: item.type, byteLength: item.buffer.byteLength })),
+      currentFormats: clipboard.availableFormats(),
+      currentTextLength: clipboard.readText().length
+    });
+    return {
+      ok: false,
+      appliedTypes: [],
+      skippedTypes: uniqueStrings(customBuffers.map((item) => item.type)),
+      errors: [{ type: 'clipboard', message }],
+      verifiedFormats: clipboard.availableFormats(),
+      textLength: clipboard.readText().length
+    };
+  }
+
+  try {
+    logClipboard('apply prepared', {
+      strategy,
+      standardTypes,
+      customTypes: customBuffers.map((item) => ({ type: item.type, byteLength: item.buffer.byteLength })),
+      hasText: Boolean(nativeData.text),
+      hasHtml: Boolean(nativeData.html),
+      hasRtf: Boolean(nativeData.rtf),
+      hasImage: Boolean(nativeData.image)
+    });
+    const customWriterClearsClipboard = strategy === 'custom-only' && (Boolean(windowsNativeAddon) || process.platform === 'darwin');
+    if (!customWriterClearsClipboard) {
+      clipboard.clear();
+      logClipboard('clipboard cleared');
+    }
+    if (strategy === 'custom-only') {
+      if (process.platform === 'win32' && windowsNativeAddon) {
+        logClipboard('win32 native addon custom write start', {
+          customTypes: customBuffers.map((item) => ({ type: item.type, byteLength: item.buffer.byteLength }))
+        });
+        const nativeResult = writeWindowsCustomClipboardBuffers(customBuffers);
+        appliedTypes.push(...(nativeResult.writtenTypes?.length ? nativeResult.writtenTypes : customBuffers.map((item) => item.type)));
+        logClipboard('win32 native addon custom write done', {
+          nativeResult,
+          availableFormats: clipboard.availableFormats()
+        });
+      } else if (process.platform === 'darwin') {
+        logClipboard('darwin batch custom write start', {
+          customTypes: customBuffers.map((item) => ({ type: item.type, byteLength: item.buffer.byteLength }))
+        });
+        writeMacCustomClipboardBuffers(customBuffers);
+        appliedTypes.push(...customBuffers.map((item) => item.type));
+        logClipboard('darwin batch custom write done', {
+          availableFormats: clipboard.availableFormats()
+        });
+      } else {
+        for (const item of customBuffers) {
+          try {
+            logClipboard('writeBuffer start', { type: item.type, byteLength: item.buffer.byteLength });
+            clipboard.writeBuffer(item.type, item.buffer);
+            appliedTypes.push(item.type);
+            logClipboard('writeBuffer done', {
+              type: item.type,
+              availableFormats: clipboard.availableFormats()
+            });
+          } catch (error) {
+            logClipboard('writeBuffer failed', {
+              type: item.type,
+              message: error instanceof Error ? error.message : error
+            });
+            errors.push({ type: item.type, message: error instanceof Error ? error.message : 'writeBuffer 失败' });
+          }
+        }
+      }
+    } else {
+      skippedTypes.push(...customBuffers.map((item) => item.type));
+      if (hasNativeClipboardData(nativeData)) {
+        logClipboard('native write start', {
+          standardTypes,
+          textLength: typeof nativeData.text === 'string' ? nativeData.text.length : 0,
+          htmlLength: typeof nativeData.html === 'string' ? nativeData.html.length : 0,
+          rtfLength: typeof nativeData.rtf === 'string' ? nativeData.rtf.length : 0,
+          hasImage: Boolean(nativeData.image)
+        });
+        clipboard.write(nativeData);
+        appliedTypes.push(...standardTypes);
+        logClipboard('native write done', {
+          availableFormats: clipboard.availableFormats(),
+          textLength: clipboard.readText().length
+        });
+      }
+    }
+  } catch (error) {
+    logClipboard('apply failed', {
+      message: error instanceof Error ? error.message : error,
+      formats: clipboard.availableFormats()
+    });
+    return {
+      ok: false,
+      appliedTypes: [],
+      skippedTypes: items.map((item) => item.type || 'application/octet-stream'),
+      errors: [{ type: 'clipboard', message: error instanceof Error ? error.message : '写入剪切板失败' }],
+      verifiedFormats: clipboard.availableFormats(),
+      textLength: clipboard.readText().length
+    };
+  }
+
+  const verification = strategy === 'custom-only'
+    ? getCustomClipboardWriteVerification(customBuffers.filter((item) => appliedTypes.includes(item.type)), skippedTypes)
+    : getClipboardWriteVerification(appliedTypes, skippedTypes);
+  const result = {
+    ok: appliedTypes.length > 0 && errors.length === 0 && verification.skippedTypes.length === 0,
+    appliedTypes: [...new Set(appliedTypes)],
+    skippedTypes: verification.skippedTypes,
+    errors,
+    verifiedFormats: verification.verifiedFormats,
+    textLength: verification.textLength
+  };
+  logClipboard('apply result', result);
+  return result;
+}
+
+function createClipboardItem(type: string, data: string, kind: 'text' | 'image' | 'binary', size: number): ClipboardContentItem {
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    type,
+    kind,
+    data,
+    size,
+    sourceKind: 'native'
+  };
+}
+
+function bufferToDataUrl(type: string, buffer: Buffer) {
+  return `data:${type || 'application/octet-stream'};base64,${buffer.toString('base64')}`;
+}
+
+function readClipboardContent(): ClipboardReadResult {
+  const formats = clipboard.availableFormats();
+  logClipboard('read start', { formats });
+  const items: ClipboardContentItem[] = [];
+  const seenTypes = new Set<string>();
+  const pushItem = (item: ClipboardContentItem) => {
+    if (seenTypes.has(item.type || '')) return;
+    seenTypes.add(item.type || '');
+    items.push(item);
+  };
+
+  const text = clipboard.readText();
+  if (text || formats.includes('text/plain')) {
+    pushItem(createClipboardItem('text/plain', text, 'text', Buffer.byteLength(text, 'utf8')));
+  }
+
+  const html = clipboard.readHTML();
+  if (html || formats.includes('text/html')) {
+    pushItem(createClipboardItem('text/html', html, 'text', Buffer.byteLength(html, 'utf8')));
+  }
+
+  const rtf = clipboard.readRTF();
+  if (rtf || formats.includes('text/rtf')) {
+    pushItem(createClipboardItem('text/rtf', rtf, 'text', Buffer.byteLength(rtf, 'utf8')));
+  }
+
+  const image = clipboard.readImage();
+  if (!image.isEmpty()) {
+    const dataUrl = image.toDataURL();
+    pushItem(createClipboardItem('image/png', dataUrl, 'image', Buffer.byteLength(dataUrl, 'utf8')));
+  }
+
+  for (const format of formats) {
+    if (seenTypes.has(format) || ['text/plain', 'text/html', 'text/rtf', 'image/png'].includes(format)) continue;
+    try {
+      const buffer = clipboard.readBuffer(format);
+      pushItem(createClipboardItem(format, bufferToDataUrl(format, buffer), 'binary', buffer.byteLength));
+    } catch (error) {
+      items.push({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        type: format,
+        kind: 'binary',
+        data: '',
+        size: 0,
+        sourceKind: 'native',
+        unavailable: true
+      });
+    }
+  }
+
+  return {
+    ok: true,
+    title: `系统剪切板 ${new Date().toLocaleString()}`,
+    createdAt: Date.now(),
+    items,
+    formats
+  };
+}
+
 ipcMain.on('douyin:collects-video-list-captured', (event: any, payload: unknown) => {
   if (!douyinWindow || event.sender !== douyinWindow.webContents) {
     logDouyin('ignored collect list payload from unknown sender');
@@ -1186,9 +1738,19 @@ ipcMain.handle('douyin:refresh-now', async () => {
 
 ipcMain.handle('douyin:get-monitor-state', () => currentMonitorState());
 
+ipcMain.handle('clipboard:apply-content', (_event: any, content: unknown) => {
+  logClipboard('ipc apply-content invoked');
+  return applyClipboardContent(content);
+});
+ipcMain.handle('clipboard:read-content', () => {
+  logClipboard('ipc read-content invoked');
+  return readClipboardContent();
+});
+
 app.whenReady().then(() => {
   registerBlockedDeeplinkHandlers();
   createTray();
+  updateDockMenu();
   createWindow();
 });
 app.on('before-quit', () => {

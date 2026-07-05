@@ -46,3 +46,18 @@ contextBridge.exposeInMainWorld('douyin', {
     return () => ipcRenderer.off('douyin:monitor-state', handler);
   }
 });
+
+contextBridge.exposeInMainWorld('dogeBridge', {
+  _tools: {
+    _clipboard: {
+      _read_clipboard_content: () => {
+        console.log('[dogeBridge clipboard] read content');
+        return ipcRenderer.invoke('clipboard:read-content');
+      },
+      _apply_clipboard_content: (content) => {
+        console.log('[dogeBridge clipboard] apply content');
+        return ipcRenderer.invoke('clipboard:apply-content', content);
+      }
+    }
+  }
+});
