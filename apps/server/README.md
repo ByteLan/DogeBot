@@ -79,6 +79,8 @@ pnpm add-user <用户名> <密码>
 - `DOGEBOT_LLM_TIMEOUT_MS`：大模型请求超时时间，默认 `15000`。
 - `DOGEBOT_LLM_MAX_TOKENS`：大模型回复 token 上限，默认 `160`。
 - `DOGEBOT_LLM_DISABLE_THINKING`：设为 `1` 时，请求 OpenAI 兼容接口会额外带 `enable_thinking: false`，用于关闭支持该参数的模型思考模式。
+- `DOGEBOT_STYLE_STICKER_BASE_URL`：已部署的 `scale-new-heights-generator` 页面地址，默认 `https://scale-new-heights.bbyte.cn/`。`/open-api/v1/byte-style` 与 `/open-api/v1/scale-new-heights` 会通过 Playwright 打开这个远程页面进行渲染；服务端不再依赖本地 `scale-new-heights-generator` 仓库。
+- `DOGEBOT_STYLE_STICKER_RENDER_TIMEOUT_MS`：远程贴纸页面渲染超时时间，默认 `30000`。
 
 ## 宝塔面板长期运行
 

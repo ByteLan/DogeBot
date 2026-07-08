@@ -5,6 +5,7 @@ import { getRandomMmVideo, redirectRandomMmVideo, uploadDouyinAwemeRecords } fro
 import { createFeishuBotForUser, deleteOwnedFeishuBot, feishuWebhook, listFeishuBots, probeFeishuBot, publicBot, startFeishuCronScheduler, stopFeishuCronScheduler } from './feishu.js';
 import { feishuConnectionManager } from './feishuConnection.js';
 import { beginFeishuQrRegistration, pollFeishuQrRegistration } from './feishuOnboard.js';
+import { closeStyleStickerRenderer, renderByteStyle, renderScaleNewHeights } from './styleStickers.js';
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -15,6 +16,8 @@ app.use(express.json({ limit: '1mb' }));
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
 app.get('/open-api/v1/mm', getRandomMmVideo);
 app.get('/open-api/v1/mm/redirect', redirectRandomMmVideo);
+app.get('/open-api/v1/byte-style', renderByteStyle);
+app.get('/open-api/v1/scale-new-heights', renderScaleNewHeights);
 
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body || {};
@@ -88,11 +91,13 @@ app.listen(port, () => {
 process.on('SIGINT', () => {
   stopFeishuCronScheduler();
   feishuConnectionManager.stopAll();
+    void closeStyleStickerRenderer();
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
   stopFeishuCronScheduler();
   feishuConnectionManager.stopAll();
+    void closeStyleStickerRenderer();
   process.exit(0);
 });
