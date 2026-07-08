@@ -1,6 +1,9 @@
+import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, extname, join } from 'node:path';
+import { basename, dirname, extname, join } from 'node:path';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import type { Request, Response as ExpressResponse } from 'express';
 import type { AuthenticatedRequest } from './auth.js';
 import { db } from './db.js';
@@ -88,7 +91,7 @@ type AddCronCommand = {
   commandText: string;
 };
 
-type PassiveFeature = 'reaction' | 'repeat' | 'llm_reply' | 'media_repeat';
+type PassiveFeature = 'reaction' | 'repeat' | 'llm_reply' | 'media_repeat' | 'media_reverse';
 
 type PassiveToggleCommand =
   | { isPassiveToggle: false }
@@ -128,6 +131,7 @@ type PassiveInteractionConfig = {
   reactionRate: number;
   repeatRate: number;
   imageRepeatRate: number;
+  imageReverseRate: number;
   imitateRate: number;
   repeatMaxChars: number;
   contextSize: number;
@@ -161,13 +165,28 @@ type DownloadedMessageResource = {
   filePath: string;
 };
 
+type PassiveMediaResource = {
+  sourceType: 'image' | 'sticker';
+  fileKey: string;
+  resource: DownloadedMessageResource;
+};
+
+type MirroredImageVariant = {
+  axis: 'vertical' | 'horizontal';
+  sourceSide: 'start' | 'end';
+};
+
 let cronSchedulerTimer: NodeJS.Timeout | undefined;
 let cronSchedulerRunning = false;
+const appDir = dirname(dirname(fileURLToPath(import.meta.url)));
+const execFileAsync = promisify(execFile);
 const FEISHU_EVENT_DEDUP_TTL_MS = 10 * 60 * 1000;
 const MESSAGE_RESOURCE_MAX_BYTES = 4 * 1024 * 1024;
 const MESSAGE_RESOURCE_CACHE_DIR = join(tmpdir(), 'dogebot-feishu-image-cache');
+const MESSAGE_RESOURCE_PROCESSED_DIR = join(tmpdir(), 'dogebot-feishu-image-processed');
 const MESSAGE_RESOURCE_CACHE_TTL_MS = 3 * 24 * 60 * 60 * 1000;
 const MESSAGE_RESOURCE_CACHE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+const IMAGE_MIRROR_SCRIPT_PATH = join(appDir, 'scripts', 'mirror-image.py');
 const recentFeishuEventKeys = new Map<string, number>();
 const messageResourceCache = new Map<string, string>();
 const messageResourceDownloads = new Map<string, Promise<DownloadedMessageResource>>();
@@ -180,7 +199,8 @@ const PASSIVE_TOGGLE_COMMANDS = [
   { command: '/reaction', feature: 'reaction', featureName: '贴表情' },
   { command: '/repeat', feature: 'repeat', featureName: '复读' },
   { command: '/llm-reply', feature: 'llm_reply', featureName: '大模型接话' },
-  { command: '/media-repeat', feature: 'media_repeat', featureName: '图片/表情包复读' }
+  { command: '/media-repeat', feature: 'media_repeat', featureName: '图片/表情包复读' },
+  { command: '/media-reverse', feature: 'media_reverse', featureName: '图片镜像反转' }
 ] as const;
 const recentChatMessages = new Map<string, RecentChatMessage[]>();
 
@@ -520,7 +540,8 @@ function passiveInteractionConfig(): PassiveInteractionConfig {
   return {
     reactionRate: parseRate(process.env.DOGEBOT_FEISHU_REACTION_RATE, 0.1),
     repeatRate,
-    imageRepeatRate: parseRate(process.env.DOGEBOT_FEISHU_IMAGE_REPEAT_RATE, repeatRate),
+      imageRepeatRate: parseRate(process.env.DOGEBOT_FEISHU_IMAGE_REPEAT_RATE, 0),
+      imageReverseRate: parseRate(process.env.DOGEBOT_FEISHU_IMAGE_REVERSE_RATE, 0.1),
     imitateRate: parseRate(process.env.DOGEBOT_FEISHU_IMITATE_RATE, 0.05),
     repeatMaxChars: parsePositiveInt(process.env.DOGEBOT_FEISHU_REPEAT_MAX_CHARS, 300),
     contextSize: parsePositiveInt(process.env.DOGEBOT_FEISHU_IMITATE_CONTEXT_SIZE, 8),
@@ -990,31 +1011,98 @@ async function uploadImage(bot: FeishuBot, data: Buffer, fileName: string) {
   return imageKey;
 }
 
-async function sendPassiveMediaRepeat(bot: FeishuBot, event: any, messageId: string, parsedMessage: ParsedFeishuMessage) {
-  const chatId = messageChatId(event?.message);
-  if (!chatId) return;
+async function ensureProcessedMediaDir() {
+  await fs.mkdir(MESSAGE_RESOURCE_PROCESSED_DIR, { recursive: true });
+}
 
+function buildProcessedMediaFileName(fileKey: string, sourceType: 'image' | 'sticker', chatId: string, variant: MirroredImageVariant, timestamp = Date.now()) {
+  const sourceMarker = sanitizeCacheSegment(sourceType, 'unknown');
+  const chatMarker = sanitizeCacheSegment(chatId, 'unknown_chat');
+  return `ts=${timestamp}--src=${sourceMarker}--chat=${chatMarker}--key=${sanitizeFileKeyForCache(fileKey)}--fx=mirror-${variant.axis}-${variant.sourceSide}.png`;
+}
+
+function randomMirrorVariant(): MirroredImageVariant {
+  return {
+    axis: Math.random() < 0.5 ? 'vertical' : 'horizontal',
+    sourceSide: Math.random() < 0.5 ? 'start' : 'end'
+  };
+}
+
+async function resolvePassiveMediaResource(bot: FeishuBot, messageId: string, chatId: string, parsedMessage: ParsedFeishuMessage): Promise<PassiveMediaResource | undefined> {
   if (parsedMessage.imageKey) {
-      const resource = await downloadMessageResource(bot, messageId, parsedMessage.imageKey, 'image', 'image', chatId);
-    const uploadedImageKey = await uploadImage(bot, resource.data, resource.fileName);
-    await sendImageToChat(bot, chatId, uploadedImageKey);
-    return;
+    const resource = await downloadMessageResource(bot, messageId, parsedMessage.imageKey, 'image', 'image', chatId);
+    return {
+      sourceType: 'image',
+      fileKey: parsedMessage.imageKey,
+      resource
+    };
   }
-
-  if (!parsedMessage.stickerFileKey) return;
+  if (!parsedMessage.stickerFileKey) return undefined;
   try {
-      await downloadMessageResource(bot, messageId, parsedMessage.stickerFileKey, 'file', 'sticker', chatId);
+    const resource = await downloadMessageResource(bot, messageId, parsedMessage.stickerFileKey, 'file', 'sticker', chatId);
+    return {
+      sourceType: 'sticker',
+      fileKey: parsedMessage.stickerFileKey,
+      resource
+    };
   } catch (error) {
-    console.warn('[feishu] passive sticker repeat skipped because sticker resource is unavailable', {
+    console.warn('[feishu] passive sticker media resource is unavailable', {
       botId: bot.id,
       messageId,
       chatId,
       stickerFileKey: parsedMessage.stickerFileKey,
       error: error instanceof Error ? error.message : String(error)
     });
+    return undefined;
+  }
+}
+
+async function buildMirroredImage(resource: PassiveMediaResource, chatId: string) {
+  await ensureProcessedMediaDir();
+  const variant = randomMirrorVariant();
+  const outputPath = join(MESSAGE_RESOURCE_PROCESSED_DIR, buildProcessedMediaFileName(resource.fileKey, resource.sourceType, chatId, variant));
+  await execFileAsync('python3', [IMAGE_MIRROR_SCRIPT_PATH, resource.resource.filePath, outputPath, variant.axis, variant.sourceSide], { maxBuffer: 1024 * 1024 });
+  return {
+    variant,
+    filePath: outputPath,
+    fileName: basename(outputPath),
+    data: await fs.readFile(outputPath)
+  };
+}
+
+async function sendPassiveMediaRepeat(bot: FeishuBot, event: any, messageId: string, parsedMessage: ParsedFeishuMessage) {
+  const chatId = messageChatId(event?.message);
+  if (!chatId) return;
+
+  const media = await resolvePassiveMediaResource(bot, messageId, chatId, parsedMessage);
+  if (!media) return;
+
+  if (media.sourceType === 'image') {
+    const uploadedImageKey = await uploadImage(bot, media.resource.data, media.resource.fileName);
+    await sendImageToChat(bot, chatId, uploadedImageKey);
     return;
   }
-  await sendStickerToChat(bot, chatId, parsedMessage.stickerFileKey);
+
+  await sendStickerToChat(bot, chatId, media.fileKey);
+}
+
+async function sendPassiveMediaReverse(bot: FeishuBot, event: any, messageId: string, parsedMessage: ParsedFeishuMessage) {
+  const chatId = messageChatId(event?.message);
+  if (!chatId) return;
+
+  const media = await resolvePassiveMediaResource(bot, messageId, chatId, parsedMessage);
+  if (!media) return;
+
+  let transformed: { variant: MirroredImageVariant; filePath: string; fileName: string; data: Buffer } | undefined;
+  try {
+    transformed = await buildMirroredImage(media, chatId);
+    const uploadedImageKey = await uploadImage(bot, transformed.data, transformed.fileName);
+    await sendImageToChat(bot, chatId, uploadedImageKey);
+  } finally {
+    if (transformed?.filePath) {
+      await fs.unlink(transformed.filePath).catch(() => undefined);
+    }
+  }
 }
 
 async function runPassiveInteractions(bot: FeishuBot, event: any, messageId: string, parsedMessage: ParsedFeishuMessage, history: RecentChatMessage[]) {
@@ -1026,12 +1114,14 @@ async function runPassiveInteractions(bot: FeishuBot, event: any, messageId: str
   const reactionDecision = triggerDecision(config.reactionRate);
   const repeatDecision = triggerDecision(config.repeatRate);
   const imageRepeatDecision = triggerDecision(config.imageRepeatRate);
+  const imageReverseDecision = triggerDecision(config.imageReverseRate);
   const imitateDecision = triggerDecision(config.imitateRate);
   const reactionTriggered = config.reactionEmojis.length > 0 && reactionDecision.triggered;
   const repeatEligible = Boolean(text) && text.length <= config.repeatMaxChars;
   const repeatTriggered = repeatEligible && repeatDecision.triggered;
   const mediaRepeatEligible = Boolean(parsedMessage.imageKey || parsedMessage.stickerFileKey);
   const mediaRepeatTriggered = mediaRepeatEligible && imageRepeatDecision.triggered;
+  const mediaReverseTriggered = mediaRepeatEligible && imageReverseDecision.triggered;
   const imitateEligible = !mentionsBot && Boolean(text);
   const imitateTriggered = imitateEligible && imitateDecision.triggered;
 
@@ -1046,6 +1136,10 @@ async function runPassiveInteractions(bot: FeishuBot, event: any, messageId: str
 
   if (mediaRepeatTriggered && isPassiveFeatureEnabled(bot.id, chatId, 'media_repeat')) {
     tasks.push(sendPassiveMediaRepeat(bot, event, messageId, parsedMessage));
+  }
+
+  if (mediaReverseTriggered && isPassiveFeatureEnabled(bot.id, chatId, 'media_reverse')) {
+    tasks.push(sendPassiveMediaReverse(bot, event, messageId, parsedMessage));
   }
 
   if (imitateTriggered && isPassiveFeatureEnabled(bot.id, chatId, 'llm_reply')) {
