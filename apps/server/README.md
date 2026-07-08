@@ -80,6 +80,7 @@ pnpm add-user <用户名> <密码>
 - `DOGEBOT_LLM_MAX_TOKENS`：大模型回复 token 上限，默认 `160`。
 - `DOGEBOT_LLM_DISABLE_THINKING`：设为 `1` 时，请求 OpenAI 兼容接口会额外带 `enable_thinking: false`，用于关闭支持该参数的模型思考模式。
 - `/open-api/v1/byte-style` 与 `/open-api/v1/scale-new-heights` 现在直接通过 `@napi-rs/canvas` 在服务端出图；所需字体资源已随 `apps/server/assets/fonts` 一起纳入仓库，并会在构建时复制到 `dist/assets/fonts`，其中包含 emoji / symbol fallback 字体以支持 `⛰` 等符号。
+- `OpenApiBaseUrl`：`/help` 卡片里展示 OpenAPI 示例地址时使用的基础域名，默认 `https://doge.bbyte.cn`；同时兼容 `DOGEBOT_OPEN_API_BASE_URL` 与 `OPEN_API_BASE_URL`。
 - `DOGEBOT_FEISHU_BYTE_STYLE_RATE`：普通文本消息随机生成为“字节范”图片的概率，默认 `0.05`。该能力默认开启，可用 `/byte-style --disable` 或 `/字节范 --disable` 针对单个会话关闭。
 - `DOGEBOT_FEISHU_SCALE_NEW_HEIGHTS_RATE`：普通文本消息随机生成为“勇攀高峰”图片的概率，默认 `0.05`。该能力默认开启，可用 `/scale-new-heights --disable` 或 `/勇攀高峰 --disable` 针对单个会话关闭。
 - `DOGEBOT_FEISHU_STYLE_STICKER_MAX_CHARS`：`/byte-style`、`/字节范`、`/scale-new-heights` 与 `/勇攀高峰` 在当前会话未显式设置 `--max` 时的默认最大处理字符数，默认 `10`。
@@ -212,7 +213,7 @@ pm2 restart dogebot-server --update-env
 
 ## `/help` 命令
 
-- `/help`：用飞书卡片表格返回当前支持的斜杠命令、可填参数和功能说明。
+- `/help`：用飞书卡片表格返回当前支持的斜杠命令、可填参数和功能说明；卡片中还会单独展示 4 个 OpenAPI 地址与参数说明，以及当前会话的概率能力配置表单，可填写新的 `rate` 并提交，或取消后折叠该表单。
 
 ## `/users` 命令
 
@@ -244,12 +245,13 @@ pm2 restart dogebot-server --update-env
 
 ## 被动能力开关命令
 
-- `/reaction --enable` / `/reaction --disable`：当前会话开启或关闭随机贴表情。
-- `/repeat --enable` / `/repeat --disable`：当前会话开启或关闭文本复读。
-- `/llm-reply --enable` / `/llm-reply --disable`：当前会话开启或关闭大模型接话。
-- `/media-repeat --enable` / `/media-repeat --disable`：当前会话开启或关闭图片/表情包复读。
-- `/image-reverse --enable` / `/image-reverse --disable`：当前会话开启或关闭图片镜像反转。
-- `/sticker-reverse --enable` / `/sticker-reverse --disable`：当前会话开启或关闭表情包镜像反转。
+- `/reaction [--enable|--disable] [--rate 0.12]`：当前会话开启或关闭随机贴表情，并可设置会话级概率。
+- `/repeat [--enable|--disable] [--rate 0.12]`：当前会话开启或关闭文本复读，并可设置会话级概率。
+- `/llm-reply [--enable|--disable] [--rate 0.12]`：当前会话开启或关闭大模型接话，并可设置会话级概率。
+- `/media-repeat [--enable|--disable] [--rate 0.12]`：当前会话开启或关闭图片/表情包复读，并可设置会话级概率。
+- `/image-reverse [--enable|--disable] [--rate 0.12]`：当前会话开启或关闭图片镜像反转，并可设置会话级概率。
+- `/sticker-reverse [--enable|--disable] [--rate 0.12]`：当前会话开启或关闭表情包镜像反转，并可设置会话级概率。
+- 所有会话级 `--rate` 都会优先于环境变量默认值生效，但不能超过该能力全局默认概率的 5 倍。
 
 ## `/byte-style`、`/字节范`、`/scale-new-heights` 与 `/勇攀高峰` 命令
 
@@ -258,5 +260,6 @@ pm2 restart dogebot-server --update-env
 - `/byte-style`、`/字节范`、`/scale-new-heights` 或 `/勇攀高峰`：不带参数时会回复一个交互卡片，可在卡片内输入文案、通过下拉选择两个常用色，也可填写自定义 `#RRGGBB` 色值，并填写渐变角度；点击“预览”会更新顶部预览图，点击“发送”会撤回卡片并把图片发到当前会话，点击“撤回”只撤回卡片。
 - `/byte-style --enable` / `/byte-style --disable`，以及 `/字节范 --enable` / `/字节范 --disable`：当前会话重新开启或关闭“字节范”随机生图。该能力默认开启。
 - `/scale-new-heights --enable` / `/scale-new-heights --disable`，以及 `/勇攀高峰 --enable` / `/勇攀高峰 --disable`：当前会话重新开启或关闭“勇攀高峰”随机生图。该能力默认开启。
+- `/byte-style --rate 0.12`、`/字节范 --rate 12`、`/scale-new-heights --rate 0.12`、`/勇攀高峰 --rate 12`：设置当前会话该风格随机生图概率，支持小数或百分数写法；会话级 rate 优先于环境变量默认值，但不能超过全局默认概率的 5 倍。
 - `/byte-style --max 12`、`/字节范 --max 12`、`/scale-new-heights --max 12`、`/勇攀高峰 --max 12`：设置当前会话该风格随机生图允许处理的最大文本长度；超过该长度则不会处理。如果配置值超过 `DOGEBOT_FEISHU_STYLE_STICKER_MAX_CHARS_LIMIT`，实际仍会按上限截断。
 - 同一条普通文本消息在“文本复读”“字节范随机生图”“勇攀高峰随机生图”三者之间互斥；即使同时命中多个概率，也只会随机选择其中一个执行。
