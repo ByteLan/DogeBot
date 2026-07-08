@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 
-type StickerFlavor = 'bs' | 'snh';
+export type StickerFlavor = 'bs' | 'snh';
 
 type RendererRuntime = {
   baseUrl: string;
@@ -203,16 +203,33 @@ async function renderStickerBuffer(
   }
 }
 
+export async function renderStyleStickerImage(
+  text: string,
+  flavor: StickerFlavor,
+  options: {
+    color1?: unknown;
+    color2?: unknown;
+    scale?: unknown;
+  } = {},
+) {
+  const colors = resolveGradientColors(options.color1, options.color2);
+  const renderScale = normalizeRenderScale(options.scale);
+  const image = await renderStickerBuffer(text, flavor, colors, renderScale);
+  return { image, colors, renderScale };
+}
+
 async function handleStyleSticker(req: Request, res: Response, flavor: StickerFlavor) {
   const text = typeof req.query.text === 'string' ? req.query.text.trim() : '';
   if (!text) {
     res.status(400).json({ error: 'text is required' });
     return;
   }
-  const colors = resolveGradientColors(req.query.color1, req.query.color2);
-  const renderScale = normalizeRenderScale(req.query.scale);
   try {
-    const image = await renderStickerBuffer(text, flavor, colors, renderScale);
+    const { image, colors, renderScale } = await renderStyleStickerImage(text, flavor, {
+      color1: req.query.color1,
+      color2: req.query.color2,
+      scale: req.query.scale,
+    });
     res.setHeader('Content-Type', 'image/png');
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Gradient-Color-1', colors[0]);
