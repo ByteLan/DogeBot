@@ -81,6 +81,10 @@ pnpm add-user <用户名> <密码>
 - `DOGEBOT_LLM_DISABLE_THINKING`：设为 `1` 时，请求 OpenAI 兼容接口会额外带 `enable_thinking: false`，用于关闭支持该参数的模型思考模式。
 - `DOGEBOT_STYLE_STICKER_BASE_URL`：已部署的 `scale-new-heights-generator` 页面地址，默认 `https://scale-new-heights.bbyte.cn/`。`/open-api/v1/byte-style` 与 `/open-api/v1/scale-new-heights` 会通过 Playwright 打开这个远程页面进行渲染；服务端不再依赖本地 `scale-new-heights-generator` 仓库。
 - `DOGEBOT_STYLE_STICKER_RENDER_TIMEOUT_MS`：远程贴纸页面渲染超时时间，默认 `30000`。
+- `DOGEBOT_FEISHU_BYTE_STYLE_RATE`：普通文本消息随机生成为“字节范”图片的概率，默认 `0.05`。该能力默认开启，可用 `/byte-style --disable` 或 `/字节范 --disable` 针对单个会话关闭。
+- `DOGEBOT_FEISHU_SCALE_NEW_HEIGHTS_RATE`：普通文本消息随机生成为“勇攀高峰”图片的概率，默认 `0.05`。该能力默认开启，可用 `/scale-new-heights --disable` 或 `/勇攀高峰 --disable` 针对单个会话关闭。
+- `DOGEBOT_FEISHU_STYLE_STICKER_MAX_CHARS`：`/byte-style`、`/字节范`、`/scale-new-heights` 与 `/勇攀高峰` 在当前会话未显式设置 `--max` 时的默认最大处理字符数，默认 `10`。
+- `DOGEBOT_FEISHU_STYLE_STICKER_MAX_CHARS_LIMIT`：随机生图允许处理的绝对字符上限。即使会话里配置了更大的 `--max`，或者 `DOGEBOT_FEISHU_STYLE_STICKER_MAX_CHARS` 更大，实际处理长度也不会超过这个值；未配置时默认 `150`。
 
 ## 宝塔面板长期运行
 
@@ -228,3 +232,12 @@ pm2 restart dogebot-server --update-env
 
 - `/set-default "{兜底指令}"`：设置当前 bot 的默认兜底指令。
 - 每个 bot 第一次成功执行 `/set-default` 的飞书用户会被记录为管理员；之后只有这个管理员可以继续修改默认兜底指令。
+
+## `/byte-style`、`/字节范`、`/scale-new-heights` 与 `/勇攀高峰` 命令
+
+- `/byte-style 测试文案` 或 `/字节范 测试文案`：立即把文本渲染成“字节范”图片并发送到当前会话。
+- `/scale-new-heights 测试文案` 或 `/勇攀高峰 测试文案`：立即把文本渲染成“勇攀高峰”图片并发送到当前会话。
+- `/byte-style --enable` / `/byte-style --disable`，以及 `/字节范 --enable` / `/字节范 --disable`：当前会话重新开启或关闭“字节范”随机生图。该能力默认开启。
+- `/scale-new-heights --enable` / `/scale-new-heights --disable`，以及 `/勇攀高峰 --enable` / `/勇攀高峰 --disable`：当前会话重新开启或关闭“勇攀高峰”随机生图。该能力默认开启。
+- `/byte-style --max 12`、`/字节范 --max 12`、`/scale-new-heights --max 12`、`/勇攀高峰 --max 12`：设置当前会话该风格随机生图允许处理的最大文本长度；超过该长度则不会处理。如果配置值超过 `DOGEBOT_FEISHU_STYLE_STICKER_MAX_CHARS_LIMIT`，实际仍会按上限截断。
+- 同一条普通文本消息在“文本复读”“字节范随机生图”“勇攀高峰随机生图”三者之间互斥；即使同时命中多个概率，也只会随机选择其中一个执行。
