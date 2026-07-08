@@ -102,6 +102,19 @@ function normalizeRenderScale(value: unknown) {
   return 1;
 }
 
+function normalizeGradientAngle(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.min(360, Math.max(0, value));
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value.trim());
+    if (Number.isFinite(parsed)) {
+      return Math.min(360, Math.max(0, parsed));
+    }
+  }
+  return Math.floor(Math.random() * 361);
+}
+
 function normalizeHexColor(value: unknown) {
   if (typeof value !== 'string') return '';
   const trimmed = value.trim();
@@ -641,6 +654,7 @@ async function renderStickerBuffer(
   flavor: StickerFlavor,
   colors: readonly [string, string],
   renderScale = 1,
+  gradientAngle = normalizeGradientAngle(undefined),
 ) {
   const trimmedText = text.trim();
   if (!trimmedText) {
@@ -651,7 +665,7 @@ async function renderStickerBuffer(
     text: trimmedText,
     flavor,
     fontSize: BASE_FONT_SIZE * renderScale,
-    envelope: { colors: [...colors] }
+    envelope: { colors: [...colors], gradientAngle }
   });
 
   await ensureFontLoaded(controls.flavor);
@@ -801,12 +815,14 @@ export async function renderStyleStickerImage(
     color1?: unknown;
     color2?: unknown;
     scale?: unknown;
+    gradientAngle?: unknown;
   } = {},
 ) {
   const colors = resolveGradientColors(options.color1, options.color2);
   const renderScale = normalizeRenderScale(options.scale);
-  const image = await renderStickerBuffer(text, flavor, colors, renderScale);
-  return { image, colors, renderScale };
+  const gradientAngle = normalizeGradientAngle(options.gradientAngle);
+  const image = await renderStickerBuffer(text, flavor, colors, renderScale, gradientAngle);
+  return { image, colors, renderScale, gradientAngle };
 }
 
 async function handleStyleSticker(req: Request, res: Response, flavor: StickerFlavor) {
@@ -816,15 +832,17 @@ async function handleStyleSticker(req: Request, res: Response, flavor: StickerFl
     return;
   }
   try {
-    const { image, colors, renderScale } = await renderStyleStickerImage(text, flavor, {
+    const { image, colors, renderScale, gradientAngle } = await renderStyleStickerImage(text, flavor, {
       color1: req.query.color1,
       color2: req.query.color2,
       scale: req.query.scale,
+      gradientAngle: req.query.gradientAngle ?? req.query.ga,
     });
     res.setHeader('Content-Type', 'image/png');
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Gradient-Color-1', colors[0]);
     res.setHeader('X-Gradient-Color-2', colors[1]);
+    res.setHeader('X-Gradient-Angle', String(gradientAngle));
     res.setHeader('X-Render-Scale', String(renderScale));
     res.send(image);
   } catch (error) {
