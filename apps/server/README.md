@@ -213,7 +213,7 @@ pm2 restart dogebot-server --update-env
 
 ## `/help` 命令
 
-- `/help`：用飞书卡片表格返回当前支持的斜杠命令、可填参数和功能说明；卡片中还会单独展示 4 个 OpenAPI 地址与参数说明，以及当前会话的概率能力配置表单，可填写新的 `rate` 并提交，或取消后折叠该表单。
+- `/help`：用飞书卡片表格返回当前支持的斜杠命令、可填参数和功能说明；卡片中还会单独展示 4 个 OpenAPI 地址与参数说明，以及当前会话的概率、随机生图 `max`、`/douyin` 订阅和 cron 管理表单，可填写后提交，或取消后折叠该表单。
 
 ## `/users` 命令
 
@@ -242,6 +242,8 @@ pm2 restart dogebot-server --update-env
 
 - `/add-cron "*/5 * * * *" "/douyin 123 [--count n]"`：给当前会话添加定时任务。
 - `/add-cron "*/5 * * * *"`：如果当前 bot 已设置 `/set-default`，可以省略第二个参数，定时执行默认兜底指令。
+- `/add-cron --list`：列出当前会话已有的定时任务，并按序号展示。
+- `/add-cron --delete 2`：删除当前会话序号为 2 的定时任务；序号以 `/add-cron --list` 的结果为准。
 
 ## 被动能力开关命令
 

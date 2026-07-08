@@ -90,6 +90,10 @@ type AddCronCommand = {
   isAddCron: boolean;
   cronExpr: string;
   commandText: string;
+  shouldList: boolean;
+  deleteIndex?: number;
+  hasInvalidDelete: boolean;
+  hasConflictingAction: boolean;
 };
 
 type HelpCommandRow = {
@@ -150,6 +154,11 @@ type DouyinSubscriptionRecord = {
   bot_id: number;
   chat_id: string;
   click_text: string;
+};
+
+type DouyinClickTextOption = {
+  clickText: string;
+  updatedAt: string;
 };
 
 type CronField = {
@@ -260,6 +269,13 @@ type HelpRateDescriptor =
       formField: string;
     };
 
+type HelpMaxDescriptor = {
+  feature: StyleStickerFeature;
+  command: string;
+  featureName: string;
+  formField: string;
+};
+
 let cronSchedulerTimer: NodeJS.Timeout | undefined;
 let cronSchedulerRunning = false;
 const moduleDir = dirname(fileURLToPath(import.meta.url));
@@ -310,6 +326,19 @@ const HELP_RATE_FORM_FIELDS = {
   byteStyle: 'byteStyleRate',
   scaleNewHeights: 'scaleNewHeightsRate'
 } as const;
+const HELP_MAX_FORM_FIELDS = {
+  byteStyle: 'byteStyleMaxChars',
+  scaleNewHeights: 'scaleNewHeightsMaxChars'
+} as const;
+const HELP_DOUYIN_FORM_FIELDS = {
+  subscribe: 'douyinSubscribeClickTexts',
+  unsubscribe: 'douyinUnsubscribeClickTexts'
+} as const;
+const HELP_CRON_FORM_FIELDS = {
+  cronExpr: 'cronExpr',
+  commandText: 'cronCommandText',
+  deleteTaskIds: 'cronDeleteTaskIds'
+} as const;
 const STYLE_STICKER_CARD_COLOR_OPTIONS = [
   '#9af665',
   '#44b305',
@@ -356,6 +385,10 @@ const HELP_RATE_DESCRIPTORS: HelpRateDescriptor[] = [
   { kind: 'style', feature: 'byte_style', command: '/byte-style / /字节范', featureName: '字节范随机生图', formField: HELP_RATE_FORM_FIELDS.byteStyle },
   { kind: 'style', feature: 'scale_new_heights', command: '/scale-new-heights / /勇攀高峰', featureName: '勇攀高峰随机生图', formField: HELP_RATE_FORM_FIELDS.scaleNewHeights }
 ] as const;
+const HELP_MAX_DESCRIPTORS: HelpMaxDescriptor[] = [
+  { feature: 'byte_style', command: '/byte-style / /字节范', featureName: '字节范最大字符数', formField: HELP_MAX_FORM_FIELDS.byteStyle },
+  { feature: 'scale_new_heights', command: '/scale-new-heights / /勇攀高峰', featureName: '勇攀高峰最大字符数', formField: HELP_MAX_FORM_FIELDS.scaleNewHeights }
+] as const;
 const HELP_COMMAND_ROWS: HelpCommandRow[] = [
   {
     command: '/help',
@@ -389,8 +422,8 @@ const HELP_COMMAND_ROWS: HelpCommandRow[] = [
   },
   {
     command: '/add-cron',
-    params: '"*/5 * * * *" "[命令]"',
-    description: '给当前会话添加定时任务；命令可省略，省略时使用 /set-default 配置。'
+    params: '"*/5 * * * *" "[命令]"、--list、--delete n',
+    description: '给当前会话添加定时任务；支持列出当前任务并按序号删除；命令可省略，省略时使用 /set-default 配置。'
   },
   {
     command: '/reaction、/repeat、/llm-reply',
@@ -933,7 +966,11 @@ function helpOverviewMarkdown() {
     openApiHelpMarkdown(),
     '',
     '**概率能力配置**',
-    '当前会话的 `rate` 会优先覆盖环境变量默认值；单项 `rate` 不能超过全局默认值的 5 倍。输入支持 `0.05` 或 `5` 表示 5%；超出范围会按最大值保存，异常值会被忽略。'
+    '当前会话的 `rate` 会优先覆盖环境变量默认值；单项 `rate` 不能超过全局默认值的 5 倍。输入支持 `0.05` 或 `5` 表示 5%；超出范围会按最大值保存，异常值会被忽略。',
+    '',
+    '**补充说明**',
+    '- 下方表单还支持设置 `/byte-style` 与 `/scale-new-heights` 的 `--max`。',
+    '- 也支持通过多选下拉，批量新增或取消 `/douyin` 订阅。'
   ].join('\n');
 }
 
@@ -962,8 +999,44 @@ function helpRateSettingSummary(botId: number, chatId: string, descriptor: HelpR
     : getStyleStickerSetting(botId, chatId, descriptor.feature, defaultRate, config.styleStickerDefaultMaxChars, config.styleStickerMaxCharsLimit);
 }
 
+function recentUnsubscribedDouyinClickTexts(bot: FeishuBot, chatId: string, limit = 10) {
+  if (!chatId || !bot.user_id) return [] as DouyinClickTextOption[];
+  return db.prepare(`
+    SELECT r.click_text AS clickText, MAX(r.updated_at) AS updatedAt
+    FROM douyin_aweme_records r
+    LEFT JOIN feishu_douyin_subscriptions s
+      ON s.bot_id = ? AND s.chat_id = ? AND s.click_text = r.click_text
+    WHERE r.user_id = ?
+      AND COALESCE(r.status, '') <> 'delete'
+      AND s.id IS NULL
+    GROUP BY r.click_text
+    ORDER BY updatedAt DESC, r.click_text ASC
+    LIMIT ?
+  `).all(bot.id, chatId, bot.user_id, limit) as DouyinClickTextOption[];
+}
+
+function currentChatDouyinSubscriptionsWithRecentUpdates(bot: FeishuBot, chatId: string, limit = 10) {
+  if (!chatId || !bot.user_id) return [] as DouyinClickTextOption[];
+  return db.prepare(`
+    SELECT s.click_text AS clickText, COALESCE(MAX(r.updated_at), s.updated_at) AS updatedAt
+    FROM feishu_douyin_subscriptions s
+    LEFT JOIN douyin_aweme_records r
+      ON r.user_id = ?
+      AND r.click_text = s.click_text
+      AND COALESCE(r.status, '') <> 'delete'
+    WHERE s.bot_id = ? AND s.chat_id = ?
+    GROUP BY s.id, s.click_text, s.updated_at
+    ORDER BY updatedAt ASC, s.click_text ASC
+    LIMIT ?
+  `).all(bot.user_id, bot.id, chatId, limit) as DouyinClickTextOption[];
+}
+
 function formatEditableRateValue(rate: number) {
   return rate.toFixed(4).replace(/\.?0+$/, '');
+}
+
+function formatDateTimeText(value: string) {
+  return value.replace('T', ' ').replace(/\.\d+Z$/, 'Z');
 }
 
 function helpRateEnabledField(descriptor: HelpRateDescriptor) {
@@ -1041,6 +1114,63 @@ function helpRateFormHeader() {
   };
 }
 
+function helpMaxInput(descriptor: HelpMaxDescriptor, maxChars: number) {
+  return {
+    tag: 'input',
+    element_id: `help_max_${descriptor.formField}`,
+    name: descriptor.formField,
+    placeholder: plainText('输入最大字符数'),
+    default_value: String(maxChars),
+    max_length: 4
+  };
+}
+
+function helpMaxItem(descriptor: HelpMaxDescriptor, maxChars: number, maxLimit: number) {
+  return {
+    tag: 'column_set',
+    element_id: `help_max_item_${descriptor.formField}`,
+    flex_mode: 'none',
+    horizontal_spacing: '8px',
+    columns: [
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 6,
+        elements: [
+          {
+            tag: 'markdown',
+            content: `**${descriptor.featureName}**\n命令：\`${descriptor.command}\`\n最大值：\`${maxLimit}\`；当前：\`${maxChars}\``
+          }
+        ]
+      },
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 4,
+        elements: [helpMaxInput(descriptor, maxChars)]
+      }
+    ]
+  };
+}
+
+function helpDouyinMultiSelect(field: string, placeholderText: string, options: DouyinClickTextOption[], emptyText: string) {
+  return {
+    tag: 'multi_select_static',
+    element_id: `help_douyin_${field}`,
+    name: field,
+    type: 'default',
+    width: 'fill',
+    required: false,
+    disabled: options.length === 0,
+    placeholder: plainText(options.length > 0 ? placeholderText : emptyText),
+    selected_values: [],
+    options: options.map((option) => ({
+      text: plainText(`${option.clickText}（${formatDateTimeText(option.updatedAt)}）`),
+      value: option.clickText
+    }))
+  };
+}
+
 function helpRateItem(descriptor: HelpRateDescriptor, setting: PassiveChatSetting | StyleStickerChatSetting) {
   return {
     tag: 'column_set',
@@ -1085,6 +1215,96 @@ function helpRateSummaryMarkdown(botId: number, chatId: string) {
     .join('\n');
 }
 
+function helpMaxSummaryMarkdown(botId: number, chatId: string) {
+  const config = passiveInteractionConfig();
+  return [
+    '**当前最大字符数**',
+    ...HELP_MAX_DESCRIPTORS.map((descriptor) => {
+      const setting = getStyleStickerSetting(
+        botId,
+        chatId,
+        descriptor.feature,
+        defaultRateForFeature(config, descriptor.feature),
+        config.styleStickerDefaultMaxChars,
+        config.styleStickerMaxCharsLimit
+      );
+      return `- \`${descriptor.command}\`：当前 \`${setting.maxChars}\`${setting.hasCustomMax ? '（会话配置）' : '（默认）'}${setting.isCapped ? `（按上限 ${config.styleStickerMaxCharsLimit} 收敛）` : ''}`;
+    })
+  ].join('\n');
+}
+
+function helpDouyinSummaryMarkdown(bot: FeishuBot, chatId: string) {
+  const subscriptions = currentChatDouyinSubscriptionsWithRecentUpdates(bot, chatId);
+  return [
+    '**当前 /douyin 订阅**',
+    subscriptions.length > 0
+      ? subscriptions.map((item) => `- \`${item.clickText}\`（${formatDateTimeText(item.updatedAt)}）`).join('\n')
+      : '- 当前群聊暂无订阅'
+  ].join('\n');
+}
+
+function helpCronSummaryMarkdown(botId: number, chatId: string) {
+  const tasks = listChatCronTasks(botId, chatId);
+  return [
+    '**当前定时任务**',
+    tasks.length > 0
+      ? tasks.map((task, index) => `- ${cronTaskSummary(task, index)}`).join('\n')
+      : '- 当前会话暂无定时任务'
+  ].join('\n');
+}
+
+function helpReadonlySummaryMarkdown(bot: FeishuBot, chatId: string) {
+  return [
+    helpRateSummaryMarkdown(bot.id, chatId),
+    '',
+    helpMaxSummaryMarkdown(bot.id, chatId),
+    '',
+    helpDouyinSummaryMarkdown(bot, chatId),
+    '',
+    helpCronSummaryMarkdown(bot.id, chatId),
+    '',
+    '如需再次编辑，请重新发送 `/help`。'
+  ].join('\n');
+}
+
+function helpCronExprInput() {
+  return {
+    tag: 'input',
+    element_id: `help_cron_${HELP_CRON_FORM_FIELDS.cronExpr}`,
+    name: HELP_CRON_FORM_FIELDS.cronExpr,
+    placeholder: plainText('cron 表达式，例如 */5 * * * *'),
+    max_length: 64
+  };
+}
+
+function helpCronCommandTextInput(defaultCommand: string) {
+  return {
+    tag: 'input',
+    element_id: `help_cron_${HELP_CRON_FORM_FIELDS.commandText}`,
+    name: HELP_CRON_FORM_FIELDS.commandText,
+    placeholder: plainText(defaultCommand ? `命令文本，留空则使用默认兜底：${defaultCommand}` : '命令文本，例如 /douyin 随机甜妹 --count 1'),
+    max_length: 500
+  };
+}
+
+function helpCronDeleteMultiSelect(tasks: ChatCronTask[]) {
+  return {
+    tag: 'multi_select_static',
+    element_id: `help_cron_${HELP_CRON_FORM_FIELDS.deleteTaskIds}`,
+    name: HELP_CRON_FORM_FIELDS.deleteTaskIds,
+    type: 'default',
+    width: 'fill',
+    required: false,
+    disabled: tasks.length === 0,
+    placeholder: plainText(tasks.length > 0 ? '选择要删除的定时任务' : '当前会话暂无可删除的定时任务'),
+    selected_values: [],
+    options: tasks.map((task, index) => ({
+      text: plainText(`${index + 1}. ${task.cron_expr} -> ${task.command_text}`),
+      value: String(task.id)
+    }))
+  };
+}
+
 function helpCardButton(action: HelpCardAction) {
   return {
     tag: 'button',
@@ -1106,12 +1326,14 @@ function helpCardButton(action: HelpCardAction) {
 }
 
 function buildHelpCard(
-  botId: number,
+  bot: FeishuBot,
   chatId: string,
   options: { showRateForm?: boolean; notice?: string } = {}
 ) {
   const showRateForm = options.showRateForm !== false && Boolean(chatId);
   const config = passiveInteractionConfig();
+    const currentCronTasks = listChatCronTasks(bot.id, chatId);
+    const defaultCommand = getDefaultCommand(bot.id);
   const elements: object[] = [
     {
       tag: 'markdown',
@@ -1138,11 +1360,54 @@ function buildHelpCard(
           helpRateFormHeader(),
           { tag: 'hr' },
           ...HELP_RATE_DESCRIPTORS.flatMap((descriptor, index) => {
-            const setting = helpRateSettingSummary(botId, chatId, descriptor, config);
+            const setting = helpRateSettingSummary(bot.id, chatId, descriptor, config);
             const parts: object[] = [helpRateItem(descriptor, setting)];
             if (index < HELP_RATE_DESCRIPTORS.length - 1) parts.push({ tag: 'hr' });
             return parts;
           }),
+          { tag: 'hr' },
+          {
+            tag: 'markdown',
+            content: '**随机生图最大字符数**'
+          },
+          ...HELP_MAX_DESCRIPTORS.flatMap((descriptor, index) => {
+            const setting = getStyleStickerSetting(
+              bot.id,
+              chatId,
+              descriptor.feature,
+              defaultRateForFeature(config, descriptor.feature),
+              config.styleStickerDefaultMaxChars,
+              config.styleStickerMaxCharsLimit
+            );
+            const parts: object[] = [helpMaxItem(descriptor, setting.maxChars, config.styleStickerMaxCharsLimit)];
+            if (index < HELP_MAX_DESCRIPTORS.length - 1) parts.push({ tag: 'hr' });
+            return parts;
+          }),
+          { tag: 'hr' },
+          {
+            tag: 'markdown',
+            content: '**/douyin 订阅管理**\n新增订阅：展示最近更新但当前群聊尚未订阅的 `click_text`；取消订阅：展示当前群聊已有订阅，并按对应数据最近更新时间从远到近排序。'
+          },
+          helpDouyinMultiSelect(
+            HELP_DOUYIN_FORM_FIELDS.subscribe,
+            '选择要订阅的模拟点击文案',
+            recentUnsubscribedDouyinClickTexts(bot, chatId),
+            '暂无可新增订阅项'
+          ),
+          helpDouyinMultiSelect(
+            HELP_DOUYIN_FORM_FIELDS.unsubscribe,
+            '选择要取消订阅的模拟点击文案',
+            currentChatDouyinSubscriptionsWithRecentUpdates(bot, chatId),
+            '当前群聊暂无可取消的订阅'
+          ),
+            { tag: 'hr' },
+            {
+              tag: 'markdown',
+              content: '**/add-cron 管理**\n新增任务时请填写 cron 表达式，命令文本可留空以使用当前 bot 的默认兜底指令；删除时可多选当前会话已有任务。'
+            },
+            helpCronExprInput(),
+            helpCronCommandTextInput(defaultCommand),
+            helpCronDeleteMultiSelect(currentCronTasks),
         {
           tag: 'column_set',
           flex_mode: 'bisect',
@@ -1152,13 +1417,13 @@ function buildHelpCard(
               tag: 'column',
               width: 'weighted',
               weight: 1,
-              elements: [helpCardButton('submit')]
+                elements: [helpCardButton('cancel')]
             },
             {
               tag: 'column',
               width: 'weighted',
               weight: 1,
-              elements: [helpCardButton('cancel')]
+                elements: [helpCardButton('submit')]
             }
           ]
         }
@@ -1167,7 +1432,7 @@ function buildHelpCard(
   } else {
     elements.push({
       tag: 'markdown',
-      content: `${helpRateSummaryMarkdown(botId, chatId)}\n\n如需再次编辑，请重新发送 \`/help\`。`
+        content: helpReadonlySummaryMarkdown(bot, chatId)
     });
   }
 
@@ -1192,7 +1457,7 @@ function buildHelpCard(
 }
 
 async function replyHelpCard(bot: FeishuBot, messageId: string, chatId: string) {
-  await replyCard(bot, messageId, buildHelpCard(bot.id, chatId));
+  await replyCard(bot, messageId, buildHelpCard(bot, chatId));
 }
 
 async function addReaction(bot: FeishuBot, messageId: string, reactionType: string) {
@@ -1278,6 +1543,17 @@ function firstStringValue(value: unknown) {
 
 function formStringValue(formValue: Record<string, any>, field: string) {
   return firstStringValue(formValue[field]);
+}
+
+function formStringValues(formValue: Record<string, any>, field: string) {
+  const raw = formValue[field];
+  const values = Array.isArray(raw) ? raw : raw === undefined || raw === null ? [] : [raw];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const text = firstStringValue(value);
+    if (text) seen.add(text);
+  }
+  return [...seen];
 }
 
 function normalizeCardHexColor(value: unknown) {
@@ -1423,7 +1699,7 @@ export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
   if (helpParsed.eventId && !rememberFeishuEventKey(`card:${helpParsed.eventId}`)) return;
 
   if (helpParsed.action === 'cancel') {
-    await updateInteractiveMessage(bot, helpParsed.messageId, buildHelpCard(bot.id, helpParsed.chatId, {
+      await updateInteractiveMessage(bot, helpParsed.messageId, buildHelpCard(bot, helpParsed.chatId, {
       showRateForm: false,
       notice: '已取消本次概率修改。'
     }));
@@ -1433,7 +1709,7 @@ export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
   const config = passiveInteractionConfig();
   const ignored: string[] = [];
   const diffs: string[] = [];
-  const updates: Array<{ descriptor: HelpRateDescriptor; enabled?: boolean; rate?: number }> = [];
+    const updates = new Map<ProbabilisticFeature, { descriptor: HelpRateDescriptor; enabled?: boolean; rate?: number; maxChars?: number }>();
   for (const descriptor of HELP_RATE_DESCRIPTORS) {
     const current = helpRateSettingSummary(bot.id, helpParsed.chatId, descriptor, config);
     const nextEnabledValue = parseHelpEnabledValue(helpParsed.formValue[helpRateEnabledField(descriptor)]);
@@ -1460,7 +1736,7 @@ export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
       continue;
     }
 
-    updates.push({
+      updates.set(descriptor.feature, {
       descriptor,
       enabled: enabledChanged ? enabled : undefined,
       rate: rateChanged ? rate : undefined
@@ -1471,17 +1747,102 @@ export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
     diffs.push(`- \`${descriptor.command}\`：${parts.join('；')}`);
   }
 
-  updates.forEach(({ descriptor, enabled, rate }) => {
+    for (const descriptor of HELP_MAX_DESCRIPTORS) {
+      const current = getStyleStickerSetting(
+        bot.id,
+        helpParsed.chatId,
+        descriptor.feature,
+        defaultRateForFeature(config, descriptor.feature),
+        config.styleStickerDefaultMaxChars,
+        config.styleStickerMaxCharsLimit
+      );
+      const raw = formStringValue(helpParsed.formValue, descriptor.formField);
+      if (!raw) continue;
+      const parsed = Number(raw);
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        ignored.push(`${descriptor.command} 的异常 max 已忽略`);
+        continue;
+      }
+      const nextMax = Math.min(parsed, config.styleStickerMaxCharsLimit);
+      if (nextMax === current.maxChars) continue;
+      const existing = updates.get(descriptor.feature);
+      updates.set(descriptor.feature, {
+        descriptor: existing?.descriptor || HELP_RATE_DESCRIPTORS.find((item) => item.kind === 'style' && item.feature === descriptor.feature)!,
+        enabled: existing?.enabled,
+        rate: existing?.rate,
+        maxChars: nextMax
+      });
+      diffs.push(`- \`${descriptor.command}\`：max \`${current.maxChars}\` -> \`${nextMax}\`${nextMax !== parsed ? `（超出范围，按最大值 ${config.styleStickerMaxCharsLimit} 保存）` : ''}`);
+    }
+
+    const availableSubscribeSet = new Set(recentUnsubscribedDouyinClickTexts(bot, helpParsed.chatId).map((item) => item.clickText));
+    const availableUnsubscribeSet = new Set(currentChatDouyinSubscriptionsWithRecentUpdates(bot, helpParsed.chatId).map((item) => item.clickText));
+    const subscribeSelections = formStringValues(helpParsed.formValue, HELP_DOUYIN_FORM_FIELDS.subscribe)
+      .filter((value) => availableSubscribeSet.has(value));
+    const unsubscribeSelections = formStringValues(helpParsed.formValue, HELP_DOUYIN_FORM_FIELDS.unsubscribe)
+      .filter((value) => availableUnsubscribeSet.has(value));
+    if (subscribeSelections.length > 0) {
+      subscribeSelections.forEach((clickText) => {
+        addDouyinSubscription(bot.id, helpParsed.chatId, clickText);
+      });
+      diffs.push(`- \`/douyin --subscribe\`：新增订阅 \`${subscribeSelections.join('`、`')}\``);
+    }
+    if (unsubscribeSelections.length > 0) {
+      unsubscribeSelections.forEach((clickText) => {
+        removeDouyinSubscription(bot.id, helpParsed.chatId, clickText);
+      });
+      diffs.push(`- \`/douyin --unsubscribe\`：取消订阅 \`${unsubscribeSelections.join('`、`')}\``);
+    }
+
+    const cronExpr = formStringValue(helpParsed.formValue, HELP_CRON_FORM_FIELDS.cronExpr);
+    const cronCommandText = formStringValue(helpParsed.formValue, HELP_CRON_FORM_FIELDS.commandText);
+    if (cronExpr || cronCommandText) {
+      if (!cronExpr) {
+        ignored.push('/add-cron 缺少 cron 表达式，已忽略新增');
+      } else {
+        const commandText = cronCommandText || getDefaultCommand(bot.id);
+        if (!commandText) {
+          ignored.push('/add-cron 缺少命令文本，且当前 bot 未设置 /set-default，已忽略新增');
+        } else {
+          try {
+            const task = addCronTask(bot.id, helpParsed.chatId, cronExpr, commandText);
+            diffs.push(`- \`/add-cron\`：新增任务 \`${cronExpr} -> ${commandText}\`（下次执行：${task.nextRunAt}）`);
+          } catch (error) {
+            ignored.push(error instanceof Error ? `/add-cron 新增失败：${error.message}` : '/add-cron 新增失败');
+          }
+        }
+      }
+    }
+
+    const currentCronTasks = listChatCronTasks(bot.id, helpParsed.chatId);
+    const currentCronTaskIds = new Set(currentCronTasks.map((task) => String(task.id)));
+    const deleteCronTaskIds = formStringValues(helpParsed.formValue, HELP_CRON_FORM_FIELDS.deleteTaskIds)
+      .filter((value) => currentCronTaskIds.has(value));
+    if (deleteCronTaskIds.length > 0) {
+      const deletedSummaries: string[] = [];
+      for (const taskId of deleteCronTaskIds) {
+        const task = currentCronTasks.find((item) => String(item.id) === taskId);
+        if (!task) continue;
+        if (deleteCronTaskById(bot.id, helpParsed.chatId, task.id)) {
+          deletedSummaries.push(`${task.cron_expr} -> ${task.command_text}`);
+        }
+      }
+      if (deletedSummaries.length > 0) {
+        diffs.push(`- \`/add-cron --delete\`：删除任务 \`${deletedSummaries.join('`、`')}\``);
+      }
+    }
+
+    updates.forEach(({ descriptor, enabled, rate, maxChars }) => {
     if (descriptor.kind === 'passive') {
       setPassiveFeatureSetting(bot.id, helpParsed.chatId, descriptor.feature, { enabled, rate });
       return;
     }
-    setStyleStickerSetting(bot.id, helpParsed.chatId, descriptor.feature, { enabled, rate });
+      setStyleStickerSetting(bot.id, helpParsed.chatId, descriptor.feature, { enabled, rate, maxChars });
   });
 
   const noticeLines: string[] = [];
   if (diffs.length > 0) {
-    noticeLines.push('**已更新当前会话概率配置**');
+      noticeLines.push('**已更新当前会话配置**');
     noticeLines.push(...diffs);
   } else {
     noticeLines.push('未检测到有效变更，已保持当前配置。');
@@ -1491,7 +1852,7 @@ export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
     noticeLines.push(...ignored.map((item) => `- ${item}`));
   }
 
-  await updateInteractiveMessage(bot, helpParsed.messageId, buildHelpCard(bot.id, helpParsed.chatId, {
+    await updateInteractiveMessage(bot, helpParsed.messageId, buildHelpCard(bot, helpParsed.chatId, {
     showRateForm: false,
     notice: noticeLines.join('\n')
   }));
@@ -2435,18 +2796,71 @@ function readQuotedToken(value: string) {
 
 function parseAddCronCommand(text: string): AddCronCommand {
   const commandIndex = text.indexOf('/add-cron');
-  if (commandIndex < 0) return { isAddCron: false, cronExpr: '', commandText: '' };
+  if (commandIndex < 0) {
+    return {
+      isAddCron: false,
+      cronExpr: '',
+      commandText: '',
+      shouldList: false,
+      hasInvalidDelete: false,
+      hasConflictingAction: false
+    };
+  }
   const rest = text.slice(commandIndex + '/add-cron'.length).trim();
-  if (!rest) return { isAddCron: true, cronExpr: '', commandText: '' };
+  if (!rest) {
+    return {
+      isAddCron: true,
+      cronExpr: '',
+      commandText: '',
+      shouldList: false,
+      hasInvalidDelete: false,
+      hasConflictingAction: false
+    };
+  }
+  if (/^--list(?:\s|$)/.test(rest)) {
+    const trailing = rest.replace(/^--list(?:\s+|$)/, '').trim();
+    return {
+      isAddCron: true,
+      cronExpr: '',
+      commandText: '',
+      shouldList: true,
+      hasInvalidDelete: false,
+      hasConflictingAction: Boolean(trailing)
+    };
+  }
+  if (/^--delete(?:\s|$)/.test(rest)) {
+    const next = rest.replace(/^--delete(?:\s+|$)/, '').trim();
+    const token = readQuotedToken(next);
+    const index = Number(token.token);
+    return {
+      isAddCron: true,
+      cronExpr: '',
+      commandText: '',
+      shouldList: false,
+      deleteIndex: Number.isInteger(index) && index > 0 ? index : undefined,
+      hasInvalidDelete: !Number.isInteger(index) || index <= 0,
+      hasConflictingAction: Boolean(token.rest)
+    };
+  }
   if (rest.startsWith('"') || rest.startsWith("'")) {
     const cron = readQuotedToken(rest);
-    return { isAddCron: true, cronExpr: cron.token, commandText: unquoteCommand(cron.rest) };
+    return {
+      isAddCron: true,
+      cronExpr: cron.token,
+      commandText: unquoteCommand(cron.rest),
+      shouldList: false,
+      hasInvalidDelete: false,
+      hasConflictingAction: false
+    };
   }
   const parts = rest.split(/\s+/).filter(Boolean);
   return {
     isAddCron: true,
     cronExpr: parts.slice(0, 5).join(' '),
-    commandText: unquoteCommand(parts.slice(5).join(' '))
+    commandText: unquoteCommand(parts.slice(5).join(' ')),
+    shouldList: false,
+    hasInvalidDelete: false,
+    hasConflictingAction: false
   };
 }
 
@@ -2657,6 +3071,27 @@ function addCronTask(botId: number, chatId: string, cronExpr: string, commandTex
     VALUES (?, ?, ?, ?, ?)
   `).run(botId, chatId, cronExpr, commandText, nextRunAt);
   return { id: Number(result.lastInsertRowid), nextRunAt };
+}
+
+function listChatCronTasks(botId: number, chatId: string) {
+  return db.prepare(`
+    SELECT id, bot_id, chat_id, cron_expr, command_text, next_run_at
+    FROM feishu_chat_cron_tasks
+    WHERE bot_id = ? AND chat_id = ? AND enabled = 1
+    ORDER BY next_run_at ASC, id ASC
+  `).all(botId, chatId) as ChatCronTask[];
+}
+
+function deleteCronTaskById(botId: number, chatId: string, taskId: number) {
+  const result = db.prepare(`
+    DELETE FROM feishu_chat_cron_tasks
+    WHERE bot_id = ? AND chat_id = ? AND id = ?
+  `).run(botId, chatId, taskId);
+  return result.changes > 0;
+}
+
+function cronTaskSummary(task: ChatCronTask, index: number) {
+  return `${index + 1}. ${task.cron_expr} -> ${task.command_text}\n   下次执行：${task.next_run_at}`;
 }
 
 function addDouyinSubscription(botId: number, chatId: string, clickText: string) {
@@ -3123,26 +3558,52 @@ async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string
   if (options.allowSetDefault) {
     const addCron = parseAddCronCommand(text);
     if (addCron.isAddCron) {
-      if (!addCron.cronExpr) {
-        await replyText(bot, messageId, '用法：/add-cron "*/5 * * * *" "/douyin 123 [--count n]"；如果已设置 /set-default，也可以省略第二个参数');
-        return true;
-      }
-      const commandText = addCron.commandText || getDefaultCommand(bot.id);
-      if (!commandText) {
-        await replyText(bot, messageId, '用法：/add-cron "*/5 * * * *" "/douyin 123 [--count n]"；当前机器人未设置 /set-default，不能省略第二个参数');
-        return true;
-      }
+        if (addCron.hasConflictingAction || addCron.hasInvalidDelete) {
+          await replyText(bot, messageId, '用法：/add-cron "*/5 * * * *" "[命令]"；/add-cron --list；/add-cron --delete 序号');
+          return true;
+        }
       if (!chatId) {
-        await replyText(bot, messageId, '当前消息缺少 chat_id，无法创建会话定时任务');
+          await replyText(bot, messageId, '当前消息缺少 chat_id，无法管理会话定时任务');
         return true;
       }
-      try {
-        const task = addCronTask(bot.id, chatId, addCron.cronExpr, commandText);
-        await replyText(bot, messageId, `已添加定时任务 #${task.id}，下次执行：${task.nextRunAt}\n${addCron.cronExpr} -> ${commandText}`);
-      } catch (error) {
-        await replyText(bot, messageId, error instanceof Error ? `添加定时任务失败：${error.message}` : '添加定时任务失败');
+        if (addCron.shouldList) {
+          const tasks = listChatCronTasks(bot.id, chatId);
+          await replyText(
+            bot,
+            messageId,
+            tasks.length > 0
+              ? ['当前会话定时任务：', ...tasks.map((task, index) => cronTaskSummary(task, index))].join('\n')
+              : '当前会话暂无定时任务'
+          );
+          return true;
       }
-      return true;
+        if (addCron.deleteIndex !== undefined) {
+          const tasks = listChatCronTasks(bot.id, chatId);
+          const target = tasks[addCron.deleteIndex - 1];
+          if (!target) {
+            await replyText(bot, messageId, `未找到序号为 ${addCron.deleteIndex} 的定时任务，请先用 /add-cron --list 查看序号。`);
+            return true;
+          }
+          deleteCronTaskById(bot.id, chatId, target.id);
+          await replyText(bot, messageId, `已删除定时任务 ${addCron.deleteIndex}：${target.cron_expr} -> ${target.command_text}`);
+          return true;
+        }
+        if (!addCron.cronExpr) {
+          await replyText(bot, messageId, '用法：/add-cron "*/5 * * * *" "[命令]"；如果已设置 /set-default，也可以省略第二个参数；也支持 /add-cron --list 和 /add-cron --delete 序号');
+          return true;
+        }
+        const commandText = addCron.commandText || getDefaultCommand(bot.id);
+        if (!commandText) {
+          await replyText(bot, messageId, '用法：/add-cron "*/5 * * * *" "[命令]"；当前机器人未设置 /set-default，不能省略第二个参数');
+          return true;
+        }
+        try {
+          const task = addCronTask(bot.id, chatId, addCron.cronExpr, commandText);
+          await replyText(bot, messageId, `已添加定时任务 #${task.id}，下次执行：${task.nextRunAt}\n${addCron.cronExpr} -> ${commandText}`);
+        } catch (error) {
+          await replyText(bot, messageId, error instanceof Error ? `添加定时任务失败：${error.message}` : '添加定时任务失败');
+        }
+        return true;
     }
     const setDefault = parseSetDefaultCommand(text);
     if (setDefault.isSetDefault) {
