@@ -8,6 +8,7 @@ import {
   createStickerLayout,
   darken,
   fontGlyphTransform as sharedFontGlyphTransform,
+  isEmojiGrapheme,
   normalizeStickerControls,
   resolveGradientStops,
   type GlyphMeasurement,
@@ -88,6 +89,12 @@ const FONT_DESCRIPTORS: Record<StickerFlavor, FontDescriptor> = {
 };
 
 const fontLoadPromises = new Map<StickerFlavor, Promise<void>>();
+let fallbackFontsLoaded = false;
+
+const FALLBACK_FONT_DESCRIPTORS = [
+  { family: 'Noto Color Emoji', file: 'NotoColorEmoji.ttf' },
+  { family: 'Noto Sans Symbols 2', file: 'NotoSansSymbols2-Regular.ttf' },
+] as const;
 
 function normalizeRenderScale(value: unknown) {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -207,10 +214,29 @@ function splitLines(text: string) {
 
 function fontSpec(flavor: StickerFlavor, fontSize: number) {
   const descriptor = FONT_DESCRIPTORS[flavor];
-  return `normal ${descriptor.fontWeight} ${fontSize}px "${descriptor.family}", "PingFang SC", sans-serif`;
+  return [
+    `normal ${descriptor.fontWeight} ${fontSize}px "${descriptor.family}"`,
+    '"PingFang SC"',
+    '"Noto Color Emoji"',
+    '"Noto Sans Symbols 2"',
+    'sans-serif'
+  ].join(', ');
+}
+
+function ensureFallbackFontsLoaded() {
+  if (fallbackFontsLoaded) return;
+  fallbackFontsLoaded = true;
+  for (const descriptor of FALLBACK_FONT_DESCRIPTORS) {
+    if (GlobalFonts.has(descriptor.family)) continue;
+    const registered = GlobalFonts.registerFromPath(resolveFontPath(descriptor.file), descriptor.family);
+    if (!registered) {
+      console.warn(`[style-sticker] failed to register fallback font: ${descriptor.family}`);
+    }
+  }
 }
 
 async function ensureFontLoaded(flavor: StickerFlavor) {
+  ensureFallbackFontsLoaded();
   if (GlobalFonts.has(SHARED_FONT_REGISTRY[flavor].family)) return;
   const existing = fontLoadPromises.get(flavor);
   if (existing) return existing;
@@ -694,6 +720,7 @@ async function renderStickerBuffer(
   sourceMaskContext.clearRect(0, 0, workingWidth, workingHeight);
   sourceMaskContext.fillStyle = '#ffffff';
   drawPlacedGlyphs(sourceMaskContext, controls, layout, originX, originY, (current, grapheme) => {
+    if (isEmojiGrapheme(grapheme)) return;
     current.fillText(grapheme, 0, 0);
   });
 
@@ -764,6 +791,7 @@ async function renderStickerBuffer(
             originX + controls.shadow.offsetX,
             originY + controls.shadow.offsetY,
             (current, grapheme) => {
+              if (isEmojiGrapheme(grapheme)) return;
               current.fillText(grapheme, 0, 0);
             }
           );
@@ -791,6 +819,11 @@ async function renderStickerBuffer(
       paintFamilyGradient(context, gradientStops);
     });
   }
+
+  drawPlacedGlyphs(outputContext, controls, layout, originX, originY, (current, grapheme) => {
+    if (!isEmojiGrapheme(grapheme)) return;
+    current.fillText(grapheme, 0, 0);
+  });
 
   const croppedCanvas = cropCanvasAlpha(outputCanvas);
   const contentHeight = Math.max(1, layout.bounds.maxY - layout.bounds.minY);
