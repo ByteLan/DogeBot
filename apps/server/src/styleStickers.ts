@@ -37,7 +37,6 @@ type TextLineMetrics = {
 
 const BASE_FONT_SIZE = 220;
 const MAX_OUTPUT_EDGE = 4096;
-const RENDER_ANTIALIAS_SCALE = 1;
 const ENVELOPE_ANTIALIAS = 1.1;
 const OUTLINE_ANTIALIAS = 0.9;
 const ALPHA_THRESHOLD = 16;
@@ -317,27 +316,6 @@ function resizeCanvasByScale(sourceCanvas: Canvas, scale: number, maxEdge: numbe
   context.imageSmoothingQuality = 'high';
   context.drawImage(sourceCanvas, 0, 0, outputWidth, outputHeight);
   return canvas;
-}
-
-function scaleStickerControls(controls: StickerControls, scale: number): StickerControls {
-  if (scale === 1) return controls;
-  return {
-    ...controls,
-    fontSize: controls.fontSize * scale,
-    letterSpacing: controls.letterSpacing * scale,
-    alternatingOffset: controls.alternatingOffset * scale,
-    shadow: {
-      ...controls.shadow,
-      offsetX: controls.shadow.offsetX * scale,
-      offsetY: controls.shadow.offsetY * scale,
-      blur: controls.shadow.blur * scale,
-    },
-    envelope: {
-      ...controls.envelope,
-      outlineStrokeWidth: controls.envelope.outlineStrokeWidth * scale,
-      edgeWidth: controls.envelope.edgeWidth * scale,
-    },
-  };
 }
 
 function padCanvas(sourceCanvas: Canvas, paddingX: number, paddingY: number) {
@@ -633,7 +611,6 @@ function drawPlacedGlyphs(
   context.font = fontSpec(controls.flavor, controls.fontSize);
   context.textAlign = 'left';
   context.textBaseline = 'alphabetic';
-  context.textRendering = 'geometricPrecision';
   context.lineJoin = 'round';
   context.miterLimit = 2;
 
@@ -670,13 +647,12 @@ async function renderStickerBuffer(
     throw new Error('text is required');
   }
 
-  const targetControls = normalizeStickerControls({
+  const controls = normalizeStickerControls({
     text: trimmedText,
     flavor,
     fontSize: BASE_FONT_SIZE * renderScale,
     envelope: { colors: [...colors] }
   });
-  const controls = scaleStickerControls(targetControls, RENDER_ANTIALIAS_SCALE);
 
   await ensureFontLoaded(controls.flavor);
 
@@ -810,7 +786,7 @@ async function renderStickerBuffer(
     exportScale,
     Math.round(MAX_OUTPUT_EDGE * renderScale)
   );
-  const exportCanvas = padCanvas(resizedCanvas, targetControls.padding.x, targetControls.padding.y);
+  const exportCanvas = padCanvas(resizedCanvas, controls.padding.x, controls.padding.y);
   return exportCanvas.toBuffer('image/png');
 }
 
