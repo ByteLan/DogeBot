@@ -79,8 +79,7 @@ pnpm add-user <用户名> <密码>
 - `DOGEBOT_LLM_TIMEOUT_MS`：大模型请求超时时间，默认 `15000`。
 - `DOGEBOT_LLM_MAX_TOKENS`：大模型回复 token 上限，默认 `160`。
 - `DOGEBOT_LLM_DISABLE_THINKING`：设为 `1` 时，请求 OpenAI 兼容接口会额外带 `enable_thinking: false`，用于关闭支持该参数的模型思考模式。
-- `DOGEBOT_STYLE_STICKER_BASE_URL`：已部署的 `scale-new-heights-generator` 页面地址，默认 `https://scale-new-heights.bbyte.cn/`。`/open-api/v1/byte-style` 与 `/open-api/v1/scale-new-heights` 会通过 Playwright 打开这个远程页面进行渲染；服务端不再依赖本地 `scale-new-heights-generator` 仓库。
-- `DOGEBOT_STYLE_STICKER_RENDER_TIMEOUT_MS`：远程贴纸页面渲染超时时间，默认 `30000`。
+- `/open-api/v1/byte-style` 与 `/open-api/v1/scale-new-heights` 现在直接通过 `@napi-rs/canvas` 在服务端出图；所需字体资源已随 `apps/server/assets/fonts` 一起纳入仓库，并会在构建时复制到 `dist/assets/fonts`。
 - `DOGEBOT_FEISHU_BYTE_STYLE_RATE`：普通文本消息随机生成为“字节范”图片的概率，默认 `0.05`。该能力默认开启，可用 `/byte-style --disable` 或 `/字节范 --disable` 针对单个会话关闭。
 - `DOGEBOT_FEISHU_SCALE_NEW_HEIGHTS_RATE`：普通文本消息随机生成为“勇攀高峰”图片的概率，默认 `0.05`。该能力默认开启，可用 `/scale-new-heights --disable` 或 `/勇攀高峰 --disable` 针对单个会话关闭。
 - `DOGEBOT_FEISHU_STYLE_STICKER_MAX_CHARS`：`/byte-style`、`/字节范`、`/scale-new-heights` 与 `/勇攀高峰` 在当前会话未显式设置 `--max` 时的默认最大处理字符数，默认 `10`。

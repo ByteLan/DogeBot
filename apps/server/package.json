@@ -4,17 +4,18 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.json && node -e \"const fs=require('fs'); const path=require('path'); const src=path.join(process.cwd(),'scripts'); const dst=path.join(process.cwd(),'dist','scripts'); fs.mkdirSync(dst,{recursive:true}); for (const name of fs.readdirSync(src)) { if (!name.endsWith('.py')) continue; fs.copyFileSync(path.join(src,name), path.join(dst,name)); }\"",
+    "build": "tsc -p tsconfig.json && node -e \"const fs=require('fs'); const path=require('path'); const copyDir=(src,dst,filter)=>{ if(!fs.existsSync(src)) return; fs.mkdirSync(dst,{recursive:true}); for(const name of fs.readdirSync(src)){ const from=path.join(src,name); const to=path.join(dst,name); const stat=fs.statSync(from); if(stat.isDirectory()){ copyDir(from,to,filter); continue; } if(filter && !filter(name,from)) continue; fs.mkdirSync(path.dirname(to),{recursive:true}); fs.copyFileSync(from,to); } }; copyDir(path.join(process.cwd(),'scripts'), path.join(process.cwd(),'dist','scripts'), (name)=>name.endsWith('.py')); copyDir(path.join(process.cwd(),'assets'), path.join(process.cwd(),'dist','assets'));\"",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "add-user": "tsx scripts/add-user.ts"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.66.1",
+    "@napi-rs/canvas": "^1.0.2",
     "better-sqlite3": "^11.8.1",
+    "colord": "^2.9.3",
     "cors": "^2.8.5",
-    "express": "^4.21.2",
-    "playwright": "^1.61.1"
+    "express": "^4.21.2"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
