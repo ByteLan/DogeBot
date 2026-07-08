@@ -1,4 +1,7 @@
-import type { Request, Response } from 'express';
+import { promises as fs } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, extname, join } from 'node:path';
+import type { Request, Response as ExpressResponse } from 'express';
 import type { AuthenticatedRequest } from './auth.js';
 import { db } from './db.js';
 import { randomDouyinAwemeIds, setDouyinAwemeNotifier, softDeleteDouyinAwemeRecords } from './douyin.js';
@@ -85,7 +88,7 @@ type AddCronCommand = {
   commandText: string;
 };
 
-type PassiveFeature = 'reaction' | 'repeat' | 'llm_reply';
+type PassiveFeature = 'reaction' | 'repeat' | 'llm_reply' | 'media_repeat';
 
 type PassiveToggleCommand =
   | { isPassiveToggle: false }
@@ -124,6 +127,7 @@ type CronField = {
 type PassiveInteractionConfig = {
   reactionRate: number;
   repeatRate: number;
+  imageRepeatRate: number;
   imitateRate: number;
   repeatMaxChars: number;
   contextSize: number;
@@ -143,18 +147,40 @@ type RecentChatMessage = {
   createdAt: number;
 };
 
+type ParsedFeishuMessage = {
+  messageType: string;
+  text: string;
+  imageKey: string;
+  stickerFileKey: string;
+};
+
+type DownloadedMessageResource = {
+  data: Buffer;
+  contentType: string;
+  fileName: string;
+  filePath: string;
+};
+
 let cronSchedulerTimer: NodeJS.Timeout | undefined;
 let cronSchedulerRunning = false;
 const FEISHU_EVENT_DEDUP_TTL_MS = 10 * 60 * 1000;
+const MESSAGE_RESOURCE_MAX_BYTES = 4 * 1024 * 1024;
+const MESSAGE_RESOURCE_CACHE_DIR = join(tmpdir(), 'dogebot-feishu-image-cache');
+const MESSAGE_RESOURCE_CACHE_TTL_MS = 3 * 24 * 60 * 60 * 1000;
+const MESSAGE_RESOURCE_CACHE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 const recentFeishuEventKeys = new Map<string, number>();
+const messageResourceCache = new Map<string, string>();
+const messageResourceDownloads = new Map<string, Promise<DownloadedMessageResource>>();
 const USERS_CARD_PERSON_LIST_CHUNK_SIZE = 100;
 const CARD_REFERENCE_READY_DELAY_MS = 1000;
 const RECENT_CHAT_MEMORY_LIMIT = 30;
 const DEFAULT_REACTION_EMOJIS = ['OK', 'DONE', 'THUMBSUP', 'HEART', 'LAUGH'];
+let messageResourceCacheCleanupTimer: NodeJS.Timeout | undefined;
 const PASSIVE_TOGGLE_COMMANDS = [
   { command: '/reaction', feature: 'reaction', featureName: '贴表情' },
   { command: '/repeat', feature: 'repeat', featureName: '复读' },
-  { command: '/llm-reply', feature: 'llm_reply', featureName: '大模型接话' }
+  { command: '/llm-reply', feature: 'llm_reply', featureName: '大模型接话' },
+  { command: '/media-repeat', feature: 'media_repeat', featureName: '图片/表情包复读' }
 ] as const;
 const recentChatMessages = new Map<string, RecentChatMessage[]>();
 
@@ -251,13 +277,119 @@ export async function probeBot(bot: FeishuBot) {
   return { botName, botOpenId };
 }
 
-export function textFromMessage(message: any) {
-  if (message?.message_type !== 'text') return '';
+function safeParseMessageContent(message: any) {
   try {
-    const content = JSON.parse(message.content || '{}') as { text?: string };
-    return (content.text || '').trim();
+    return JSON.parse(message?.content || '{}') as Record<string, any>;
   } catch {
-    return '';
+    return {};
+  }
+}
+
+function extractPostTextAndImage(content: Record<string, any>) {
+  const textParts: string[] = [];
+  let imageKey = '';
+  const pushText = (value: unknown) => {
+    const text = String(value || '').trim();
+    if (text) textParts.push(text);
+  };
+
+  pushText(content.title);
+  const paragraphs = Array.isArray(content.content) ? content.content : [];
+  for (const paragraph of paragraphs) {
+    if (!Array.isArray(paragraph)) continue;
+    for (const block of paragraph) {
+      if (!block || typeof block !== 'object') continue;
+      const tag = String((block as Record<string, unknown>).tag || '').trim();
+      if (!imageKey && tag === 'img') {
+        imageKey = String((block as Record<string, unknown>).image_key || '').trim();
+      }
+      if (tag === 'text' || tag === 'a' || tag === 'md') {
+        pushText((block as Record<string, unknown>).text);
+      }
+      if (tag === 'at') {
+        pushText((block as Record<string, unknown>).user_name);
+      }
+    }
+  }
+
+  return {
+    text: textParts.join(' ').replace(/\s+/g, ' ').trim(),
+    imageKey
+  };
+}
+
+export function parseFeishuMessage(message: any): ParsedFeishuMessage {
+  const messageType = String(message?.message_type || '').trim();
+  const content = safeParseMessageContent(message);
+  if (messageType === 'text') {
+    return {
+      messageType,
+      text: String(content.text || '').trim(),
+      imageKey: '',
+      stickerFileKey: ''
+    };
+  }
+  if (messageType === 'image') {
+    return {
+      messageType,
+      text: '',
+      imageKey: String(content.image_key || '').trim(),
+      stickerFileKey: ''
+    };
+  }
+  if (messageType === 'sticker') {
+    return {
+      messageType,
+      text: '',
+      imageKey: '',
+      stickerFileKey: String(content.file_key || '').trim()
+    };
+  }
+  if (messageType === 'post') {
+    const post = extractPostTextAndImage(content);
+    return {
+      messageType,
+      text: post.text,
+      imageKey: post.imageKey,
+      stickerFileKey: ''
+    };
+  }
+  return {
+    messageType,
+    text: '',
+    imageKey: '',
+    stickerFileKey: ''
+  };
+}
+
+export function textFromMessage(message: any) {
+  return parseFeishuMessage(message).text;
+}
+
+export function previewTextFromMessage(message: any) {
+  const parsed = parseFeishuMessage(message);
+  if (parsed.text) return parsed.text.slice(0, 50);
+  if (parsed.imageKey) return '[图片]';
+  if (parsed.stickerFileKey) return '[表情包]';
+  return parsed.messageType ? `[${parsed.messageType}]` : '';
+}
+
+async function createChatMessage(bot: FeishuBot, chatId: string, msgType: string, content: Record<string, unknown>) {
+  const token = await tenantAccessToken(bot);
+  try {
+    await feishuJson(`${openBase(bot.domain)}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ receive_id: chatId, msg_type: msgType, content: JSON.stringify(content) })
+    });
+  } catch (error) {
+    console.error('[feishu] chat message send failed', {
+      botId: bot.id,
+      chatId,
+      msgType,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    throw error;
   }
 }
 
@@ -282,23 +414,15 @@ export async function replyText(bot: FeishuBot, messageId: string, text: string,
 }
 
 async function sendTextToChat(bot: FeishuBot, chatId: string, text: string) {
-  const token = await tenantAccessToken(bot);
-  try {
-    await feishuJson(`${openBase(bot.domain)}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ receive_id: chatId, msg_type: 'text', content: JSON.stringify({ text }) })
-    });
-    // console.log('[feishu] chat text send success', { botId: bot.id, chatId, textLength: text.length });
-  } catch (error) {
-    console.error('[feishu] chat text send failed', {
-      botId: bot.id,
-      chatId,
-      textLength: text.length,
-      error: error instanceof Error ? error.message : String(error)
-    });
-    throw error;
-  }
+  await createChatMessage(bot, chatId, 'text', { text });
+}
+
+async function sendImageToChat(bot: FeishuBot, chatId: string, imageKey: string) {
+  await createChatMessage(bot, chatId, 'image', { image_key: imageKey });
+}
+
+async function sendStickerToChat(bot: FeishuBot, chatId: string, fileKey: string) {
+  await createChatMessage(bot, chatId, 'sticker', { file_key: fileKey });
 }
 
 async function addReaction(bot: FeishuBot, messageId: string, reactionType: string) {
@@ -392,9 +516,11 @@ function openAIChatCompletionsUrl(url: string) {
 }
 
 function passiveInteractionConfig(): PassiveInteractionConfig {
+  const repeatRate = parseRate(process.env.DOGEBOT_FEISHU_REPEAT_RATE, 0.05);
   return {
     reactionRate: parseRate(process.env.DOGEBOT_FEISHU_REACTION_RATE, 0.1),
-    repeatRate: parseRate(process.env.DOGEBOT_FEISHU_REPEAT_RATE, 0.05),
+    repeatRate,
+    imageRepeatRate: parseRate(process.env.DOGEBOT_FEISHU_IMAGE_REPEAT_RATE, repeatRate),
     imitateRate: parseRate(process.env.DOGEBOT_FEISHU_IMITATE_RATE, 0.05),
     repeatMaxChars: parsePositiveInt(process.env.DOGEBOT_FEISHU_REPEAT_MAX_CHARS, 300),
     contextSize: parsePositiveInt(process.env.DOGEBOT_FEISHU_IMITATE_CONTEXT_SIZE, 8),
@@ -404,7 +530,7 @@ function passiveInteractionConfig(): PassiveInteractionConfig {
     llmModel: envString('DOGEBOT_LLM_MODEL', 'OPENAI_MODEL'),
     llmTimeoutMs: parsePositiveInt(envString('DOGEBOT_LLM_TIMEOUT_MS', 'OPENAI_TIMEOUT_MS'), 15_000),
     llmMaxTokens: parsePositiveInt(process.env.DOGEBOT_LLM_MAX_TOKENS, 160),
-    llmDisableThinking: parseBooleanFlag(process.env.DOGEBOT_LLM_DISABLE_THINKING)
+      llmDisableThinking: parseBooleanFlag(process.env.DOGEBOT_LLM_DISABLE_THINKING)
   };
 }
 
@@ -567,18 +693,346 @@ async function sendPassiveText(bot: FeishuBot, event: any, messageId: string, te
   await replyText(bot, messageId, text);
 }
 
-async function runPassiveInteractions(bot: FeishuBot, event: any, messageId: string, text: string, history: RecentChatMessage[]) {
+function guessExtensionFromContentType(contentType: string, fallback = '.bin') {
+  const normalized = contentType.split(';')[0].trim().toLowerCase();
+  if (normalized === 'image/png') return '.png';
+  if (normalized === 'image/jpeg') return '.jpg';
+  if (normalized === 'image/webp') return '.webp';
+  if (normalized === 'image/gif') return '.gif';
+  if (normalized === 'image/heic') return '.heic';
+  if (normalized === 'image/heif') return '.heif';
+  if (normalized === 'image/tiff') return '.tiff';
+  return fallback;
+}
+
+function guessContentTypeFromFileName(fileName: string) {
+  const normalized = extname(fileName).toLowerCase();
+  if (normalized === '.png') return 'image/png';
+  if (normalized === '.jpg' || normalized === '.jpeg') return 'image/jpeg';
+  if (normalized === '.webp') return 'image/webp';
+  if (normalized === '.gif') return 'image/gif';
+  if (normalized === '.heic') return 'image/heic';
+  if (normalized === '.heif') return 'image/heif';
+  if (normalized === '.tiff' || normalized === '.tif') return 'image/tiff';
+  return 'application/octet-stream';
+}
+
+function buildMessageResourceUrl(domain: string, messageId: string, fileKey: string, type: 'image' | 'file') {
+  return `${openBase(domain)}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/resources/${encodeURIComponent(fileKey)}?type=${type}`;
+}
+
+function sanitizeFileKeyForCache(fileKey: string) {
+  return fileKey.replace(/[^a-zA-Z0-9_-]+/g, '_');
+}
+
+function sanitizeCacheSegment(value: string, fallback: string) {
+  const sanitized = value.replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
+  return sanitized || fallback;
+}
+
+function buildCachedResourceFileName(fileKey: string, sourceType: 'image' | 'sticker', chatId: string, extension: string, timestamp = Date.now()) {
+  const sourceMarker = sanitizeCacheSegment(sourceType, 'unknown');
+  const chatMarker = sanitizeCacheSegment(chatId, 'unknown_chat');
+  return `ts=${timestamp}--src=${sourceMarker}--chat=${chatMarker}--key=${sanitizeFileKeyForCache(fileKey)}${extension}`;
+}
+
+function cacheKeyMarker(fileKey: string) {
+  return `--key=${sanitizeFileKeyForCache(fileKey)}`;
+}
+
+function cacheTimestampFromFileName(fileName: string) {
+  const matchedTimestamp = fileName.match(/^ts=(\d+)--/);
+  const timestamp = Number(matchedTimestamp?.[1] || '');
+  return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : 0;
+}
+
+async function ensureMessageResourceCacheDir() {
+  await fs.mkdir(MESSAGE_RESOURCE_CACHE_DIR, { recursive: true });
+  if (!messageResourceCacheCleanupTimer) {
+    messageResourceCacheCleanupTimer = setInterval(() => {
+      cleanupExpiredCachedResources().catch((error) => {
+        console.error('[feishu] cached resource cleanup failed', error);
+      });
+    }, MESSAGE_RESOURCE_CACHE_CLEANUP_INTERVAL_MS);
+    messageResourceCacheCleanupTimer.unref?.();
+    await cleanupExpiredCachedResources().catch((error) => {
+      console.error('[feishu] cached resource initial cleanup failed', error);
+    });
+  }
+}
+
+async function cleanupExpiredCachedResources(now = Date.now()) {
+  await fs.mkdir(MESSAGE_RESOURCE_CACHE_DIR, { recursive: true });
+  const entries = await fs.readdir(MESSAGE_RESOURCE_CACHE_DIR).catch(() => []);
+  for (const entry of entries) {
+    const timestamp = cacheTimestampFromFileName(entry);
+    if (!timestamp || now - timestamp <= MESSAGE_RESOURCE_CACHE_TTL_MS) continue;
+    const filePath = join(MESSAGE_RESOURCE_CACHE_DIR, entry);
+    await fs.unlink(filePath).catch(() => undefined);
+    for (const [fileKey, cachedFileName] of messageResourceCache) {
+      if (cachedFileName === entry) messageResourceCache.delete(fileKey);
+    }
+  }
+}
+
+async function findCachedResourcePath(fileKey: string) {
+  await ensureMessageResourceCacheDir();
+  const cachedFileName = messageResourceCache.get(fileKey);
+  if (cachedFileName) {
+    const cachedPath = join(MESSAGE_RESOURCE_CACHE_DIR, cachedFileName);
+    const stats = await fs.stat(cachedPath).catch(() => undefined);
+    if (stats?.isFile()) {
+      if (stats.size >= MESSAGE_RESOURCE_MAX_BYTES) {
+        await fs.unlink(cachedPath).catch(() => undefined);
+        messageResourceCache.delete(fileKey);
+      } else {
+        return cachedPath;
+      }
+    } else {
+      messageResourceCache.delete(fileKey);
+    }
+  }
+
+  const marker = cacheKeyMarker(fileKey);
+  const entries = await fs.readdir(MESSAGE_RESOURCE_CACHE_DIR).catch(() => []);
+  const matched = entries
+    .filter((entry) => entry.includes(marker))
+    .sort((left, right) => cacheTimestampFromFileName(right) - cacheTimestampFromFileName(left));
+  for (const entry of matched) {
+    const filePath = join(MESSAGE_RESOURCE_CACHE_DIR, entry);
+    const stats = await fs.stat(filePath).catch(() => undefined);
+    if (!stats?.isFile()) continue;
+    if (stats.size >= MESSAGE_RESOURCE_MAX_BYTES) {
+      await fs.unlink(filePath).catch(() => undefined);
+      continue;
+    }
+    messageResourceCache.set(fileKey, entry);
+    return filePath;
+  }
+  return '';
+}
+
+async function refreshCachedResourceTimestamp(fileKey: string, filePath: string) {
+  const currentName = basename(filePath);
+  if (!/^ts=\d+--/.test(currentName)) return filePath;
+  const nextName = currentName.replace(/^ts=\d+--/, `ts=${Date.now()}--`);
+  const nextPath = join(MESSAGE_RESOURCE_CACHE_DIR, nextName);
+  if (nextPath === filePath) {
+    messageResourceCache.set(fileKey, basename(filePath));
+    return filePath;
+  }
+  await fs.rename(filePath, nextPath).catch(async () => {
+    await fs.copyFile(filePath, nextPath);
+    await fs.unlink(filePath).catch(() => undefined);
+  });
+  messageResourceCache.set(fileKey, basename(nextPath));
+  return nextPath;
+}
+
+async function loadCachedMessageResource(fileKey: string): Promise<DownloadedMessageResource | undefined> {
+  const cachedPath = await findCachedResourcePath(fileKey);
+  if (!cachedPath) return undefined;
+  const refreshedPath = await refreshCachedResourceTimestamp(fileKey, cachedPath);
+  const data = await fs.readFile(refreshedPath);
+  return {
+    data,
+    contentType: guessContentTypeFromFileName(refreshedPath),
+    fileName: basename(refreshedPath),
+    filePath: refreshedPath
+  };
+}
+
+async function saveCachedMessageResource(fileKey: string, data: Buffer, contentType: string, sourceType: 'image' | 'sticker', chatId: string) {
+  await ensureMessageResourceCacheDir();
+  const extension = guessExtensionFromContentType(contentType, '.bin');
+  const filePath = join(MESSAGE_RESOURCE_CACHE_DIR, buildCachedResourceFileName(fileKey, sourceType, chatId, extension));
+  await fs.writeFile(filePath, data);
+  messageResourceCache.set(fileKey, basename(filePath));
+  return filePath;
+}
+
+async function probeMessageResourceSize(bot: FeishuBot, messageId: string, fileKey: string, type: 'image' | 'file') {
+  const token = await tenantAccessToken(bot);
+  const url = buildMessageResourceUrl(bot.domain, messageId, fileKey, type);
+  const authHeader = { authorization: `Bearer ${token}` };
+  const headResponse = await fetch(url, { method: 'HEAD', headers: authHeader }).catch(() => undefined);
+  const headContentLength = Number(headResponse?.headers.get('content-length') || '');
+  if (headResponse?.ok && Number.isFinite(headContentLength) && headContentLength >= 0) {
+    return headContentLength;
+  }
+
+  const rangeResponse = await fetch(url, {
+    method: 'GET',
+    headers: { ...authHeader, range: 'bytes=0-0' }
+  });
+  if (!rangeResponse.ok) {
+    const errorBody = await rangeResponse.text().catch(() => '');
+    throw new Error(`probe message resource size failed: ${rangeResponse.status} ${errorBody}`.trim());
+  }
+  const contentRange = rangeResponse.headers.get('content-range') || '';
+  const matchedTotal = contentRange.match(/\/(\d+)$/);
+  const fallbackContentLength = Number(rangeResponse.headers.get('content-length') || '');
+  await rangeResponse.body?.cancel().catch(() => undefined);
+  if (matchedTotal) return Number(matchedTotal[1]);
+  if (rangeResponse.status === 200 && Number.isFinite(fallbackContentLength) && fallbackContentLength >= 0) {
+    return fallbackContentLength;
+  }
+  return 0;
+}
+
+async function readResponseBufferWithinLimit(response: globalThis.Response, maxBytes: number, fileKey: string) {
+  const contentLength = Number(response.headers.get('content-length') || '');
+  if (Number.isFinite(contentLength) && contentLength >= maxBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error(`message resource too large while downloading: ${contentLength} bytes (${fileKey})`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    const data = Buffer.from(await response.arrayBuffer());
+    if (data.length >= maxBytes) {
+      throw new Error(`message resource too large while downloading: ${data.length} bytes (${fileKey})`);
+    }
+    return data;
+  }
+
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = Buffer.from(value);
+      totalBytes += chunk.length;
+      if (totalBytes >= maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error(`message resource too large while downloading: ${totalBytes} bytes (${fileKey})`);
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, totalBytes);
+}
+
+async function downloadMessageResourceUncached(
+  bot: FeishuBot,
+  messageId: string,
+  fileKey: string,
+  type: 'image' | 'file',
+  sourceType: 'image' | 'sticker',
+  chatId: string
+): Promise<DownloadedMessageResource> {
+  const token = await tenantAccessToken(bot);
+  const response = await fetch(buildMessageResourceUrl(bot.domain, messageId, fileKey, type), {
+    method: 'GET',
+    headers: { authorization: `Bearer ${token}` }
+  });
+  if (!response.ok) {
+    const errorBody = await response.text().catch(() => '');
+    throw new Error(`download message resource failed: ${response.status} ${errorBody}`.trim());
+  }
+  const contentType = response.headers.get('content-type') || 'application/octet-stream';
+  const data = await readResponseBufferWithinLimit(response, MESSAGE_RESOURCE_MAX_BYTES, fileKey);
+  const filePath = await saveCachedMessageResource(fileKey, data, contentType, sourceType, chatId);
+  return {
+    data,
+    contentType,
+    fileName: basename(filePath),
+    filePath
+  };
+}
+
+async function downloadMessageResource(
+  bot: FeishuBot,
+  messageId: string,
+  fileKey: string,
+  type: 'image' | 'file',
+  sourceType: 'image' | 'sticker',
+  chatId: string
+): Promise<DownloadedMessageResource> {
+  const cacheKey = `${type}:${fileKey}`;
+  const inflight = messageResourceDownloads.get(cacheKey);
+  if (inflight) return inflight;
+
+  const task = (async () => {
+    const cached = await loadCachedMessageResource(fileKey);
+    if (cached) return cached;
+
+    const size = await probeMessageResourceSize(bot, messageId, fileKey, type);
+      if (Number.isFinite(size) && size > 0 && size >= MESSAGE_RESOURCE_MAX_BYTES) {
+      throw new Error(`message resource too large: ${size} bytes`);
+    }
+      return downloadMessageResourceUncached(bot, messageId, fileKey, type, sourceType, chatId);
+  })();
+
+  messageResourceDownloads.set(cacheKey, task);
+  try {
+    return await task;
+  } finally {
+    messageResourceDownloads.delete(cacheKey);
+  }
+}
+
+async function uploadImage(bot: FeishuBot, data: Buffer, fileName: string) {
+  const token = await tenantAccessToken(bot);
+  const form = new FormData();
+  form.set('image_type', 'message');
+  form.set('image', new Blob([new Uint8Array(data)]), fileName);
+  const result = await feishuJson<{ data?: { image_key?: string } }>(`${openBase(bot.domain)}/open-apis/im/v1/images`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}` },
+    body: form
+  });
+  const imageKey = String(result.data?.image_key || '').trim();
+  if (!imageKey) throw new Error('upload image failed: missing image_key');
+  return imageKey;
+}
+
+async function sendPassiveMediaRepeat(bot: FeishuBot, event: any, messageId: string, parsedMessage: ParsedFeishuMessage) {
+  const chatId = messageChatId(event?.message);
+  if (!chatId) return;
+
+  if (parsedMessage.imageKey) {
+      const resource = await downloadMessageResource(bot, messageId, parsedMessage.imageKey, 'image', 'image', chatId);
+    const uploadedImageKey = await uploadImage(bot, resource.data, resource.fileName);
+    await sendImageToChat(bot, chatId, uploadedImageKey);
+    return;
+  }
+
+  if (!parsedMessage.stickerFileKey) return;
+  try {
+      await downloadMessageResource(bot, messageId, parsedMessage.stickerFileKey, 'file', 'sticker', chatId);
+  } catch (error) {
+    console.warn('[feishu] passive sticker repeat skipped because sticker resource is unavailable', {
+      botId: bot.id,
+      messageId,
+      chatId,
+      stickerFileKey: parsedMessage.stickerFileKey,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return;
+  }
+  await sendStickerToChat(bot, chatId, parsedMessage.stickerFileKey);
+}
+
+async function runPassiveInteractions(bot: FeishuBot, event: any, messageId: string, parsedMessage: ParsedFeishuMessage, history: RecentChatMessage[]) {
   const config = passiveInteractionConfig();
   const tasks: Array<Promise<void>> = [];
   const chatId = messageChatId(event?.message);
   const mentionsBot = messageMentionsBot(bot, event?.message);
+  const text = parsedMessage.text;
   const reactionDecision = triggerDecision(config.reactionRate);
   const repeatDecision = triggerDecision(config.repeatRate);
+  const imageRepeatDecision = triggerDecision(config.imageRepeatRate);
   const imitateDecision = triggerDecision(config.imitateRate);
   const reactionTriggered = config.reactionEmojis.length > 0 && reactionDecision.triggered;
-  const repeatEligible = text.length <= config.repeatMaxChars;
+  const repeatEligible = Boolean(text) && text.length <= config.repeatMaxChars;
   const repeatTriggered = repeatEligible && repeatDecision.triggered;
-  const imitateEligible = !mentionsBot;
+  const mediaRepeatEligible = Boolean(parsedMessage.imageKey || parsedMessage.stickerFileKey);
+  const mediaRepeatTriggered = mediaRepeatEligible && imageRepeatDecision.triggered;
+  const imitateEligible = !mentionsBot && Boolean(text);
   const imitateTriggered = imitateEligible && imitateDecision.triggered;
 
   if (reactionTriggered && isPassiveFeatureEnabled(bot.id, chatId, 'reaction')) {
@@ -588,6 +1042,10 @@ async function runPassiveInteractions(bot: FeishuBot, event: any, messageId: str
 
   if (repeatTriggered && isPassiveFeatureEnabled(bot.id, chatId, 'repeat')) {
     tasks.push(sendPassiveText(bot, event, messageId, text));
+  }
+
+  if (mediaRepeatTriggered && isPassiveFeatureEnabled(bot.id, chatId, 'media_repeat')) {
+    tasks.push(sendPassiveMediaRepeat(bot, event, messageId, parsedMessage));
   }
 
   if (imitateTriggered && isPassiveFeatureEnabled(bot.id, chatId, 'llm_reply')) {
@@ -916,13 +1374,14 @@ function setPassiveFeatureEnabled(botId: number, chatId: string, feature: Passiv
 }
 
 function isPassiveFeatureEnabled(botId: number, chatId: string, feature: PassiveFeature) {
-  if (!chatId) return true;
+  if (!chatId) return feature === 'media_repeat' ? false : true;
   const row = db.prepare(`
     SELECT enabled
     FROM feishu_chat_passive_settings
     WHERE bot_id = ? AND chat_id = ? AND feature = ?
   `).get(botId, chatId, feature) as { enabled: number } | undefined;
-  return row ? row.enabled === 1 : true;
+  if (row) return row.enabled === 1;
+  return feature === 'media_repeat' ? false : true;
 }
 
 function getDouyinSubscriptionsByUserAndClickText(userId: number, clickText: string) {
@@ -1419,8 +1878,9 @@ async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string
 export async function handleFeishuMessage(bot: FeishuBot, event: any) {
   const message = event?.message;
   const messageId = message?.message_id;
-  const text = textFromMessage(message);
-  if (!messageId || !text) return;
+  const parsedMessage = parseFeishuMessage(message);
+  const text = parsedMessage.text;
+  if (!messageId) return;
   const dedupKey = `message:${messageId}`;
   if (!rememberFeishuEventKey(dedupKey)) return;
   if (isFromCurrentBot(bot, event)) return;
@@ -1432,9 +1892,9 @@ export async function handleFeishuMessage(bot: FeishuBot, event: any) {
   const shouldHandleCommand = isPrivateChat || mentionsBot;
 
   const history = chatId ? readRecentChatMessages(bot.id, chatId, passiveInteractionConfig().contextSize) : [];
-  rememberRecentChatMessage(bot, event, text);
+  if (text) rememberRecentChatMessage(bot, event, text);
 
-  if (shouldHandleCommand) {
+  if (shouldHandleCommand && text) {
     if (await handleFeishuCommand(bot, event, messageId, text, { allowSetDefault: true })) {
       return;
     }
@@ -1449,14 +1909,14 @@ export async function handleFeishuMessage(bot: FeishuBot, event: any) {
     }
   }
 
-  await runPassiveInteractions(bot, event, messageId, text, history);
+  await runPassiveInteractions(bot, event, messageId, parsedMessage, history);
 }
 
 function getOwnedBot(id: number, userId: number) {
   return db.prepare('SELECT * FROM feishu_bots WHERE id = ? AND user_id = ?').get(id, userId) as FeishuBot | undefined;
 }
 
-export function listFeishuBots(req: AuthenticatedRequest, res: Response) {
+export function listFeishuBots(req: AuthenticatedRequest, res: ExpressResponse) {
   const rows = db.prepare('SELECT * FROM feishu_bots WHERE user_id = ? ORDER BY id DESC').all(req.user?.id) as FeishuBot[];
   res.json({ bots: rows.map(publicBot) });
 }
@@ -1487,7 +1947,7 @@ export function createFeishuBotFromCredentials(userId: number, body: { name: str
   });
 }
 
-export function createFeishuBot(req: AuthenticatedRequest, res: Response) {
+export function createFeishuBot(req: AuthenticatedRequest, res: ExpressResponse) {
   if (!req.user) {
     res.status(401).json({ error: 'unauthorized' });
     return;
@@ -1512,7 +1972,7 @@ export function deleteOwnedFeishuBot(botId: number, userId: number) {
   return true;
 }
 
-export function deleteFeishuBot(req: AuthenticatedRequest, res: Response) {
+export function deleteFeishuBot(req: AuthenticatedRequest, res: ExpressResponse) {
   const botId = Number(req.params.id);
   if (!req.user || !deleteOwnedFeishuBot(botId, req.user.id)) {
     res.status(404).json({ error: 'bot not found' });
@@ -1521,7 +1981,7 @@ export function deleteFeishuBot(req: AuthenticatedRequest, res: Response) {
   res.status(204).end();
 }
 
-export async function probeFeishuBot(req: AuthenticatedRequest, res: Response) {
+export async function probeFeishuBot(req: AuthenticatedRequest, res: ExpressResponse) {
   const bot = req.user ? getOwnedBot(Number(req.params.id), req.user.id) : undefined;
   if (!bot) {
     res.status(404).json({ error: 'bot not found' });
@@ -1534,7 +1994,7 @@ export async function probeFeishuBot(req: AuthenticatedRequest, res: Response) {
   }
 }
 
-export async function feishuWebhook(req: Request, res: Response) {
+export async function feishuWebhook(req: Request, res: ExpressResponse) {
   const bot = getBot(Number(req.params.id));
   if (!bot || !bot.enabled) {
     res.status(404).json({ error: 'bot not found' });

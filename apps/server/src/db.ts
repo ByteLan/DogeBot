@@ -110,7 +110,7 @@ db.exec(`
     enabled INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK(feature IN ('reaction', 'repeat', 'llm_reply')),
+      CHECK(feature IN ('reaction', 'repeat', 'llm_reply', 'media_repeat')),
     UNIQUE(bot_id, chat_id, feature)
   );
 `);
@@ -127,6 +127,35 @@ if (!douyinAwemeColumns.some((column) => column.name === 'status')) {
 if (!douyinAwemeColumns.some((column) => column.name === 'deleted_at')) {
   db.exec('ALTER TABLE douyin_aweme_records ADD COLUMN deleted_at TEXT');
 }
+
+  const passiveSettingsSchema = db.prepare(`
+    SELECT sql
+    FROM sqlite_master
+    WHERE type = 'table' AND name = 'feishu_chat_passive_settings'
+  `).get() as { sql?: string } | undefined;
+  if (!passiveSettingsSchema?.sql?.includes("'media_repeat'")) {
+    db.exec(`
+      ALTER TABLE feishu_chat_passive_settings RENAME TO feishu_chat_passive_settings_old;
+
+      CREATE TABLE feishu_chat_passive_settings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        bot_id INTEGER NOT NULL,
+        chat_id TEXT NOT NULL,
+        feature TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CHECK(feature IN ('reaction', 'repeat', 'llm_reply', 'media_repeat')),
+        UNIQUE(bot_id, chat_id, feature)
+      );
+
+      INSERT INTO feishu_chat_passive_settings (id, bot_id, chat_id, feature, enabled, created_at, updated_at)
+      SELECT id, bot_id, chat_id, feature, enabled, created_at, updated_at
+      FROM feishu_chat_passive_settings_old;
+
+      DROP TABLE feishu_chat_passive_settings_old;
+    `);
+  }
 
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id);

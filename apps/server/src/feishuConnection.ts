@@ -1,5 +1,5 @@
 import type { FeishuBot } from './feishu.js';
-import { getEnabledBots, handleFeishuMessage } from './feishu.js';
+import { getEnabledBots, handleFeishuMessage, previewTextFromMessage } from './feishu.js';
 
 type LarkModule = typeof import('@larksuiteoapi/node-sdk');
 type ManagedConnection = {
@@ -18,12 +18,7 @@ function sdkDomain(lark: LarkModule, domain: string) {
 }
 
 function messageTextPreview(event: any) {
-  try {
-    const content = JSON.parse(event?.message?.content || '{}') as { text?: string };
-    return String(content.text || '').trim().slice(0, 50);
-  } catch {
-    return '';
-  }
+  return previewTextFromMessage(event?.message).slice(0, 50);
 }
 
 function senderName(event: any) {

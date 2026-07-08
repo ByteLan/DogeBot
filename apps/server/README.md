@@ -65,6 +65,8 @@ pnpm add-user <用户名> <密码>
 - `DOGEBOT_FEISHU_REACTION_RATE`：普通消息自动添加表情的概率，支持 `0.1` 或 `10` 这种百分比写法，默认 `0.1`。
 - `DOGEBOT_FEISHU_REACTION_EMOJIS`：自动 reaction 的候选 emoji key，逗号分隔，默认 `OK,DONE,THUMBSUP,HEART,LAUGH`。
 - `DOGEBOT_FEISHU_REPEAT_RATE`：普通消息自动复读的概率，默认 `0.05`。
+- `DOGEBOT_FEISHU_IMAGE_REPEAT_RATE`：图片/图文首图/表情包自动复读为新消息的概率；未配置时沿用 `DOGEBOT_FEISHU_REPEAT_RATE`。该能力默认关闭，只有显式执行 `/media-repeat --enable` 的会话才会命中概率后触发。
+- 图片/表情包复读在完整下载前会先探测资源大小；如果探测不到大小，则边下载边限制。只有严格小于 `4MB` 的资源才会继续下载并复读；下载后的资源会缓存在系统临时目录下，3 天未命中的缓存会定时清理，命中缓存会刷新时间戳。
 - `DOGEBOT_FEISHU_REPEAT_MAX_CHARS`：允许复读的最大文本长度，默认 `300`。
 - `DOGEBOT_FEISHU_IMITATE_RATE`：普通消息触发大模型模仿接话的概率，默认 `0.05`。
 - `DOGEBOT_FEISHU_IMITATE_CONTEXT_SIZE`：模仿接话时带入的最近群聊消息条数，默认 `8`。
