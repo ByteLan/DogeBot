@@ -207,6 +207,17 @@ type StyleStickerChatSetting = {
   isCapped: boolean;
 };
 
+type StyleStickerCardAction = 'preview' | 'send';
+
+type StyleStickerCardState = {
+  feature: StyleStickerFeature;
+  text: string;
+  color1: string;
+  color2: string;
+  gradientAngle: number;
+  imageKey: string;
+};
+
 let cronSchedulerTimer: NodeJS.Timeout | undefined;
 let cronSchedulerRunning = false;
 const moduleDir = dirname(fileURLToPath(import.meta.url));
@@ -235,6 +246,14 @@ const messageResourceDownloads = new Map<string, Promise<DownloadedMessageResour
 const USERS_CARD_PERSON_LIST_CHUNK_SIZE = 100;
 const CARD_REFERENCE_READY_DELAY_MS = 1000;
 const RECENT_CHAT_MEMORY_LIMIT = 30;
+const STYLE_STICKER_CARD_KIND = 'style_sticker_generator';
+const STYLE_STICKER_FORM_NAME = 'style_sticker_form';
+const STYLE_STICKER_FORM_FIELDS = {
+  text: 'text',
+  color1: 'color1',
+  color2: 'color2',
+  gradientAngle: 'gradientAngle'
+} as const;
 const DEFAULT_REACTION_EMOJIS = ['OK', 'DONE', 'THUMBSUP', 'HEART', 'LAUGH'];
 let messageResourceCacheCleanupTimer: NodeJS.Timeout | undefined;
 const PASSIVE_TOGGLE_COMMANDS = [
@@ -506,10 +525,197 @@ function styleStickerFeatureName(feature: StyleStickerFeature) {
   return feature === 'byte_style' ? '字节范' : '勇攀高峰';
 }
 
-async function sendStyleStickerToChat(bot: FeishuBot, chatId: string, feature: StyleStickerFeature, text: string) {
-  const { image } = await renderStyleStickerImage(text, styleStickerFlavor(feature));
+async function sendStyleStickerToChat(
+  bot: FeishuBot,
+  chatId: string,
+  feature: StyleStickerFeature,
+  text: string,
+  options: { color1?: unknown; color2?: unknown; gradientAngle?: unknown } = {}
+) {
+  const { image } = await renderStyleStickerImage(text, styleStickerFlavor(feature), options);
   const imageKey = await uploadImage(bot, image, `${styleStickerCommandName(feature).slice(1)}.png`);
   await sendImageToChat(bot, chatId, imageKey);
+}
+
+function plainText(content: string) {
+  return { tag: 'plain_text', content };
+}
+
+function styleStickerCardHeaderTemplate(feature: StyleStickerFeature) {
+  return feature === 'byte_style' ? 'purple' : 'blue';
+}
+
+function styleStickerCardButton(action: StyleStickerCardAction, feature: StyleStickerFeature) {
+  return {
+    tag: 'button',
+    name: `style_sticker_${action}`,
+    text: plainText(action === 'preview' ? '预览' : '发送'),
+    type: action === 'preview' ? 'default' : 'primary_filled',
+    width: 'fill',
+    form_action_type: 'submit',
+    behaviors: [
+      {
+        type: 'callback',
+        value: {
+          kind: STYLE_STICKER_CARD_KIND,
+          action,
+          feature
+        }
+      }
+    ]
+  };
+}
+
+function buildStyleStickerCard(state: StyleStickerCardState) {
+  const featureName = styleStickerFeatureName(state.feature);
+  return {
+    schema: '2.0',
+    config: {
+      update_multi: true,
+      wide_screen_mode: true,
+      enable_forward: false,
+      summary: { content: `${featureName}生图卡片` }
+    },
+    header: {
+      title: plainText(`${featureName}生成器`),
+      template: styleStickerCardHeaderTemplate(state.feature)
+    },
+    body: {
+      direction: 'vertical',
+      padding: '12px 12px 12px 12px',
+      vertical_spacing: '12px',
+      elements: [
+        {
+          tag: 'img',
+          element_id: 'style_sticker_preview',
+          img_key: state.imageKey,
+          alt: plainText(`${featureName}预览图`),
+          mode: 'fit_horizontal',
+          preview: true
+        },
+        {
+          tag: 'markdown',
+          content: `颜色：\`${state.color1}\` / \`${state.color2}\`，渐变角度：\`${state.gradientAngle}°\``
+        },
+        {
+          tag: 'form',
+          element_id: STYLE_STICKER_FORM_NAME,
+          name: STYLE_STICKER_FORM_NAME,
+          direction: 'vertical',
+          vertical_spacing: '10px',
+          elements: [
+            {
+              tag: 'input',
+              element_id: 'style_sticker_text',
+              name: STYLE_STICKER_FORM_FIELDS.text,
+              label: plainText('文案'),
+              placeholder: plainText('输入要生成的文案'),
+              default_value: state.text,
+              input_type: 'multiline_text',
+              rows: 2,
+              auto_resize: true,
+              max_rows: 4,
+              required: true,
+              max_length: 150
+            },
+            {
+              tag: 'column_set',
+              flex_mode: 'bisect',
+              horizontal_spacing: '8px',
+              columns: [
+                {
+                  tag: 'column',
+                  width: 'weighted',
+                  weight: 1,
+                  elements: [
+                    {
+                      tag: 'input',
+                      element_id: 'style_sticker_color1',
+                      name: STYLE_STICKER_FORM_FIELDS.color1,
+                      label: plainText('颜色 1'),
+                      placeholder: plainText('#9af665'),
+                      default_value: state.color1,
+                      max_length: 7
+                    }
+                  ]
+                },
+                {
+                  tag: 'column',
+                  width: 'weighted',
+                  weight: 1,
+                  elements: [
+                    {
+                      tag: 'input',
+                      element_id: 'style_sticker_color2',
+                      name: STYLE_STICKER_FORM_FIELDS.color2,
+                      label: plainText('颜色 2'),
+                      placeholder: plainText('#ed12d3'),
+                      default_value: state.color2,
+                      max_length: 7
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              tag: 'slider',
+              element_id: 'style_sticker_gradient_angle',
+              name: STYLE_STICKER_FORM_FIELDS.gradientAngle,
+              label: plainText('渐变角度'),
+              min: 0,
+              max: 360,
+              step: 1,
+              default_value: state.gradientAngle
+            },
+            {
+              tag: 'column_set',
+              flex_mode: 'bisect',
+              horizontal_spacing: '8px',
+              columns: [
+                {
+                  tag: 'column',
+                  width: 'weighted',
+                  weight: 1,
+                  elements: [styleStickerCardButton('preview', state.feature)]
+                },
+                {
+                  tag: 'column',
+                  width: 'weighted',
+                  weight: 1,
+                  elements: [styleStickerCardButton('send', state.feature)]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  };
+}
+
+async function renderStyleStickerCardState(
+  bot: FeishuBot,
+  feature: StyleStickerFeature,
+  text: string,
+  options: { color1?: unknown; color2?: unknown; gradientAngle?: unknown } = {}
+) {
+  const fallbackText = styleStickerFeatureName(feature);
+  const renderText = text.trim() || fallbackText;
+  const { image, colors, gradientAngle } = await renderStyleStickerImage(renderText, styleStickerFlavor(feature), options);
+  const imageKey = await uploadImage(bot, image, `${styleStickerCommandName(feature).slice(1)}-preview.png`);
+  return {
+    feature,
+    text: renderText,
+    color1: colors[0],
+    color2: colors[1],
+    gradientAngle,
+    imageKey
+  };
+}
+
+async function replyStyleStickerGeneratorCard(bot: FeishuBot, messageId: string, feature: StyleStickerFeature) {
+  const state = await renderStyleStickerCardState(bot, feature, styleStickerFeatureName(feature));
+  await replyCard(bot, messageId, buildStyleStickerCard(state));
 }
 
 async function addReaction(bot: FeishuBot, messageId: string, reactionType: string) {
@@ -541,6 +747,23 @@ async function replyCard(bot: FeishuBot, messageId: string, card: object) {
   });
 }
 
+async function updateInteractiveMessage(bot: FeishuBot, messageId: string, card: object) {
+  const token = await tenantAccessToken(bot);
+  await feishuJson(`${openBase(bot.domain)}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`, {
+    method: 'PATCH',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ content: JSON.stringify(card) })
+  });
+}
+
+async function deleteMessage(bot: FeishuBot, messageId: string) {
+  const token = await tenantAccessToken(bot);
+  await feishuJson(`${openBase(bot.domain)}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${token}` }
+  });
+}
+
 function debugFeishu(label: string, payload: unknown) {
   if (process.env.DOGEBOT_FEISHU_DEBUG !== '1') return;
   try {
@@ -553,6 +776,109 @@ function debugFeishu(label: string, payload: unknown) {
 function idFromFeishuObject(value: any): string {
   if (typeof value === 'string') return value.trim();
   return String(value?.open_id || value?.user_id || value?.union_id || '').trim();
+}
+
+function isRecord(value: unknown): value is Record<string, any> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function isStyleStickerFeature(value: unknown): value is StyleStickerFeature {
+  return value === 'byte_style' || value === 'scale_new_heights';
+}
+
+function isStyleStickerCardAction(value: unknown): value is StyleStickerCardAction {
+  return value === 'preview' || value === 'send';
+}
+
+function firstStringValue(value: unknown) {
+  if (Array.isArray(value)) return firstStringValue(value[0]);
+  return typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
+}
+
+function formStringValue(formValue: Record<string, any>, field: string) {
+  return firstStringValue(formValue[field]);
+}
+
+function normalizeCardGradientAngle(value: unknown) {
+  const parsed = Number(firstStringValue(value));
+  if (!Number.isFinite(parsed)) return undefined;
+  return Math.min(360, Math.max(0, Math.round(parsed)));
+}
+
+function parseStyleStickerCardActionPayload(payload: any) {
+  const event = payload?.event || payload;
+  const actionValue = event?.action?.value;
+  if (!isRecord(actionValue) || actionValue.kind !== STYLE_STICKER_CARD_KIND) return null;
+  if (!isStyleStickerFeature(actionValue.feature) || !isStyleStickerCardAction(actionValue.action)) return null;
+
+  const messageId = String(
+    event?.context?.open_message_id ||
+      event?.open_message_id ||
+      event?.message_id ||
+      payload?.context?.open_message_id ||
+      payload?.open_message_id ||
+      ''
+  ).trim();
+  const chatId = String(
+    event?.context?.open_chat_id ||
+      event?.open_chat_id ||
+      event?.chat_id ||
+      payload?.context?.open_chat_id ||
+      payload?.open_chat_id ||
+      ''
+  ).trim();
+  if (!messageId || !chatId) return null;
+
+  return {
+    eventId: String(payload?.header?.event_id || event?.event_id || '').trim(),
+    messageId,
+    chatId,
+    feature: actionValue.feature,
+    action: actionValue.action,
+    formValue: isRecord(event?.action?.form_value) ? event.action.form_value : {}
+  };
+}
+
+export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
+  const parsed = parseStyleStickerCardActionPayload(payload);
+  if (!parsed) return;
+  if (parsed.eventId && !rememberFeishuEventKey(`card:${parsed.eventId}`)) return;
+
+  const text = formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.text) || styleStickerFeatureName(parsed.feature);
+  const color1 = formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.color1);
+  const color2 = formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.color2);
+  const gradientAngle = normalizeCardGradientAngle(formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.gradientAngle));
+
+  try {
+    const state = await renderStyleStickerCardState(bot, parsed.feature, text, {
+      color1,
+      color2,
+      gradientAngle
+    });
+    if (parsed.action === 'preview') {
+      await updateInteractiveMessage(bot, parsed.messageId, buildStyleStickerCard(state));
+      return;
+    }
+
+    try {
+      await deleteMessage(bot, parsed.messageId);
+    } catch (error) {
+      console.error('[feishu] style sticker card delete failed', {
+        botId: bot.id,
+        messageId: parsed.messageId,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+    await sendImageToChat(bot, parsed.chatId, state.imageKey);
+  } catch (error) {
+    console.error('[feishu] style sticker card action failed', {
+      botId: bot.id,
+      messageId: parsed.messageId,
+      action: parsed.action,
+      feature: parsed.feature,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
 }
 
 function senderIdentity(event: any) {
@@ -2080,7 +2406,15 @@ async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string
       return true;
     }
     if (!styleStickerCommand.text && !hasSettingUpdates) {
-      await replyText(bot, messageId, styleStickerUsage(styleStickerCommand.command));
+      try {
+        await replyStyleStickerGeneratorCard(bot, messageId, styleStickerCommand.feature);
+      } catch (error) {
+        await replyText(
+          bot,
+          messageId,
+          error instanceof Error ? `${styleStickerCommand.featureName}卡片生成失败：${error.message}` : `${styleStickerCommand.featureName}卡片生成失败`
+        );
+      }
       return true;
     }
 
@@ -2419,6 +2753,20 @@ export async function feishuWebhook(req: Request, res: ExpressResponse) {
         error: error instanceof Error ? error.message : String(error)
       });
     });
+  }
+  if (eventType === 'card.action.trigger') {
+    const eventId = String(payload.header?.event_id || '').trim();
+    const messageId = String(payload.event?.context?.open_message_id || '').trim();
+    handleFeishuCardAction(bot, payload).catch((error) => {
+      console.error('[feishu] card action handling failed', {
+        botId: bot.id,
+        messageId,
+        eventId,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    });
+    res.json({ toast: { type: 'info', content: '正在生成，请稍等' } });
+    return;
   }
 
   res.json({ ok: true });
