@@ -1,5 +1,5 @@
 import type { FeishuBot } from './feishu.js';
-import { getEnabledBots, handleFeishuMessage, previewTextFromMessage } from './feishu.js';
+import { getEnabledBots, handleFeishuCardAction, handleFeishuMessage, previewTextFromMessage } from './feishu.js';
 
 type LarkModule = typeof import('@larksuiteoapi/node-sdk');
 type ManagedConnection = {
@@ -93,6 +93,11 @@ class FeishuConnectionManager {
             });
             void handleFeishuMessage(bot, data?.event || data).catch((error) => {
               console.error(`[feishu] bot ${bot.id} message handling failed`, error);
+            });
+          },
+          'card.action.trigger': async (data: any) => {
+            void handleFeishuCardAction(bot, data).catch((error) => {
+              console.error(`[feishu] bot ${bot.id} card action handling failed`, error);
             });
           },
           'im.message.reaction.created_v1': async () => {}
