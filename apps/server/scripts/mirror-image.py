@@ -15,7 +15,7 @@ axis = sys.argv[3]
 source_side = sys.argv[4]
 
 try:
-    from PIL import Image
+    from PIL import Image, ImageSequence
 except Exception as exc:  # pragma: no cover - runtime dependency guard
     fail(f"failed to import pillow: {exc}. Please install pillow.")
 
@@ -26,35 +26,73 @@ if source_side not in {"start", "end"}:
     fail(f"unknown sourceSide: {source_side}")
 
 try:
-    image = Image.open(input_path).convert("RGBA")
+    image = Image.open(input_path)
 except Exception as exc:
     fail(f"failed to load input image: {exc}")
 
-width, height = image.size
-result = image.copy()
+def mirror_frame(frame: Image.Image) -> Image.Image:
+    rgba = frame.convert("RGBA")
+    width, height = rgba.size
+    result = rgba.copy()
+    if axis == "vertical":
+        half_width = width // 2
+        if source_side == "start":
+            source = rgba.crop((0, 0, half_width, height))
+            mirrored = source.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+            result.paste(mirrored, (width - half_width, 0))
+        else:
+            source = rgba.crop((width - half_width, 0, width, height))
+            mirrored = source.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+            result.paste(mirrored, (0, 0))
+    else:
+        half_height = height // 2
+        if source_side == "start":
+            source = rgba.crop((0, 0, width, half_height))
+            mirrored = source.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
+            result.paste(mirrored, (0, height - half_height))
+        else:
+            source = rgba.crop((0, height - half_height, width, height))
+            mirrored = source.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
+            result.paste(mirrored, (0, 0))
+    return result
 
-if axis == "vertical":
-    half_width = width // 2
-    if source_side == "start":
-      source = image.crop((0, 0, half_width, height))
-      mirrored = source.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
-      result.paste(mirrored, (width - half_width, 0))
-    else:
-      source = image.crop((width - half_width, 0, width, height))
-      mirrored = source.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
-      result.paste(mirrored, (0, 0))
-else:
-    half_height = height // 2
-    if source_side == "start":
-      source = image.crop((0, 0, width, half_height))
-      mirrored = source.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
-      result.paste(mirrored, (0, height - half_height))
-    else:
-      source = image.crop((0, height - half_height, width, height))
-      mirrored = source.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
-      result.paste(mirrored, (0, 0))
+
+is_animated = bool(getattr(image, "is_animated", False) and getattr(image, "n_frames", 1) > 1)
+output_ext = output_path.rsplit(".", 1)[-1].lower() if "." in output_path else "png"
 
 try:
-    result.save(output_path, format="PNG")
+    if is_animated:
+        frames = [mirror_frame(frame.copy()) for frame in ImageSequence.Iterator(image)]
+        durations = []
+        disposals = []
+        for frame in ImageSequence.Iterator(image):
+            durations.append(frame.info.get("duration", image.info.get("duration", 100)))
+            disposals.append(frame.info.get("disposal", image.info.get("disposal", 2)))
+        save_kwargs = {
+            "save_all": True,
+            "append_images": frames[1:],
+            "loop": image.info.get("loop", 0),
+            "duration": durations,
+        }
+        if output_ext == "gif":
+            save_kwargs["disposal"] = disposals
+            frames[0].save(output_path, format="GIF", **save_kwargs)
+        elif output_ext == "webp":
+            save_kwargs["lossless"] = True
+            frames[0].save(output_path, format="WEBP", **save_kwargs)
+        else:
+            frames[0].save(output_path, format="GIF", **save_kwargs)
+    else:
+        result = mirror_frame(image)
+        save_format = {
+            "gif": "GIF",
+            "webp": "WEBP",
+            "jpg": "JPEG",
+            "jpeg": "JPEG",
+            "png": "PNG",
+        }.get(output_ext, "PNG")
+        if save_format == "JPEG":
+            result = result.convert("RGB")
+        result.save(output_path, format=save_format)
 except Exception as exc:
     fail(f"failed to save output image: {exc}")

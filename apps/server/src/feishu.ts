@@ -1026,10 +1026,17 @@ async function ensureProcessedMediaDir() {
   await fs.mkdir(MESSAGE_RESOURCE_PROCESSED_DIR, { recursive: true });
 }
 
-function buildProcessedMediaFileName(fileKey: string, sourceType: 'image' | 'sticker', chatId: string, variant: MirroredImageVariant, timestamp = Date.now()) {
+function buildProcessedMediaFileNameWithExtension(
+  fileKey: string,
+  sourceType: 'image' | 'sticker',
+  chatId: string,
+  variant: MirroredImageVariant,
+  extension: string,
+  timestamp = Date.now()
+) {
   const sourceMarker = sanitizeCacheSegment(sourceType, 'unknown');
   const chatMarker = sanitizeCacheSegment(chatId, 'unknown_chat');
-  return `ts=${timestamp}--src=${sourceMarker}--chat=${chatMarker}--key=${sanitizeFileKeyForCache(fileKey)}--fx=mirror-${variant.axis}-${variant.sourceSide}.png`;
+  return `ts=${timestamp}--src=${sourceMarker}--chat=${chatMarker}--key=${sanitizeFileKeyForCache(fileKey)}--fx=mirror-${variant.axis}-${variant.sourceSide}${extension}`;
 }
 
 function randomMirrorVariant(): MirroredImageVariant {
@@ -1071,7 +1078,8 @@ async function resolvePassiveMediaResource(bot: FeishuBot, messageId: string, ch
 async function buildMirroredImage(resource: PassiveMediaResource, chatId: string) {
   await ensureProcessedMediaDir();
   const variant = randomMirrorVariant();
-  const outputPath = join(MESSAGE_RESOURCE_PROCESSED_DIR, buildProcessedMediaFileName(resource.fileKey, resource.sourceType, chatId, variant));
+  const outputExtension = extname(resource.resource.fileName) || guessExtensionFromContentType(resource.resource.contentType, '.png');
+  const outputPath = join(MESSAGE_RESOURCE_PROCESSED_DIR, buildProcessedMediaFileNameWithExtension(resource.fileKey, resource.sourceType, chatId, variant, outputExtension));
   await execFileAsync('python3', [IMAGE_MIRROR_SCRIPT_PATH, resource.resource.filePath, outputPath, variant.axis, variant.sourceSide], { maxBuffer: 1024 * 1024 });
   return {
     variant,
