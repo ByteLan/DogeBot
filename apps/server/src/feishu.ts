@@ -99,6 +99,7 @@ type HelpCommandRow = {
 };
 
 type PassiveFeature = 'reaction' | 'repeat' | 'llm_reply' | 'media_repeat' | 'image_reverse' | 'sticker_reverse';
+type ProbabilisticFeature = PassiveFeature | StyleStickerFeature;
 
 type PassiveToggleCommand =
   | { isPassiveToggle: false }
@@ -109,7 +110,9 @@ type PassiveToggleCommand =
     featureName: string;
     shouldEnable: boolean;
     shouldDisable: boolean;
+      rate?: number;
     hasConflictingAction: boolean;
+      hasInvalidRate: boolean;
     hasUnknownArgs: boolean;
   };
 
@@ -125,8 +128,10 @@ type StyleStickerCommand =
     flavor: StickerFlavor;
     shouldEnable: boolean;
     shouldDisable: boolean;
+      rate?: number;
     maxChars?: number;
     hasConflictingAction: boolean;
+      hasInvalidRate: boolean;
     hasInvalidMax: boolean;
     text: string;
   };
@@ -208,12 +213,27 @@ type MirroredImageVariant = {
 
 type StyleStickerChatSetting = {
   enabled: boolean;
+  rate: number;
+  defaultRate: number;
+  maxRate: number;
+  hasCustomRate: boolean;
+  isRateCapped: boolean;
   maxChars: number;
   hasCustomMax: boolean;
   isCapped: boolean;
 };
 
+type PassiveChatSetting = {
+  enabled: boolean;
+  rate: number;
+  defaultRate: number;
+  maxRate: number;
+  hasCustomRate: boolean;
+  isRateCapped: boolean;
+};
+
 type StyleStickerCardAction = 'preview' | 'send' | 'withdraw';
+type HelpCardAction = 'submit' | 'cancel';
 
 type StyleStickerCardState = {
   feature: StyleStickerFeature;
@@ -223,6 +243,22 @@ type StyleStickerCardState = {
   gradientAngle: number;
   imageKey: string;
 };
+
+type HelpRateDescriptor =
+  | {
+      kind: 'passive';
+      feature: PassiveFeature;
+      command: string;
+      featureName: string;
+      formField: string;
+    }
+  | {
+      kind: 'style';
+      feature: StyleStickerFeature;
+      command: string;
+      featureName: string;
+      formField: string;
+    };
 
 let cronSchedulerTimer: NodeJS.Timeout | undefined;
 let cronSchedulerRunning = false;
@@ -253,7 +289,9 @@ const USERS_CARD_PERSON_LIST_CHUNK_SIZE = 100;
 const CARD_REFERENCE_READY_DELAY_MS = 1000;
 const RECENT_CHAT_MEMORY_LIMIT = 30;
 const STYLE_STICKER_CARD_KIND = 'style_sticker_generator';
+const HELP_CARD_KIND = 'help_probability_settings';
 const STYLE_STICKER_FORM_NAME = 'style_sticker_form';
+const HELP_RATE_FORM_NAME = 'help_probability_form';
 const STYLE_STICKER_FORM_FIELDS = {
   text: 'text',
   color1: 'color1',
@@ -261,6 +299,16 @@ const STYLE_STICKER_FORM_FIELDS = {
   customColor1: 'customColor1',
   customColor2: 'customColor2',
   gradientAngle: 'gradientAngle'
+} as const;
+const HELP_RATE_FORM_FIELDS = {
+  reaction: 'reactionRate',
+  repeat: 'repeatRate',
+  llmReply: 'llmReplyRate',
+  mediaRepeat: 'mediaRepeatRate',
+  imageReverse: 'imageReverseImageRate',
+  stickerReverse: 'imageReverseStickerRate',
+  byteStyle: 'byteStyleRate',
+  scaleNewHeights: 'scaleNewHeightsRate'
 } as const;
 const STYLE_STICKER_CARD_COLOR_OPTIONS = [
   '#9af665',
@@ -298,11 +346,21 @@ const STYLE_STICKER_COMMANDS = [
   { command: '/scale-new-heights', feature: 'scale_new_heights', featureName: '勇攀高峰', flavor: 'snh' },
   { command: '/勇攀高峰', feature: 'scale_new_heights', featureName: '勇攀高峰', flavor: 'snh' }
 ] as const;
+const HELP_RATE_DESCRIPTORS: HelpRateDescriptor[] = [
+  { kind: 'passive', feature: 'reaction', command: '/reaction', featureName: '贴表情', formField: HELP_RATE_FORM_FIELDS.reaction },
+  { kind: 'passive', feature: 'repeat', command: '/repeat', featureName: '文本复读', formField: HELP_RATE_FORM_FIELDS.repeat },
+  { kind: 'passive', feature: 'llm_reply', command: '/llm-reply', featureName: '大模型接话', formField: HELP_RATE_FORM_FIELDS.llmReply },
+  { kind: 'passive', feature: 'media_repeat', command: '/media-repeat', featureName: '图片/表情包复读', formField: HELP_RATE_FORM_FIELDS.mediaRepeat },
+  { kind: 'passive', feature: 'image_reverse', command: '/image-reverse', featureName: '图片镜像反转', formField: HELP_RATE_FORM_FIELDS.imageReverse },
+  { kind: 'passive', feature: 'sticker_reverse', command: '/sticker-reverse', featureName: '表情包镜像反转', formField: HELP_RATE_FORM_FIELDS.stickerReverse },
+  { kind: 'style', feature: 'byte_style', command: '/byte-style / /字节范', featureName: '字节范随机生图', formField: HELP_RATE_FORM_FIELDS.byteStyle },
+  { kind: 'style', feature: 'scale_new_heights', command: '/scale-new-heights / /勇攀高峰', featureName: '勇攀高峰随机生图', formField: HELP_RATE_FORM_FIELDS.scaleNewHeights }
+] as const;
 const HELP_COMMAND_ROWS: HelpCommandRow[] = [
   {
     command: '/help',
     params: '无',
-    description: '查看当前机器人支持的斜杠命令、可填参数和功能说明。'
+    description: '查看当前机器人支持的斜杠命令、可填参数和功能说明，并可配置当前会话的概率能力。'
   },
   {
     command: '/users',
@@ -336,23 +394,23 @@ const HELP_COMMAND_ROWS: HelpCommandRow[] = [
   },
   {
     command: '/reaction、/repeat、/llm-reply',
-    params: '--enable / --disable',
-    description: '开启或关闭当前会话的贴表情、文本复读、大模型接话等被动能力。'
+    params: '--enable / --disable / --rate n',
+    description: '开启或关闭当前会话的贴表情、文本复读、大模型接话等被动能力，并可设置会话概率。'
   },
   {
     command: '/media-repeat、/image-reverse、/sticker-reverse',
-    params: '--enable / --disable',
-    description: '开启或关闭当前会话的图片/表情包复读、图片镜像、表情包镜像能力。'
+    params: '--enable / --disable / --rate n',
+    description: '开启或关闭当前会话的图片/表情包复读、图片镜像、表情包镜像能力，并可设置会话概率。'
   },
   {
     command: '/byte-style、/字节范',
-    params: '[文案]、--enable、--disable、--max n',
-    description: '把文案生成“字节范”图片；不带参数会发交互卡片；开关和 --max 控制随机生图。'
+    params: '[文案]、--enable、--disable、--rate n、--max n',
+    description: '把文案生成“字节范”图片；不带参数会发交互卡片；开关、rate 和 --max 控制随机生图。'
   },
   {
     command: '/scale-new-heights、/勇攀高峰',
-    params: '[文案]、--enable、--disable、--max n',
-    description: '把文案生成“勇攀高峰”图片；不带参数会发交互卡片；开关和 --max 控制随机生图。'
+    params: '[文案]、--enable、--disable、--rate n、--max n',
+    description: '把文案生成“勇攀高峰”图片；不带参数会发交互卡片；开关、rate 和 --max 控制随机生图。'
   }
 ];
 const recentChatMessages = new Map<string, RecentChatMessage[]>();
@@ -856,59 +914,262 @@ async function replyStyleStickerGeneratorCard(bot: FeishuBot, messageId: string,
   await replyCard(bot, messageId, buildStyleStickerCard(state));
 }
 
-function helpTableCell(content: string, weight: number, bold = false) {
+function helpCommandsMarkdown() {
+  return [
+    '**命令总览**',
+    '',
+    '| 命令 | 参数 | 功能 |',
+    '| --- | --- | --- |',
+    ...HELP_COMMAND_ROWS.map((row) => `| \`${row.command}\` | ${row.params.replace(/\|/g, '\\|')} | ${row.description.replace(/\|/g, '\\|')} |`)
+  ].join('\n');
+}
+
+function helpOverviewMarkdown() {
+  return [
+    '下面是当前支持的斜杠命令。群聊里需要先 @ 机器人，单聊里可以直接发送。',
+    '',
+    helpCommandsMarkdown(),
+    '',
+    openApiHelpMarkdown(),
+    '',
+    '**概率能力配置**',
+    '当前会话的 `rate` 会优先覆盖环境变量默认值；单项 `rate` 不能超过全局默认值的 5 倍。输入支持 `0.05` 或 `5` 表示 5%；超出范围会按最大值保存，异常值会被忽略。'
+  ].join('\n');
+}
+
+function openApiBaseUrl() {
+  return (envString('OpenApiBaseUrl', 'DOGEBOT_OPEN_API_BASE_URL', 'OPEN_API_BASE_URL') || 'https://doge.bbyte.cn').replace(/\/+$/, '');
+}
+
+function openApiHelpMarkdown() {
+  const base = openApiBaseUrl();
+  return [
+    '**OpenAPI**',
+    '',
+    '| 地址 | 参数说明 | 返回 |',
+    '| --- | --- | --- |',
+    `| \`${base}/open-api/v1/mm\` | 无 | JSON：\`{ data: { url } }\` |`,
+    `| \`${base}/open-api/v1/mm/redirect\` | 无 | 302 重定向到随机抖音视频地址 |`,
+    `| \`${base}/open-api/v1/byte-style?text=xxx\` | \`text\` 必填；\`color1\` / \`color2\` 可选，支持 \`#RRGGBB\`；\`scale\` 可选；\`gradientAngle\` 或 \`ga\` 可选，范围 \`0-360\` | \`image/png\` |`,
+    `| \`${base}/open-api/v1/scale-new-heights?text=xxx\` | \`text\` 必填；\`color1\` / \`color2\` 可选，支持 \`#RRGGBB\`；\`scale\` 可选；\`gradientAngle\` 或 \`ga\` 可选，范围 \`0-360\` | \`image/png\` |`
+  ].join('\n');
+}
+
+function helpRateSettingSummary(botId: number, chatId: string, descriptor: HelpRateDescriptor, config: PassiveInteractionConfig) {
+  const defaultRate = defaultRateForFeature(config, descriptor.feature);
+  return descriptor.kind === 'passive'
+    ? getPassiveFeatureSetting(botId, chatId, descriptor.feature, defaultRate)
+    : getStyleStickerSetting(botId, chatId, descriptor.feature, defaultRate, config.styleStickerDefaultMaxChars, config.styleStickerMaxCharsLimit);
+}
+
+function formatEditableRateValue(rate: number) {
+  return rate.toFixed(4).replace(/\.?0+$/, '');
+}
+
+function helpRateEnabledField(descriptor: HelpRateDescriptor) {
+  return `${descriptor.formField}Enabled`;
+}
+
+function helpRateEnabledSelect(descriptor: HelpRateDescriptor, setting: PassiveChatSetting | StyleStickerChatSetting) {
   return {
-    tag: 'column',
-    width: 'weighted',
-    weight,
-    vertical_align: 'top',
-    elements: [
+    tag: 'select_static',
+    element_id: `help_rate_enabled_${descriptor.formField}`,
+    name: helpRateEnabledField(descriptor),
+    placeholder: plainText('选择状态'),
+    initial_option: setting.enabled ? 'enabled' : 'disabled',
+    type: 'default',
+    width: 'fill',
+    options: [
+      { text: plainText('开启'), value: 'enabled' },
+      { text: plainText('关闭'), value: 'disabled' }
+    ]
+  };
+}
+
+function helpRateInput(descriptor: HelpRateDescriptor, setting: PassiveChatSetting | StyleStickerChatSetting) {
+  return {
+    tag: 'input',
+    element_id: `help_rate_${descriptor.formField}`,
+    name: descriptor.formField,
+    placeholder: plainText(`支持 0.05 或 5`),
+    default_value: formatEditableRateValue(setting.rate),
+    max_length: 8
+  };
+}
+
+function helpRateFormHeader() {
+  return {
+    tag: 'column_set',
+    element_id: 'help_rate_form_header',
+    flex_mode: 'none',
+    horizontal_spacing: '8px',
+    columns: [
       {
-        tag: 'markdown',
-        content: bold ? `**${content}**` : content
+        tag: 'column',
+        width: 'weighted',
+        weight: 4,
+        elements: [
+          {
+            tag: 'markdown',
+            content: '**配置项**'
+          }
+        ]
+      },
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 3,
+        elements: [
+          {
+            tag: 'markdown',
+            content: '**状态**'
+          }
+        ]
+      },
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 3,
+        elements: [
+          {
+            tag: 'markdown',
+            content: '**rate**'
+          }
+        ]
       }
     ]
   };
 }
 
-function helpTableRow(row: HelpCommandRow, index: number) {
+function helpRateItem(descriptor: HelpRateDescriptor, setting: PassiveChatSetting | StyleStickerChatSetting) {
   return {
     tag: 'column_set',
-    element_id: `help_row_${index}`,
+    element_id: `help_rate_item_${descriptor.formField}`,
     flex_mode: 'none',
     horizontal_spacing: '8px',
     columns: [
-      helpTableCell(row.command, 2),
-      helpTableCell(row.params, 3),
-      helpTableCell(row.description, 5)
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 4,
+        elements: [
+          {
+            tag: 'markdown',
+            content: `**${descriptor.featureName}**\n命令：\`${descriptor.command}\`\n最大值：\`${formatRatePercent(setting.maxRate)}\`；全局默认：\`${formatRatePercent(setting.defaultRate)}\`；当前：\`${setting.enabled ? '开启' : '关闭'} / ${formatRatePercent(setting.rate)}\`${setting.hasCustomRate ? '（会话配置）' : '（继承全局）'}`
+          }
+        ]
+      },
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 3,
+        elements: [helpRateEnabledSelect(descriptor, setting)]
+      },
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 3,
+        elements: [helpRateInput(descriptor, setting)]
+      }
     ]
   };
 }
 
-function buildHelpCard() {
+function helpRateSummaryMarkdown(botId: number, chatId: string) {
+  const config = passiveInteractionConfig();
+  return HELP_RATE_DESCRIPTORS
+    .map((descriptor) => {
+      const setting = helpRateSettingSummary(botId, chatId, descriptor, config);
+      return `- \`${descriptor.command}\`：当前会话 \`${setting.enabled ? '开启' : '关闭'} / ${formatRatePercent(setting.rate)}\`${setting.hasCustomRate ? '（会话配置）' : '（继承全局）'}；全局默认 \`${formatRatePercent(setting.defaultRate)}\`；上限 \`${formatRatePercent(setting.maxRate)}\`${setting.isRateCapped ? '（历史值已按上限收敛）' : ''}`;
+    })
+    .join('\n');
+}
+
+function helpCardButton(action: HelpCardAction) {
+  return {
+    tag: 'button',
+    name: `help_probability_${action}`,
+    text: plainText(action === 'submit' ? '提交' : '取消'),
+    type: action === 'submit' ? 'primary_filled' : 'default',
+    width: 'fill',
+    form_action_type: 'submit',
+    behaviors: [
+      {
+        type: 'callback',
+        value: {
+          kind: HELP_CARD_KIND,
+          action
+        }
+      }
+    ]
+  };
+}
+
+function buildHelpCard(
+  botId: number,
+  chatId: string,
+  options: { showRateForm?: boolean; notice?: string } = {}
+) {
+  const showRateForm = options.showRateForm !== false && Boolean(chatId);
+  const config = passiveInteractionConfig();
   const elements: object[] = [
     {
       tag: 'markdown',
-      content: '下面是当前支持的斜杠命令。群聊里需要先 @ 机器人，单聊里可以直接发送。'
-    },
-    {
-      tag: 'column_set',
-      element_id: 'help_header',
-      flex_mode: 'none',
-      horizontal_spacing: '8px',
-      columns: [
-        helpTableCell('命令', 2, true),
-        helpTableCell('可填参数', 3, true),
-        helpTableCell('功能', 5, true)
-      ]
-    },
-    { tag: 'hr' }
+      content: helpOverviewMarkdown()
+    }
   ];
 
-  HELP_COMMAND_ROWS.forEach((row, index) => {
-    elements.push(helpTableRow(row, index));
-    if (index < HELP_COMMAND_ROWS.length - 1) elements.push({ tag: 'hr' });
-  });
+  elements.push({ tag: 'hr' });
+  if (options.notice) {
+    elements.push({
+      tag: 'markdown',
+      content: options.notice
+    });
+  }
+
+  if (showRateForm) {
+    elements.push({
+      tag: 'form',
+      element_id: HELP_RATE_FORM_NAME,
+      name: HELP_RATE_FORM_NAME,
+      direction: 'vertical',
+      vertical_spacing: '10px',
+        elements: [
+          helpRateFormHeader(),
+          { tag: 'hr' },
+          ...HELP_RATE_DESCRIPTORS.flatMap((descriptor, index) => {
+            const setting = helpRateSettingSummary(botId, chatId, descriptor, config);
+            const parts: object[] = [helpRateItem(descriptor, setting)];
+            if (index < HELP_RATE_DESCRIPTORS.length - 1) parts.push({ tag: 'hr' });
+            return parts;
+          }),
+        {
+          tag: 'column_set',
+          flex_mode: 'bisect',
+          horizontal_spacing: '8px',
+          columns: [
+            {
+              tag: 'column',
+              width: 'weighted',
+              weight: 1,
+              elements: [helpCardButton('submit')]
+            },
+            {
+              tag: 'column',
+              width: 'weighted',
+              weight: 1,
+              elements: [helpCardButton('cancel')]
+            }
+          ]
+        }
+      ]
+    });
+  } else {
+    elements.push({
+      tag: 'markdown',
+      content: `${helpRateSummaryMarkdown(botId, chatId)}\n\n如需再次编辑，请重新发送 \`/help\`。`
+    });
+  }
 
   return {
     schema: '2.0',
@@ -930,8 +1191,8 @@ function buildHelpCard() {
   };
 }
 
-async function replyHelpCard(bot: FeishuBot, messageId: string) {
-  await replyCard(bot, messageId, buildHelpCard());
+async function replyHelpCard(bot: FeishuBot, messageId: string, chatId: string) {
+  await replyCard(bot, messageId, buildHelpCard(bot.id, chatId));
 }
 
 async function addReaction(bot: FeishuBot, messageId: string, reactionType: string) {
@@ -1006,6 +1267,10 @@ function isStyleStickerCardAction(value: unknown): value is StyleStickerCardActi
   return value === 'preview' || value === 'send' || value === 'withdraw';
 }
 
+function isHelpCardAction(value: unknown): value is HelpCardAction {
+  return value === 'submit' || value === 'cancel';
+}
+
 function firstStringValue(value: unknown) {
   if (Array.isArray(value)) return firstStringValue(value[0]);
   return typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
@@ -1028,12 +1293,15 @@ function normalizeCardGradientAngle(value: unknown) {
   return Math.min(360, Math.max(0, Math.round(parsed)));
 }
 
-function parseStyleStickerCardActionPayload(payload: any) {
-  const event = payload?.event || payload;
-  const actionValue = event?.action?.value;
-  if (!isRecord(actionValue) || actionValue.kind !== STYLE_STICKER_CARD_KIND) return null;
-  if (!isStyleStickerFeature(actionValue.feature) || !isStyleStickerCardAction(actionValue.action)) return null;
+function parseHelpEnabledValue(value: unknown) {
+  const text = firstStringValue(value);
+  if (text === 'enabled') return true;
+  if (text === 'disabled') return false;
+  return undefined;
+}
 
+function parseCardActionContext(payload: any) {
+  const event = payload?.event || payload;
   const messageId = String(
     event?.context?.open_message_id ||
       event?.open_message_id ||
@@ -1051,72 +1319,182 @@ function parseStyleStickerCardActionPayload(payload: any) {
       ''
   ).trim();
   if (!messageId || !chatId) return null;
-
   return {
+    event,
     eventId: String(payload?.header?.event_id || event?.event_id || '').trim(),
     messageId,
     chatId,
+    formValue: isRecord(event?.action?.form_value) ? event.action.form_value : {}
+  };
+}
+
+function parseStyleStickerCardActionPayload(payload: any) {
+  const context = parseCardActionContext(payload);
+  if (!context) return null;
+  const actionValue = context.event?.action?.value;
+  if (!isRecord(actionValue) || actionValue.kind !== STYLE_STICKER_CARD_KIND) return null;
+  if (!isStyleStickerFeature(actionValue.feature) || !isStyleStickerCardAction(actionValue.action)) return null;
+
+  return {
+    eventId: context.eventId,
+    messageId: context.messageId,
+    chatId: context.chatId,
     feature: actionValue.feature,
     action: actionValue.action,
-    formValue: isRecord(event?.action?.form_value) ? event.action.form_value : {}
+    formValue: context.formValue
+  };
+}
+
+function parseHelpCardActionPayload(payload: any) {
+  const context = parseCardActionContext(payload);
+  if (!context) return null;
+  const actionValue = context.event?.action?.value;
+  if (!isRecord(actionValue) || actionValue.kind !== HELP_CARD_KIND) return null;
+  if (!isHelpCardAction(actionValue.action)) return null;
+  return {
+    eventId: context.eventId,
+    messageId: context.messageId,
+    chatId: context.chatId,
+    action: actionValue.action,
+    formValue: context.formValue
   };
 }
 
 export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
   const parsed = parseStyleStickerCardActionPayload(payload);
-  if (!parsed) return;
-  if (parsed.eventId && !rememberFeishuEventKey(`card:${parsed.eventId}`)) return;
+  if (parsed) {
+    if (parsed.eventId && !rememberFeishuEventKey(`card:${parsed.eventId}`)) return;
 
-  if (parsed.action === 'withdraw') {
+    if (parsed.action === 'withdraw') {
+      try {
+        await deleteMessage(bot, parsed.messageId);
+      } catch (error) {
+        console.error('[feishu] style sticker card delete failed', {
+          botId: bot.id,
+          messageId: parsed.messageId,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+      return;
+    }
+
+    const text = formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.text) || styleStickerFeatureName(parsed.feature);
+    const color1 = normalizeCardHexColor(formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.customColor1)) ||
+      formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.color1);
+    const color2 = normalizeCardHexColor(formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.customColor2)) ||
+      formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.color2);
+    const gradientAngle = normalizeCardGradientAngle(formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.gradientAngle));
+
     try {
-      await deleteMessage(bot, parsed.messageId);
+      const state = await renderStyleStickerCardState(bot, parsed.feature, text, {
+        color1,
+        color2,
+        gradientAngle
+      });
+      if (parsed.action === 'preview') {
+        await updateInteractiveMessage(bot, parsed.messageId, buildStyleStickerCard(state));
+        return;
+      }
+
+      try {
+        await deleteMessage(bot, parsed.messageId);
+      } catch (error) {
+        console.error('[feishu] style sticker card delete failed', {
+          botId: bot.id,
+          messageId: parsed.messageId,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+      await sendImageToChat(bot, parsed.chatId, state.imageKey);
     } catch (error) {
-      console.error('[feishu] style sticker card delete failed', {
+      console.error('[feishu] style sticker card action failed', {
         botId: bot.id,
         messageId: parsed.messageId,
+        action: parsed.action,
+        feature: parsed.feature,
         error: error instanceof Error ? error.message : String(error)
       });
     }
     return;
   }
 
-  const text = formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.text) || styleStickerFeatureName(parsed.feature);
-  const color1 = normalizeCardHexColor(formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.customColor1)) ||
-    formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.color1);
-  const color2 = normalizeCardHexColor(formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.customColor2)) ||
-    formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.color2);
-  const gradientAngle = normalizeCardGradientAngle(formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.gradientAngle));
+  const helpParsed = parseHelpCardActionPayload(payload);
+  if (!helpParsed) return;
+  if (helpParsed.eventId && !rememberFeishuEventKey(`card:${helpParsed.eventId}`)) return;
 
-  try {
-    const state = await renderStyleStickerCardState(bot, parsed.feature, text, {
-      color1,
-      color2,
-      gradientAngle
+  if (helpParsed.action === 'cancel') {
+    await updateInteractiveMessage(bot, helpParsed.messageId, buildHelpCard(bot.id, helpParsed.chatId, {
+      showRateForm: false,
+      notice: '已取消本次概率修改。'
+    }));
+    return;
+  }
+
+  const config = passiveInteractionConfig();
+  const ignored: string[] = [];
+  const diffs: string[] = [];
+  const updates: Array<{ descriptor: HelpRateDescriptor; enabled?: boolean; rate?: number }> = [];
+  for (const descriptor of HELP_RATE_DESCRIPTORS) {
+    const current = helpRateSettingSummary(bot.id, helpParsed.chatId, descriptor, config);
+    const nextEnabledValue = parseHelpEnabledValue(helpParsed.formValue[helpRateEnabledField(descriptor)]);
+    const enabled = nextEnabledValue === undefined ? current.enabled : nextEnabledValue;
+    const enabledChanged = enabled !== current.enabled;
+
+    const raw = formStringValue(helpParsed.formValue, descriptor.formField);
+    let rate = current.rate;
+    let rateChanged = false;
+    let capped = false;
+    if (raw) {
+      const parsedRate = parseConfigurableRate(raw);
+      if (parsedRate === undefined) {
+        ignored.push(`${descriptor.command} 的异常 rate 已忽略`);
+      } else {
+        const limitedRate = Math.min(parsedRate, current.maxRate);
+        capped = limitedRate !== parsedRate;
+        rate = limitedRate;
+        rateChanged = Math.abs(rate - current.rate) > 1e-9;
+      }
+    }
+
+    if (!enabledChanged && !rateChanged) {
+      continue;
+    }
+
+    updates.push({
+      descriptor,
+      enabled: enabledChanged ? enabled : undefined,
+      rate: rateChanged ? rate : undefined
     });
-    if (parsed.action === 'preview') {
-      await updateInteractiveMessage(bot, parsed.messageId, buildStyleStickerCard(state));
+    const parts: string[] = [];
+    if (enabledChanged) parts.push(`状态 \`${current.enabled ? '开启' : '关闭'}\` -> \`${enabled ? '开启' : '关闭'}\``);
+    if (rateChanged) parts.push(`rate \`${formatRatePercent(current.rate)}\` -> \`${formatRatePercent(rate)}\`${capped ? `（超出范围，按最大值 ${formatRatePercent(current.maxRate)} 保存）` : ''}`);
+    diffs.push(`- \`${descriptor.command}\`：${parts.join('；')}`);
+  }
+
+  updates.forEach(({ descriptor, enabled, rate }) => {
+    if (descriptor.kind === 'passive') {
+      setPassiveFeatureSetting(bot.id, helpParsed.chatId, descriptor.feature, { enabled, rate });
       return;
     }
+    setStyleStickerSetting(bot.id, helpParsed.chatId, descriptor.feature, { enabled, rate });
+  });
 
-    try {
-      await deleteMessage(bot, parsed.messageId);
-    } catch (error) {
-      console.error('[feishu] style sticker card delete failed', {
-        botId: bot.id,
-        messageId: parsed.messageId,
-        error: error instanceof Error ? error.message : String(error)
-      });
-    }
-    await sendImageToChat(bot, parsed.chatId, state.imageKey);
-  } catch (error) {
-    console.error('[feishu] style sticker card action failed', {
-      botId: bot.id,
-      messageId: parsed.messageId,
-      action: parsed.action,
-      feature: parsed.feature,
-      error: error instanceof Error ? error.message : String(error)
-    });
+  const noticeLines: string[] = [];
+  if (diffs.length > 0) {
+    noticeLines.push('**已更新当前会话概率配置**');
+    noticeLines.push(...diffs);
+  } else {
+    noticeLines.push('未检测到有效变更，已保持当前配置。');
   }
+  if (ignored.length > 0) {
+    noticeLines.push('', '**已忽略的输入**');
+    noticeLines.push(...ignored.map((item) => `- ${item}`));
+  }
+
+  await updateInteractiveMessage(bot, helpParsed.messageId, buildHelpCard(bot.id, helpParsed.chatId, {
+    showRateForm: false,
+    notice: noticeLines.join('\n')
+  }));
 }
 
 function senderIdentity(event: any) {
@@ -1139,6 +1517,14 @@ function parseRate(raw: string | undefined, fallback: number) {
   if (!raw?.trim()) return fallback;
   const value = Number(raw);
   if (!Number.isFinite(value)) return fallback;
+  const normalized = value > 1 ? value / 100 : value;
+  return Math.max(0, Math.min(1, normalized));
+}
+
+function parseConfigurableRate(raw: string | undefined) {
+  if (!raw?.trim()) return undefined;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0) return undefined;
   const normalized = value > 1 ? value / 100 : value;
   return Math.max(0, Math.min(1, normalized));
 }
@@ -1190,6 +1576,36 @@ function passiveInteractionConfig(): PassiveInteractionConfig {
     llmMaxTokens: parsePositiveInt(process.env.DOGEBOT_LLM_MAX_TOKENS, 160),
       llmDisableThinking: parseBooleanFlag(process.env.DOGEBOT_LLM_DISABLE_THINKING)
   };
+}
+
+function formatRatePercent(rate: number) {
+  const percent = Math.round(rate * 10000) / 100;
+  return `${Number.isInteger(percent) ? String(percent) : percent.toFixed(2).replace(/\.?0+$/, '')}%`;
+}
+
+function maxRateForDefault(defaultRate: number) {
+  return Math.max(0, Math.min(1, defaultRate * 5));
+}
+
+function defaultRateForFeature(config: PassiveInteractionConfig, feature: ProbabilisticFeature) {
+  switch (feature) {
+    case 'reaction':
+      return config.reactionRate;
+    case 'repeat':
+      return config.repeatRate;
+    case 'llm_reply':
+      return config.imitateRate;
+    case 'media_repeat':
+      return config.imageRepeatRate;
+    case 'image_reverse':
+      return config.imageReverseImageRate;
+    case 'sticker_reverse':
+      return config.imageReverseStickerRate;
+    case 'byte_style':
+      return config.byteStyleRate;
+    case 'scale_new_heights':
+      return config.scaleNewHeightsRate;
+  }
 }
 
 function triggerDecision(rate: number) {
@@ -1756,21 +2172,24 @@ async function runPassiveInteractions(bot: FeishuBot, event: any, messageId: str
   const chatId = messageChatId(event?.message);
   const mentionsBot = messageMentionsBot(bot, event?.message);
   const text = parsedMessage.text;
-  const reactionDecision = triggerDecision(config.reactionRate);
-  const repeatDecision = triggerDecision(config.repeatRate);
-  const imageRepeatDecision = triggerDecision(config.imageRepeatRate);
-  const imitateDecision = triggerDecision(config.imitateRate);
-  const reactionTriggered = config.reactionEmojis.length > 0 && reactionDecision.triggered;
+  const reactionSetting = getPassiveFeatureSetting(bot.id, chatId, 'reaction', config.reactionRate);
+  const repeatSetting = getPassiveFeatureSetting(bot.id, chatId, 'repeat', config.repeatRate);
+  const llmReplySetting = getPassiveFeatureSetting(bot.id, chatId, 'llm_reply', config.imitateRate);
+  const mediaRepeatSetting = getPassiveFeatureSetting(bot.id, chatId, 'media_repeat', config.imageRepeatRate);
+  const imageReverseSetting = getPassiveFeatureSetting(bot.id, chatId, 'image_reverse', config.imageReverseImageRate);
+  const stickerReverseSetting = getPassiveFeatureSetting(bot.id, chatId, 'sticker_reverse', config.imageReverseStickerRate);
+  const reactionTriggered = config.reactionEmojis.length > 0 && reactionSetting.enabled && triggerDecision(reactionSetting.rate).triggered;
   const repeatEligible = Boolean(text) && text.length <= config.repeatMaxChars;
-  const repeatTriggered = repeatEligible && repeatDecision.triggered;
+  const repeatTriggered = repeatEligible && repeatSetting.enabled && triggerDecision(repeatSetting.rate).triggered;
   const mediaRepeatEligible = Boolean(parsedMessage.imageKey || parsedMessage.stickerFileKey);
-  const mediaRepeatTriggered = mediaRepeatEligible && imageRepeatDecision.triggered;
-  const imageReverseTriggered = Boolean(parsedMessage.imageKey) && triggerDecision(config.imageReverseImageRate).triggered;
-  const stickerReverseTriggered = Boolean(parsedMessage.stickerFileKey) && triggerDecision(config.imageReverseStickerRate).triggered;
+  const mediaRepeatTriggered = mediaRepeatEligible && mediaRepeatSetting.enabled && triggerDecision(mediaRepeatSetting.rate).triggered;
+  const imageReverseTriggered = Boolean(parsedMessage.imageKey) && imageReverseSetting.enabled && triggerDecision(imageReverseSetting.rate).triggered;
+  const stickerReverseTriggered = Boolean(parsedMessage.stickerFileKey) && stickerReverseSetting.enabled && triggerDecision(stickerReverseSetting.rate).triggered;
   const byteStyleSetting = getStyleStickerSetting(
     bot.id,
     chatId,
     'byte_style',
+    config.byteStyleRate,
     config.styleStickerDefaultMaxChars,
     config.styleStickerMaxCharsLimit
   );
@@ -1778,32 +2197,33 @@ async function runPassiveInteractions(bot: FeishuBot, event: any, messageId: str
     bot.id,
     chatId,
     'scale_new_heights',
+    config.scaleNewHeightsRate,
     config.styleStickerDefaultMaxChars,
     config.styleStickerMaxCharsLimit
   );
-  const byteStyleTriggered = Boolean(text) && byteStyleSetting.enabled && text.length <= byteStyleSetting.maxChars && triggerDecision(config.byteStyleRate).triggered;
-  const scaleNewHeightsTriggered = Boolean(text) && scaleNewHeightsSetting.enabled && text.length <= scaleNewHeightsSetting.maxChars && triggerDecision(config.scaleNewHeightsRate).triggered;
+  const byteStyleTriggered = Boolean(text) && byteStyleSetting.enabled && text.length <= byteStyleSetting.maxChars && triggerDecision(byteStyleSetting.rate).triggered;
+  const scaleNewHeightsTriggered = Boolean(text) && scaleNewHeightsSetting.enabled && text.length <= scaleNewHeightsSetting.maxChars && triggerDecision(scaleNewHeightsSetting.rate).triggered;
   const imitateEligible = !mentionsBot && Boolean(text);
-  const imitateTriggered = imitateEligible && imitateDecision.triggered;
+  const imitateTriggered = imitateEligible && llmReplySetting.enabled && triggerDecision(llmReplySetting.rate).triggered;
 
-  if (reactionTriggered && isPassiveFeatureEnabled(bot.id, chatId, 'reaction')) {
+  if (reactionTriggered) {
     const emoji = randomItem(config.reactionEmojis);
     tasks.push(addReaction(bot, messageId, emoji));
   }
 
-  if (mediaRepeatTriggered && isPassiveFeatureEnabled(bot.id, chatId, 'media_repeat')) {
+  if (mediaRepeatTriggered) {
     tasks.push(sendPassiveMediaRepeat(bot, event, messageId, parsedMessage));
   }
 
-  if (imageReverseTriggered && isPassiveFeatureEnabled(bot.id, chatId, 'image_reverse')) {
+  if (imageReverseTriggered) {
     tasks.push(sendPassiveMediaReverse(bot, event, messageId, parsedMessage));
   }
 
-  if (stickerReverseTriggered && isPassiveFeatureEnabled(bot.id, chatId, 'sticker_reverse')) {
+  if (stickerReverseTriggered) {
     tasks.push(sendPassiveMediaReverse(bot, event, messageId, parsedMessage));
   }
 
-  const repeatCandidate = repeatTriggered && isPassiveFeatureEnabled(bot.id, chatId, 'repeat');
+  const repeatCandidate = repeatTriggered;
   const styleStickerCandidates: StyleStickerFeature[] = [];
   if (byteStyleTriggered) styleStickerCandidates.push('byte_style');
   if (scaleNewHeightsTriggered) styleStickerCandidates.push('scale_new_heights');
@@ -1821,7 +2241,7 @@ async function runPassiveInteractions(bot: FeishuBot, event: any, messageId: str
     }
   }
 
-  if (imitateTriggered && isPassiveFeatureEnabled(bot.id, chatId, 'llm_reply')) {
+  if (imitateTriggered) {
     tasks.push((async () => {
       const reply = await generateImitationReply(bot, event, text, history, config);
       if (!reply) return;
@@ -2038,9 +2458,43 @@ function parsePassiveToggleCommand(text: string): PassiveToggleCommand {
   const match = matches[0];
   if (!match) return { isPassiveToggle: false };
 
-  const args = text.slice(match.index + match.command.length).trim().split(/\s+/).filter(Boolean);
-  const shouldEnable = args.includes('--enable');
-  const shouldDisable = args.includes('--disable');
+  let rest = text.slice(match.index + match.command.length).trim();
+  let shouldEnable = false;
+  let shouldDisable = false;
+  let rate: number | undefined;
+  let hasInvalidRate = false;
+
+  while (rest) {
+    if (/^--enable(?:\s|$)/.test(rest)) {
+      shouldEnable = true;
+      rest = rest.replace(/^--enable(?:\s+|$)/, '').trim();
+      continue;
+    }
+    if (/^--disable(?:\s|$)/.test(rest)) {
+      shouldDisable = true;
+      rest = rest.replace(/^--disable(?:\s+|$)/, '').trim();
+      continue;
+    }
+    if (/^--rate(?:\s|$)/.test(rest)) {
+      const next = rest.replace(/^--rate(?:\s+|$)/, '').trim();
+      if (!next) {
+        hasInvalidRate = true;
+        rest = '';
+        break;
+      }
+      const token = readQuotedToken(next);
+      const parsedRate = parseConfigurableRate(token.token);
+      if (parsedRate === undefined) {
+        hasInvalidRate = true;
+      } else {
+        rate = parsedRate;
+      }
+      rest = token.rest;
+      continue;
+    }
+    break;
+  }
+
   return {
     isPassiveToggle: true,
     command: match.command,
@@ -2048,8 +2502,10 @@ function parsePassiveToggleCommand(text: string): PassiveToggleCommand {
     featureName: match.featureName,
     shouldEnable,
     shouldDisable,
+    rate,
     hasConflictingAction: shouldEnable && shouldDisable,
-    hasUnknownArgs: args.some((arg) => arg !== '--enable' && arg !== '--disable')
+    hasInvalidRate,
+    hasUnknownArgs: Boolean(rest)
   };
 }
 
@@ -2064,7 +2520,9 @@ function parseStyleStickerCommand(text: string): StyleStickerCommand {
   let rest = text.slice(match.index + match.command.length).trim();
   let shouldEnable = false;
   let shouldDisable = false;
+  let rate: number | undefined;
   let maxChars: number | undefined;
+  let hasInvalidRate = false;
   let hasInvalidMax = false;
 
   while (rest) {
@@ -2076,6 +2534,23 @@ function parseStyleStickerCommand(text: string): StyleStickerCommand {
     if (/^--disable(?:\s|$)/.test(rest)) {
       shouldDisable = true;
       rest = rest.replace(/^--disable(?:\s+|$)/, '').trim();
+      continue;
+    }
+    if (/^--rate(?:\s|$)/.test(rest)) {
+      const next = rest.replace(/^--rate(?:\s+|$)/, '').trim();
+      if (!next) {
+        hasInvalidRate = true;
+        rest = '';
+        break;
+      }
+      const token = readQuotedToken(next);
+      const parsedRate = parseConfigurableRate(token.token);
+      if (parsedRate === undefined) {
+        hasInvalidRate = true;
+      } else {
+        rate = parsedRate;
+      }
+      rest = token.rest;
       continue;
     }
     if (/^--max(?:\s|$)/.test(rest)) {
@@ -2106,8 +2581,10 @@ function parseStyleStickerCommand(text: string): StyleStickerCommand {
     flavor: match.flavor,
     shouldEnable,
     shouldDisable,
+    rate,
     maxChars,
     hasConflictingAction: shouldEnable && shouldDisable,
+    hasInvalidRate,
     hasInvalidMax,
     text: unquoteCommand(rest)
   };
@@ -2200,53 +2677,105 @@ function removeDouyinSubscription(botId: number, chatId: string, clickText: stri
   return { deleted: result.changes };
 }
 
-function setPassiveFeatureEnabled(botId: number, chatId: string, feature: PassiveFeature, enabled: boolean) {
-  db.prepare(`
-    INSERT INTO feishu_chat_passive_settings (bot_id, chat_id, feature, enabled)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(bot_id, chat_id, feature) DO UPDATE SET
-      enabled = excluded.enabled,
-      updated_at = CURRENT_TIMESTAMP
-  `).run(botId, chatId, feature, enabled ? 1 : 0);
-}
-
-function isPassiveFeatureEnabled(botId: number, chatId: string, feature: PassiveFeature) {
-  if (!chatId) return feature === 'media_repeat' ? false : true;
+function getPassiveFeatureSetting(
+  botId: number,
+  chatId: string,
+  feature: PassiveFeature,
+  defaultRate: number
+): PassiveChatSetting {
+  const defaultEnabled = feature === 'media_repeat' ? false : true;
+  const maxRate = maxRateForDefault(defaultRate);
+  if (!chatId) {
+    return {
+      enabled: defaultEnabled,
+      rate: defaultRate,
+      defaultRate,
+      maxRate,
+      hasCustomRate: false,
+      isRateCapped: false
+    };
+  }
   const row = db.prepare(`
-    SELECT enabled
+    SELECT enabled, rate
     FROM feishu_chat_passive_settings
     WHERE bot_id = ? AND chat_id = ? AND feature = ?
-  `).get(botId, chatId, feature) as { enabled: number } | undefined;
-  if (row) return row.enabled === 1;
-  return feature === 'media_repeat' ? false : true;
+  `).get(botId, chatId, feature) as { enabled: number; rate: number | null } | undefined;
+  const customRate = typeof row?.rate === 'number' && Number.isFinite(row.rate) ? Math.max(0, Math.min(1, row.rate)) : undefined;
+  const effectiveRate = customRate === undefined ? defaultRate : Math.min(customRate, maxRate);
+  return {
+    enabled: row ? row.enabled === 1 : defaultEnabled,
+    rate: effectiveRate,
+    defaultRate,
+    maxRate,
+    hasCustomRate: customRate !== undefined,
+    isRateCapped: customRate !== undefined && effectiveRate < customRate
+  };
+}
+
+function setPassiveFeatureSetting(
+  botId: number,
+  chatId: string,
+  feature: PassiveFeature,
+  updates: { enabled?: boolean; rate?: number }
+) {
+  const current = db.prepare(`
+    SELECT enabled, rate
+    FROM feishu_chat_passive_settings
+    WHERE bot_id = ? AND chat_id = ? AND feature = ?
+  `).get(botId, chatId, feature) as { enabled: number; rate: number | null } | undefined;
+  const defaultEnabled = feature === 'media_repeat' ? false : true;
+  const enabled = updates.enabled ?? (current ? current.enabled === 1 : defaultEnabled);
+  const rate = updates.rate ?? (typeof current?.rate === 'number' && Number.isFinite(current.rate) ? current.rate : null);
+  db.prepare(`
+    INSERT INTO feishu_chat_passive_settings (bot_id, chat_id, feature, enabled, rate)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(bot_id, chat_id, feature) DO UPDATE SET
+      enabled = excluded.enabled,
+      rate = excluded.rate,
+      updated_at = CURRENT_TIMESTAMP
+  `).run(botId, chatId, feature, enabled ? 1 : 0, rate);
 }
 
 function getStyleStickerSetting(
   botId: number,
   chatId: string,
   feature: StyleStickerFeature,
+  defaultRate: number,
   defaultMaxChars: number,
   maxCharsLimit: number,
 ): StyleStickerChatSetting {
+  const maxRate = maxRateForDefault(defaultRate);
   if (!chatId) {
     const effectiveMaxChars = Math.min(defaultMaxChars, maxCharsLimit);
     return {
-      enabled: false,
+      enabled: true,
+      rate: defaultRate,
+      defaultRate,
+      maxRate,
+      hasCustomRate: false,
+      isRateCapped: false,
       maxChars: effectiveMaxChars,
       hasCustomMax: false,
       isCapped: effectiveMaxChars < defaultMaxChars
     };
   }
   const row = db.prepare(`
-    SELECT enabled, max_chars
+    SELECT enabled, rate, max_chars
     FROM feishu_chat_style_sticker_settings
     WHERE bot_id = ? AND chat_id = ? AND feature = ?
-  `).get(botId, chatId, feature) as { enabled: number; max_chars: number | null } | undefined;
+  `).get(botId, chatId, feature) as { enabled: number; rate: number | null; max_chars: number | null } | undefined;
+  const customRate = typeof row?.rate === 'number' && Number.isFinite(row.rate) ? Math.max(0, Math.min(1, row.rate)) : undefined;
   const customMax = row?.max_chars && row.max_chars > 0 ? row.max_chars : undefined;
   const configuredMaxChars = customMax || defaultMaxChars;
   const effectiveMaxChars = Math.min(configuredMaxChars, maxCharsLimit);
+  const effectiveRate = customRate === undefined ? defaultRate : Math.min(customRate, maxRate);
   return {
     enabled: row ? row.enabled === 1 : true,
+    rate: effectiveRate,
+    defaultRate,
+    maxRate,
+    hasCustomRate: customRate !== undefined,
+    isRateCapped: customRate !== undefined && effectiveRate < customRate,
     maxChars: effectiveMaxChars,
     hasCustomMax: Boolean(customMax),
     isCapped: effectiveMaxChars < configuredMaxChars
@@ -2257,31 +2786,41 @@ function setStyleStickerSetting(
   botId: number,
   chatId: string,
   feature: StyleStickerFeature,
-  updates: { enabled?: boolean; maxChars?: number }
+  updates: { enabled?: boolean; rate?: number; maxChars?: number }
 ) {
   const current = db.prepare(`
-    SELECT enabled, max_chars
+    SELECT enabled, rate, max_chars
     FROM feishu_chat_style_sticker_settings
     WHERE bot_id = ? AND chat_id = ? AND feature = ?
-  `).get(botId, chatId, feature) as { enabled: number; max_chars: number | null } | undefined;
+  `).get(botId, chatId, feature) as { enabled: number; rate: number | null; max_chars: number | null } | undefined;
   const enabled = updates.enabled ?? (current ? current.enabled === 1 : true);
+  const rate = updates.rate ?? (typeof current?.rate === 'number' && Number.isFinite(current.rate) ? current.rate : null);
   const maxChars = updates.maxChars ?? (current?.max_chars && current.max_chars > 0 ? current.max_chars : null);
   db.prepare(`
-    INSERT INTO feishu_chat_style_sticker_settings (bot_id, chat_id, feature, enabled, max_chars)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO feishu_chat_style_sticker_settings (bot_id, chat_id, feature, enabled, rate, max_chars)
+    VALUES (?, ?, ?, ?, ?, ?)
     ON CONFLICT(bot_id, chat_id, feature) DO UPDATE SET
       enabled = excluded.enabled,
+      rate = excluded.rate,
       max_chars = excluded.max_chars,
       updated_at = CURRENT_TIMESTAMP
-  `).run(botId, chatId, feature, enabled ? 1 : 0, maxChars);
+  `).run(botId, chatId, feature, enabled ? 1 : 0, rate, maxChars);
+}
+
+function passiveFeatureUsage(command: string) {
+  return `用法：${command} [--enable|--disable] [--rate 概率]`;
 }
 
 function styleStickerUsage(command: string) {
-  return `用法：${command} 文案内容；或 ${command} --enable|--disable [--max 字符数]`;
+  return `用法：${command} 文案内容；或 ${command} [--enable|--disable] [--rate 概率] [--max 字符数]`;
+}
+
+function describePassiveFeatureSetting(featureName: string, setting: PassiveChatSetting) {
+  return `当前会话${featureName}已${setting.enabled ? '开启' : '关闭'}，当前概率：${formatRatePercent(setting.rate)}${setting.hasCustomRate ? '（会话配置）' : '（全局默认）'}，全局默认：${formatRatePercent(setting.defaultRate)}，可设置上限：${formatRatePercent(setting.maxRate)}${setting.isRateCapped ? '（历史配置已按上限收敛）' : ''}`;
 }
 
 function describeStyleStickerSetting(feature: StyleStickerFeature, setting: StyleStickerChatSetting) {
-  return `当前会话${styleStickerFeatureName(feature)}随机生图已${setting.enabled ? '开启' : '关闭'}，最长处理字符数：${setting.maxChars}${setting.hasCustomMax ? '' : '（默认）'}${setting.isCapped ? '（受上限限制）' : ''}`;
+  return `当前会话${styleStickerFeatureName(feature)}随机生图已${setting.enabled ? '开启' : '关闭'}，当前概率：${formatRatePercent(setting.rate)}${setting.hasCustomRate ? '（会话配置）' : '（全局默认）'}，全局默认：${formatRatePercent(setting.defaultRate)}，可设置上限：${formatRatePercent(setting.maxRate)}${setting.isRateCapped ? '（历史配置已按上限收敛）' : ''}；最长处理字符数：${setting.maxChars}${setting.hasCustomMax ? '' : '（默认）'}${setting.isCapped ? '（受上限限制）' : ''}`;
 }
 
 function getDouyinSubscriptionsByUserAndClickText(userId: number, clickText: string) {
@@ -2578,7 +3117,7 @@ async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string
   const message = event?.message;
   const chatId = String(message?.chat_id || '').trim();
   if (isHelpCommand(text)) {
-    await replyHelpCard(bot, messageId);
+    await replyHelpCard(bot, messageId, chatId);
     return true;
   }
   if (options.allowSetDefault) {
@@ -2639,17 +3178,26 @@ async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string
   const passiveToggle = parsePassiveToggleCommand(text);
   const styleStickerCommand = parseStyleStickerCommand(text);
   if (styleStickerCommand.isStyleSticker) {
+    const config = passiveInteractionConfig();
     const hasSettingUpdates =
       styleStickerCommand.shouldEnable ||
       styleStickerCommand.shouldDisable ||
+      styleStickerCommand.rate !== undefined ||
       styleStickerCommand.maxChars !== undefined;
-    if (styleStickerCommand.hasConflictingAction || styleStickerCommand.hasInvalidMax) {
+    if (styleStickerCommand.hasConflictingAction || styleStickerCommand.hasInvalidRate || styleStickerCommand.hasInvalidMax) {
       await replyText(bot, messageId, styleStickerUsage(styleStickerCommand.command));
       return true;
     }
     if (!chatId) {
       await replyText(bot, messageId, '当前消息缺少 chat_id，无法发送贴纸图片或设置当前会话随机生图');
       return true;
+    }
+    if (styleStickerCommand.rate !== undefined) {
+      const maxRate = maxRateForDefault(defaultRateForFeature(config, styleStickerCommand.feature));
+      if (styleStickerCommand.rate > maxRate) {
+        await replyText(bot, messageId, `${styleStickerCommand.command} 的 --rate 不能超过 ${formatRatePercent(maxRate)}。`);
+        return true;
+      }
     }
     if (!styleStickerCommand.text && !hasSettingUpdates) {
       try {
@@ -2667,6 +3215,7 @@ async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string
     if (hasSettingUpdates) {
       setStyleStickerSetting(bot.id, chatId, styleStickerCommand.feature, {
         enabled: styleStickerCommand.shouldEnable ? true : styleStickerCommand.shouldDisable ? false : undefined,
+        rate: styleStickerCommand.rate,
         maxChars: styleStickerCommand.maxChars
       });
     }
@@ -2683,11 +3232,11 @@ async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string
         return true;
       }
       if (hasSettingUpdates) {
-        const config = passiveInteractionConfig();
         const setting = getStyleStickerSetting(
           bot.id,
           chatId,
           styleStickerCommand.feature,
+          defaultRateForFeature(config, styleStickerCommand.feature),
           config.styleStickerDefaultMaxChars,
           config.styleStickerMaxCharsLimit
         );
@@ -2696,11 +3245,11 @@ async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string
       return true;
     }
 
-    const config = passiveInteractionConfig();
     const setting = getStyleStickerSetting(
       bot.id,
       chatId,
       styleStickerCommand.feature,
+      defaultRateForFeature(config, styleStickerCommand.feature),
       config.styleStickerDefaultMaxChars,
       config.styleStickerMaxCharsLimit
     );
@@ -2708,17 +3257,30 @@ async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string
     return true;
   }
   if (passiveToggle.isPassiveToggle) {
-    if (passiveToggle.hasConflictingAction || passiveToggle.hasUnknownArgs || (!passiveToggle.shouldEnable && !passiveToggle.shouldDisable)) {
-      await replyText(bot, messageId, `用法：${passiveToggle.command} --enable 或 ${passiveToggle.command} --disable`);
+    if (passiveToggle.hasConflictingAction || passiveToggle.hasInvalidRate || passiveToggle.hasUnknownArgs) {
+      await replyText(bot, messageId, passiveFeatureUsage(passiveToggle.command));
       return true;
     }
     if (!chatId) {
       await replyText(bot, messageId, '当前消息缺少 chat_id，无法设置当前会话的被动交互开关');
       return true;
     }
-    const enabled = passiveToggle.shouldEnable;
-    setPassiveFeatureEnabled(bot.id, chatId, passiveToggle.feature, enabled);
-    await replyText(bot, messageId, `当前会话已${enabled ? '开启' : '关闭'}${passiveToggle.featureName}`);
+    const config = passiveInteractionConfig();
+    const defaultRate = defaultRateForFeature(config, passiveToggle.feature);
+    const maxRate = maxRateForDefault(defaultRate);
+    if (passiveToggle.rate !== undefined && passiveToggle.rate > maxRate) {
+      await replyText(bot, messageId, `${passiveToggle.command} 的 --rate 不能超过 ${formatRatePercent(maxRate)}。`);
+      return true;
+    }
+    const hasSettingUpdates = passiveToggle.shouldEnable || passiveToggle.shouldDisable || passiveToggle.rate !== undefined;
+    if (hasSettingUpdates) {
+      setPassiveFeatureSetting(bot.id, chatId, passiveToggle.feature, {
+        enabled: passiveToggle.shouldEnable ? true : passiveToggle.shouldDisable ? false : undefined,
+        rate: passiveToggle.rate
+      });
+    }
+    const setting = getPassiveFeatureSetting(bot.id, chatId, passiveToggle.feature, defaultRate);
+    await replyText(bot, messageId, describePassiveFeatureSetting(passiveToggle.featureName, setting));
     return true;
   }
 
