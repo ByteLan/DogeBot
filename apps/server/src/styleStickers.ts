@@ -1,22 +1,50 @@
+import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { type Canvas, type SKRSContext2D, GlobalFonts, createCanvas } from '@napi-rs/canvas';
 import type { Request, Response } from 'express';
+import {
+  STICKER_FONT_REGISTRY as SHARED_FONT_REGISTRY,
+  createStickerLayout,
+  darken,
+  fontGlyphTransform as sharedFontGlyphTransform,
+  normalizeStickerControls,
+  resolveGradientStops,
+  type GlyphMeasurement,
+  type StickerControls,
+  type StickerFlavor
+} from './styleStickerCore.js';
 
-export type StickerFlavor = 'bs' | 'snh';
+export type { StickerFlavor } from './styleStickerCore.js';
 
-type RendererRuntime = {
-  baseUrl: string;
-  browser: {
-    newPage: (options?: object) => Promise<{
-      goto: (url: string, options?: object) => Promise<unknown>;
-      waitForFunction: (fn: () => unknown, options?: object) => Promise<unknown>;
-      evaluate: <T>(fn: () => T | Promise<T>) => Promise<T>;
-      close: () => Promise<void>;
-    }>;
-    close: () => Promise<void>;
-  };
+type FontDescriptor = {
+  family: string;
+  localFile: string;
+  fontWeight: string;
+  scaleX: number;
+  scaleY: number;
+  rotationDeg: number;
+  skewXDeg: number;
+  skewYDeg: number;
 };
 
-const STYLE_STICKER_BASE_URL = process.env.DOGEBOT_STYLE_STICKER_BASE_URL?.trim() || 'https://scale-new-heights.bbyte.cn/';
-const STICKER_RENDER_TIMEOUT_MS = Number(process.env.DOGEBOT_STYLE_STICKER_RENDER_TIMEOUT_MS || 30_000);
+type TextLineMetrics = {
+  text: string;
+  width: number;
+  ascent: number;
+  descent: number;
+};
+
+const BASE_FONT_SIZE = 220;
+const MAX_OUTPUT_EDGE = 4096;
+const RENDER_ANTIALIAS_SCALE = 1;
+const ENVELOPE_ANTIALIAS = 1.1;
+const OUTLINE_ANTIALIAS = 0.9;
+const ALPHA_THRESHOLD = 16;
+const DISTANCE_INF = 1e15;
+const moduleDir = dirname(fileURLToPath(import.meta.url));
+const appDir = dirname(moduleDir);
+const appRootDir = appDir.endsWith('/dist') ? dirname(appDir) : appDir;
 const HIGH_CONTRAST_COLORS = [
   '#9af665',
   '#44b305',
@@ -37,8 +65,30 @@ const HIGH_CONTRAST_COLORS = [
   '#755df6',
   '#2c06f9'
 ] as const;
+const FONT_DESCRIPTORS: Record<StickerFlavor, FontDescriptor> = {
+  snh: {
+    family: 'DouyinSansBold',
+    localFile: 'DouyinSansBold.woff2',
+    fontWeight: 'normal',
+    scaleX: 1,
+    scaleY: 1,
+    rotationDeg: 0,
+    skewXDeg: 0,
+    skewYDeg: -3.5,
+  },
+  bs: {
+    family: 'YouSheBiaoTiHei',
+    localFile: 'YouSheBiaoTiHei.ttf',
+    fontWeight: 'normal',
+    scaleX: 1,
+    scaleY: 1.12,
+    rotationDeg: 2,
+    skewXDeg: 5,
+    skewYDeg: -2.1,
+  }
+};
 
-let rendererRuntimePromise: Promise<RendererRuntime> | null = null;
+const fontLoadPromises = new Map<StickerFlavor, Promise<void>>();
 
 function normalizeRenderScale(value: unknown) {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -99,6 +149,13 @@ function pickContrastingPaletteColor(baseColor: string, excluded = new Set<strin
   return randomItem((bestCandidates.length > 0 ? bestCandidates : candidates).map((item) => item.candidate));
 }
 
+function pickOffsetPaletteColor(baseColor: string) {
+  const baseIndex = HIGH_CONTRAST_COLORS.indexOf(baseColor as (typeof HIGH_CONTRAST_COLORS)[number]);
+  if (baseIndex < 0) return baseColor;
+  const offset = Math.max(1, Math.floor(HIGH_CONTRAST_COLORS.length * 0.25));
+  return HIGH_CONTRAST_COLORS[(baseIndex + offset) % HIGH_CONTRAST_COLORS.length];
+}
+
 function resolveGradientColors(color1: unknown, color2: unknown) {
   const normalized1 = normalizeHexColor(color1);
   const normalized2 = normalizeHexColor(color2);
@@ -106,62 +163,500 @@ function resolveGradientColors(color1: unknown, color2: unknown) {
   if (normalized1) return [normalized1, pickContrastingPaletteColor(normalized1, new Set([normalized1]))] as const;
   if (normalized2) return [pickContrastingPaletteColor(normalized2, new Set([normalized2])), normalized2] as const;
   const first = randomItem([...HIGH_CONTRAST_COLORS]);
-  const second = pickContrastingPaletteColor(first, new Set([first]));
+  const second = pickOffsetPaletteColor(first);
   return [first, second] as const;
 }
 
-function resolveStyleStickerBaseUrl() {
-  if (!STYLE_STICKER_BASE_URL) {
-    throw new Error('DOGEBOT_STYLE_STICKER_BASE_URL is required; configure it to your deployed scale-new-heights-generator page URL');
+function resolveFontPath(fileName: string) {
+  const candidates = [
+    join(appDir, 'assets', 'fonts', fileName),
+    join(appRootDir, 'assets', 'fonts', fileName)
+  ];
+  const matched = candidates.find((candidate) => existsSync(candidate));
+  if (!matched) {
+    throw new Error(`style sticker font is missing: ${fileName}`);
   }
-  let url: URL;
-  try {
-    url = new URL(STYLE_STICKER_BASE_URL);
-  } catch {
-    throw new Error(`DOGEBOT_STYLE_STICKER_BASE_URL is invalid: ${STYLE_STICKER_BASE_URL}`);
-  }
-  if (!['http:', 'https:'].includes(url.protocol)) {
-    throw new Error(`DOGEBOT_STYLE_STICKER_BASE_URL must use http or https: ${STYLE_STICKER_BASE_URL}`);
-  }
-  url.search = '';
-  url.hash = '';
-  return url.toString();
+  return matched;
 }
 
-async function loadPlaywrightChromium() {
-  try {
-    const playwright = await import('playwright');
-    if (!playwright.chromium) throw new Error('chromium is unavailable');
-    return playwright.chromium;
-  } catch (error) {
-    throw new Error(
-      `playwright is unavailable. Please install it in apps/server and run "npx playwright install chromium". ${error instanceof Error ? error.message : String(error)}`
-    );
-  }
+function darkenHexColor(hexColor: string, factor: number) {
+  const red = Math.max(0, Math.min(255, Math.round(Number.parseInt(hexColor.slice(1, 3), 16) * factor)));
+  const green = Math.max(0, Math.min(255, Math.round(Number.parseInt(hexColor.slice(3, 5), 16) * factor)));
+  const blue = Math.max(0, Math.min(255, Math.round(Number.parseInt(hexColor.slice(5, 7), 16) * factor)));
+  return `#${red.toString(16).padStart(2, '0')}${green.toString(16).padStart(2, '0')}${blue.toString(16).padStart(2, '0')}`;
 }
 
-async function getRendererRuntime(): Promise<RendererRuntime> {
-  if (rendererRuntimePromise) return rendererRuntimePromise;
-  rendererRuntimePromise = (async () => {
-    const chromium = await loadPlaywrightChromium();
-    const browser = await chromium.launch({ headless: true });
-    return {
-      baseUrl: resolveStyleStickerBaseUrl(),
-      browser,
-    };
-  })().catch((error) => {
-    rendererRuntimePromise = null;
-    throw error;
+function splitLines(text: string) {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function fontSpec(flavor: StickerFlavor, fontSize: number) {
+  const descriptor = FONT_DESCRIPTORS[flavor];
+  return `normal ${descriptor.fontWeight} ${fontSize}px "${descriptor.family}", "PingFang SC", sans-serif`;
+}
+
+async function ensureFontLoaded(flavor: StickerFlavor) {
+  if (GlobalFonts.has(SHARED_FONT_REGISTRY[flavor].family)) return;
+  const existing = fontLoadPromises.get(flavor);
+  if (existing) return existing;
+
+  const descriptor = SHARED_FONT_REGISTRY[flavor];
+  const promise = (async () => {
+    const registered = GlobalFonts.registerFromPath(resolveFontPath(descriptor.file), descriptor.family);
+    if (!registered) {
+      throw new Error(`failed to register style sticker font: ${descriptor.family}`);
+    }
+  })().finally(() => {
+    fontLoadPromises.delete(flavor);
   });
-  return rendererRuntimePromise;
+
+  fontLoadPromises.set(flavor, promise);
+  return promise;
 }
 
-export async function closeStyleStickerRenderer() {
-  if (!rendererRuntimePromise) return;
-  const runtime = await rendererRuntimePromise.catch(() => undefined);
-  rendererRuntimePromise = null;
-  if (!runtime) return;
-  await runtime.browser.close().catch(() => undefined);
+function measureLines(lines: string[], flavor: StickerFlavor, fontSize: number): TextLineMetrics[] {
+  const canvas: Canvas = createCanvas(1, 1);
+  const context = canvas.getContext('2d');
+  context.font = fontSpec(flavor, fontSize);
+  context.textBaseline = 'alphabetic';
+  return lines.map((line) => {
+    const metrics = context.measureText(line || ' ');
+    return {
+      text: line || ' ',
+      width: Math.max(metrics.width, metrics.actualBoundingBoxLeft + metrics.actualBoundingBoxRight),
+      ascent: metrics.actualBoundingBoxAscent || fontSize * 0.82,
+      descent: metrics.actualBoundingBoxDescent || fontSize * 0.18,
+    };
+  });
+}
+
+function createGradient(
+  context: SKRSContext2D,
+  width: number,
+  height: number,
+  angleDeg: number,
+  colors: readonly [string, string],
+  offsetX = 0,
+  offsetY = 0
+) {
+  const angle = ((angleDeg - 90) * Math.PI) / 180;
+  const dx = Math.cos(angle);
+  const dy = Math.sin(angle);
+  const halfLength = (Math.abs(dx) * width + Math.abs(dy) * height) / 2;
+  const centerX = offsetX + width / 2;
+  const centerY = offsetY + height / 2;
+  const gradient = context.createLinearGradient(
+    centerX - dx * halfLength,
+    centerY - dy * halfLength,
+    centerX + dx * halfLength,
+    centerY + dy * halfLength
+  );
+  gradient.addColorStop(0, colors[0]);
+  gradient.addColorStop(1, colors[1]);
+  return gradient;
+}
+
+function cropCanvasAlpha(sourceCanvas: Canvas) {
+  const context = sourceCanvas.getContext('2d');
+  const imageData = context.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
+  let left = sourceCanvas.width;
+  let top = sourceCanvas.height;
+  let right = -1;
+  let bottom = -1;
+
+  for (let y = 0; y < sourceCanvas.height; y += 1) {
+    for (let x = 0; x < sourceCanvas.width; x += 1) {
+      const alpha = imageData.data[(y * sourceCanvas.width + x) * 4 + 3];
+      if (alpha <= 16) continue;
+      left = Math.min(left, x);
+      top = Math.min(top, y);
+      right = Math.max(right, x);
+      bottom = Math.max(bottom, y);
+    }
+  }
+
+  if (right < left || bottom < top) {
+    throw new Error('rendered sticker is empty');
+  }
+
+  const width = right - left + 1;
+  const height = bottom - top + 1;
+  const output: Canvas = createCanvas(width, height);
+  output.getContext('2d').drawImage(sourceCanvas, left, top, width, height, 0, 0, width, height);
+  return output;
+}
+
+function resizeIfNeeded(sourceCanvas: Canvas) {
+  const longestEdge = Math.max(sourceCanvas.width, sourceCanvas.height);
+  if (longestEdge <= MAX_OUTPUT_EDGE) return sourceCanvas;
+
+  const scale = MAX_OUTPUT_EDGE / longestEdge;
+  const width = Math.max(1, Math.round(sourceCanvas.width * scale));
+  const height = Math.max(1, Math.round(sourceCanvas.height * scale));
+  const output: Canvas = createCanvas(width, height);
+  const context = output.getContext('2d');
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
+  context.drawImage(sourceCanvas, 0, 0, width, height);
+  return output;
+}
+
+function resizeCanvasByScale(sourceCanvas: Canvas, scale: number, maxEdge: number) {
+  const scaledWidth = Math.max(1, Math.round(sourceCanvas.width * scale));
+  const scaledHeight = Math.max(1, Math.round(sourceCanvas.height * scale));
+  const longestEdge = Math.max(scaledWidth, scaledHeight);
+  const clampScale = longestEdge > maxEdge ? maxEdge / longestEdge : 1;
+  const outputWidth = Math.max(1, Math.round(scaledWidth * clampScale));
+  const outputHeight = Math.max(1, Math.round(scaledHeight * clampScale));
+  const canvas: Canvas = createCanvas(outputWidth, outputHeight);
+  const context = canvas.getContext('2d');
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
+  context.drawImage(sourceCanvas, 0, 0, outputWidth, outputHeight);
+  return canvas;
+}
+
+function scaleStickerControls(controls: StickerControls, scale: number): StickerControls {
+  if (scale === 1) return controls;
+  return {
+    ...controls,
+    fontSize: controls.fontSize * scale,
+    letterSpacing: controls.letterSpacing * scale,
+    alternatingOffset: controls.alternatingOffset * scale,
+    shadow: {
+      ...controls.shadow,
+      offsetX: controls.shadow.offsetX * scale,
+      offsetY: controls.shadow.offsetY * scale,
+      blur: controls.shadow.blur * scale,
+    },
+    envelope: {
+      ...controls.envelope,
+      outlineStrokeWidth: controls.envelope.outlineStrokeWidth * scale,
+      edgeWidth: controls.envelope.edgeWidth * scale,
+    },
+  };
+}
+
+function padCanvas(sourceCanvas: Canvas, paddingX: number, paddingY: number) {
+  const x = Math.max(0, Math.round(paddingX));
+  const y = Math.max(0, Math.round(paddingY));
+  if (x === 0 && y === 0) return sourceCanvas;
+  const width = sourceCanvas.width + x * 2;
+  const height = sourceCanvas.height + y * 2;
+  const canvas: Canvas = createCanvas(width, height);
+  const context = canvas.getContext('2d');
+  context.drawImage(sourceCanvas, x, y);
+  return canvas;
+}
+
+type BinaryMask = {
+  width: number;
+  height: number;
+  data: Uint8ClampedArray;
+};
+
+function extractAlphaChannel(rgba: Uint8ClampedArray) {
+  const alpha = new Uint8ClampedArray(rgba.length / 4);
+  for (let index = 0; index < alpha.length; index += 1) {
+    alpha[index] = rgba[index * 4 + 3];
+  }
+  return alpha;
+}
+
+function thresholdAlphaMask(alpha: Uint8ClampedArray, width: number, height: number, threshold: number): BinaryMask {
+  const data = new Uint8ClampedArray(width * height);
+  for (let index = 0; index < data.length; index += 1) {
+    data[index] = alpha[index] >= threshold ? 255 : 0;
+  }
+  return { width, height, data };
+}
+
+function cloneMask(mask: BinaryMask): BinaryMask {
+  return {
+    width: mask.width,
+    height: mask.height,
+    data: new Uint8ClampedArray(mask.data),
+  };
+}
+
+function invertMask(mask: BinaryMask): BinaryMask {
+  const data = new Uint8ClampedArray(mask.data.length);
+  for (let index = 0; index < data.length; index += 1) {
+    data[index] = mask.data[index] === 0 ? 255 : 0;
+  }
+  return { width: mask.width, height: mask.height, data };
+}
+
+function calculateSeparation(source: Float64Array, current: number, previous: number) {
+  return (
+    (source[current] + current * current - (source[previous] + previous * previous)) /
+    (2 * current - 2 * previous)
+  );
+}
+
+function transformDistanceAxis(source: Float64Array, length: number, target: Float64Array) {
+  const vertices = new Int32Array(length);
+  const boundaries = new Float64Array(length + 1);
+  let hullSize = 0;
+
+  vertices[0] = 0;
+  boundaries[0] = Number.NEGATIVE_INFINITY;
+  boundaries[1] = Number.POSITIVE_INFINITY;
+
+  for (let position = 1; position < length; position += 1) {
+    let intersection = calculateSeparation(source, position, vertices[hullSize]);
+    while (intersection <= boundaries[hullSize]) {
+      hullSize -= 1;
+      intersection = calculateSeparation(source, position, vertices[hullSize]);
+    }
+    hullSize += 1;
+    vertices[hullSize] = position;
+    boundaries[hullSize] = intersection;
+    boundaries[hullSize + 1] = Number.POSITIVE_INFINITY;
+  }
+
+  hullSize = 0;
+  for (let position = 0; position < length; position += 1) {
+    while (boundaries[hullSize + 1] < position) {
+      hullSize += 1;
+    }
+    const distance = position - vertices[hullSize];
+    target[position] = distance * distance + source[vertices[hullSize]];
+  }
+}
+
+function computeSquaredDistanceTransform(mask: BinaryMask) {
+  const { width, height } = mask;
+  const temporary = new Float64Array(width * height);
+  const distances = new Float64Array(width * height);
+  const column = new Float64Array(Math.max(width, height));
+  const columnDistances = new Float64Array(Math.max(width, height));
+
+  for (let x = 0; x < width; x += 1) {
+    for (let y = 0; y < height; y += 1) {
+      column[y] = mask.data[y * width + x] > 0 ? 0 : DISTANCE_INF;
+    }
+    transformDistanceAxis(column, height, columnDistances);
+    for (let y = 0; y < height; y += 1) {
+      temporary[y * width + x] = columnDistances[y];
+    }
+  }
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      column[x] = temporary[y * width + x];
+    }
+    transformDistanceAxis(column, width, columnDistances);
+    for (let x = 0; x < width; x += 1) {
+      distances[y * width + x] = columnDistances[x];
+    }
+  }
+
+  return distances;
+}
+
+function dilateMaskRound(mask: BinaryMask, radius: number): BinaryMask {
+  if (radius <= 0) return cloneMask(mask);
+  const squaredDistances = computeSquaredDistanceTransform(mask);
+  const data = new Uint8ClampedArray(mask.data.length);
+  const radiusSquared = radius * radius;
+  for (let index = 0; index < data.length; index += 1) {
+    data[index] = squaredDistances[index] <= radiusSquared ? 255 : 0;
+  }
+  return { width: mask.width, height: mask.height, data };
+}
+
+function erodeMaskRound(mask: BinaryMask, radius: number): BinaryMask {
+  if (radius <= 0) return cloneMask(mask);
+  return invertMask(dilateMaskRound(invertMask(mask), radius));
+}
+
+function subtractMask(source: BinaryMask, subtractor: BinaryMask): BinaryMask {
+  const data = new Uint8ClampedArray(source.data.length);
+  for (let index = 0; index < data.length; index += 1) {
+    data[index] = source.data[index] > 0 && subtractor.data[index] === 0 ? 255 : 0;
+  }
+  return { width: source.width, height: source.height, data };
+}
+
+function fillEnclosedRegions(mask: BinaryMask): BinaryMask {
+  const { width, height, data } = mask;
+  const exterior = new Uint8Array(data.length);
+  const stack: number[] = [];
+
+  const pushIfBackground = (index: number) => {
+    if (data[index] === 0 && exterior[index] === 0) {
+      exterior[index] = 1;
+      stack.push(index);
+    }
+  };
+
+  for (let x = 0; x < width; x += 1) {
+    pushIfBackground(x);
+    pushIfBackground((height - 1) * width + x);
+  }
+  for (let y = 0; y < height; y += 1) {
+    pushIfBackground(y * width);
+    pushIfBackground(y * width + width - 1);
+  }
+
+  while (stack.length > 0) {
+    const index = stack.pop() as number;
+    const x = index % width;
+    const y = (index - x) / width;
+    if (x > 0) pushIfBackground(index - 1);
+    if (x < width - 1) pushIfBackground(index + 1);
+    if (y > 0) pushIfBackground(index - width);
+    if (y < height - 1) pushIfBackground(index + width);
+  }
+
+  const result = new Uint8ClampedArray(data.length);
+  for (let index = 0; index < data.length; index += 1) {
+    result[index] = data[index] > 0 || exterior[index] === 0 ? 255 : 0;
+  }
+
+  return { width, height, data: result };
+}
+
+function clampUnitInterval(value: number) {
+  return Math.min(1, Math.max(0, value));
+}
+
+function createAntialiasedAlpha(mask: BinaryMask, featherRadius: number) {
+  const outsideDistances = computeSquaredDistanceTransform(mask);
+  const insideDistances = computeSquaredDistanceTransform(invertMask(mask));
+  const alpha = new Uint8ClampedArray(mask.data.length);
+  const feather = Math.max(0.01, featherRadius);
+
+  for (let index = 0; index < alpha.length; index += 1) {
+    const signedDistance = Math.sqrt(outsideDistances[index]) - Math.sqrt(insideDistances[index]);
+    const normalized = clampUnitInterval(0.5 - signedDistance / (2 * feather));
+    alpha[index] = Math.round(normalized * 255);
+  }
+
+  return alpha;
+}
+
+function maskToCanvas(mask: BinaryMask, softenRadius = 0) {
+  const canvas: Canvas = createCanvas(mask.width, mask.height);
+  const context = canvas.getContext('2d');
+  const imageData = context.createImageData(mask.width, mask.height);
+  const alpha = softenRadius > 0 ? createAntialiasedAlpha(mask, softenRadius) : mask.data;
+
+  for (let index = 0; index < mask.data.length; index += 1) {
+    const rgbaIndex = index * 4;
+    imageData.data[rgbaIndex] = 255;
+    imageData.data[rgbaIndex + 1] = 255;
+    imageData.data[rgbaIndex + 2] = 255;
+    imageData.data[rgbaIndex + 3] = alpha[index];
+  }
+
+  context.putImageData(imageData, 0, 0);
+  return canvas;
+}
+
+function paintMask(
+  targetContext: SKRSContext2D,
+  maskCanvas: Canvas,
+  painter: (context: SKRSContext2D) => void,
+  opacity = 1,
+  compositeOperation: GlobalCompositeOperation = 'source-over',
+) {
+  const temporaryCanvas: Canvas = createCanvas(maskCanvas.width, maskCanvas.height);
+  const temporaryContext = temporaryCanvas.getContext('2d');
+
+  painter(temporaryContext);
+  temporaryContext.globalCompositeOperation = 'destination-in';
+  temporaryContext.drawImage(maskCanvas, 0, 0);
+
+  targetContext.save();
+  targetContext.globalAlpha = opacity;
+  targetContext.globalCompositeOperation = compositeOperation;
+  targetContext.drawImage(temporaryCanvas, 0, 0);
+  targetContext.restore();
+}
+
+function calculateWorkingPadding(controls: StickerControls) {
+  return Math.ceil(
+    controls.fontSize * 0.7 +
+      controls.envelope.outlineStrokeWidth * 2.5 +
+      controls.envelope.edgeWidth * 2 +
+      Math.abs(controls.alternatingOffset) +
+      controls.shadow.blur * 2 +
+      Math.max(
+        Math.abs(controls.shadow.offsetX),
+        Math.abs(controls.shadow.offsetY),
+      ),
+  );
+}
+
+function measureGlyphWithCanvas(
+  grapheme: string,
+  fontSize: number,
+  flavor: StickerFlavor,
+): GlyphMeasurement {
+  const canvas: Canvas = createCanvas(1, 1);
+  const context = canvas.getContext('2d');
+  context.font = fontSpec(flavor, fontSize);
+  context.textBaseline = 'alphabetic';
+  const metrics = context.measureText(grapheme);
+  const left = metrics.actualBoundingBoxLeft || 0;
+  const right = metrics.actualBoundingBoxRight || metrics.width;
+  const ascent = metrics.actualBoundingBoxAscent || fontSize * 0.82;
+  const descent = metrics.actualBoundingBoxDescent || fontSize * 0.18;
+  return {
+    advanceWidth: metrics.width || right + left || fontSize,
+    left,
+    right,
+    ascent,
+    descent,
+  };
+}
+
+function drawPlacedGlyphs(
+  context: SKRSContext2D,
+  controls: StickerControls,
+  layout: ReturnType<typeof createStickerLayout>,
+  originX: number,
+  originY: number,
+  painter: (ctx: SKRSContext2D, grapheme: string) => void,
+) {
+  const { scale, rotationDeg, skewDeg } = layout.glyphTransform;
+  const [scaleX, scaleY] = scale;
+  const rotationRad = (rotationDeg * Math.PI) / 180;
+  const horizontalSkewTangent = Math.tan((skewDeg[0] * Math.PI) / 180);
+  const verticalSkewTangent = Math.tan((skewDeg[1] * Math.PI) / 180);
+
+  context.font = fontSpec(controls.flavor, controls.fontSize);
+  context.textAlign = 'left';
+  context.textBaseline = 'alphabetic';
+  context.textRendering = 'geometricPrecision';
+  context.lineJoin = 'round';
+  context.miterLimit = 2;
+
+  for (const placement of layout.placements) {
+    context.save();
+    context.translate(originX + placement.x, originY + placement.baselineY);
+    if (placement.skew) {
+      if (scaleX !== 1 || scaleY !== 1) {
+        context.scale(scaleX, scaleY);
+      }
+      if (rotationRad !== 0) {
+        context.rotate(-rotationRad);
+      }
+      if (horizontalSkewTangent !== 0) {
+        context.transform(1, 0, horizontalSkewTangent, 1, 0, 0);
+      }
+      if (verticalSkewTangent !== 0) {
+        context.transform(1, verticalSkewTangent, 0, 1, 0, 0);
+      }
+    }
+    painter(context, placement.grapheme);
+    context.restore();
+  }
 }
 
 async function renderStickerBuffer(
@@ -170,37 +665,157 @@ async function renderStickerBuffer(
   colors: readonly [string, string],
   renderScale = 1,
 ) {
-  const runtime = await getRendererRuntime();
-  const page = await runtime.browser.newPage({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 2 });
-  const url = new URL(runtime.baseUrl);
-  url.searchParams.set('t', text);
-  url.searchParams.set('fl', flavor);
-  url.searchParams.set('gc', colors.map((color) => color.replace('#', '')).join('-'));
-  if (renderScale !== 1) {
-    url.searchParams.set('scale', String(renderScale));
+  const trimmedText = text.trim();
+  if (!trimmedText) {
+    throw new Error('text is required');
   }
-  try {
-    await page.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout: STICKER_RENDER_TIMEOUT_MS });
-    await page.waitForFunction(() => {
-      const state = document.documentElement.dataset.stickerRenderState;
-      return state === 'ready' || state === 'error';
-    }, { timeout: STICKER_RENDER_TIMEOUT_MS });
-    const renderError = await page.evaluate(() => document.documentElement.dataset.stickerRenderError || '');
-    if (renderError) {
-      throw new Error(renderError);
-    }
-    const dataUrl = await page.evaluate(() => {
-      const canvas = document.querySelector('canvas');
-      if (!(canvas instanceof HTMLCanvasElement)) {
-        throw new Error('render canvas not found');
-      }
-      return canvas.toDataURL('image/png');
+
+  const targetControls = normalizeStickerControls({
+    text: trimmedText,
+    flavor,
+    fontSize: BASE_FONT_SIZE * renderScale,
+    envelope: { colors: [...colors] }
+  });
+  const controls = scaleStickerControls(targetControls, RENDER_ANTIALIAS_SCALE);
+
+  await ensureFontLoaded(controls.flavor);
+
+  const baseTransform = sharedFontGlyphTransform(controls.flavor);
+  const glyphTransform = controls.tilt
+    ? baseTransform
+    : { scale: baseTransform.scale, rotationDeg: 0, skewDeg: [0, 0] as [number, number] };
+
+  const layout = createStickerLayout(trimmedText, {
+    fontSize: controls.fontSize,
+    letterSpacing: controls.letterSpacing,
+    lineHeight: controls.lineHeight,
+    glyphTransform,
+    alternatingOffset: controls.peak ? controls.alternatingOffset : 0,
+    measureGlyph: (grapheme, fontSize) => measureGlyphWithCanvas(grapheme, fontSize, controls.flavor)
+  });
+  const padding = calculateWorkingPadding(controls);
+  const workingWidth = Math.max(1, Math.ceil(layout.bounds.maxX - layout.bounds.minX + padding * 2));
+  const workingHeight = Math.max(1, Math.ceil(layout.bounds.maxY - layout.bounds.minY + padding * 2));
+  const originX = padding - layout.bounds.minX;
+  const originY = padding - layout.bounds.minY;
+
+  const sourceMaskCanvas: Canvas = createCanvas(workingWidth, workingHeight);
+  const sourceMaskContext = sourceMaskCanvas.getContext('2d', { alpha: true });
+  sourceMaskContext.clearRect(0, 0, workingWidth, workingHeight);
+  sourceMaskContext.fillStyle = '#ffffff';
+  drawPlacedGlyphs(sourceMaskContext, controls, layout, originX, originY, (current, grapheme) => {
+    current.fillText(grapheme, 0, 0);
+  });
+
+  const sourceMask = thresholdAlphaMask(
+    extractAlphaChannel(sourceMaskContext.getImageData(0, 0, workingWidth, workingHeight).data),
+    workingWidth,
+    workingHeight,
+    ALPHA_THRESHOLD,
+  );
+
+  const outputCanvas: Canvas = createCanvas(workingWidth, workingHeight);
+  const outputContext = outputCanvas.getContext('2d', { alpha: true });
+  const gradientStops = resolveGradientStops(controls.envelope.colors);
+
+  const paintFamilyGradient = (context: SKRSContext2D, stops: string[]) => {
+    context.fillStyle = createGradient(
+      context,
+      workingWidth,
+      workingHeight,
+      controls.envelope.gradientAngle,
+      [stops[0], stops[stops.length - 1]]
+    );
+    context.fillRect(0, 0, workingWidth, workingHeight);
+  };
+
+  const paintSolid = (context: SKRSContext2D, color: string) => {
+    context.fillStyle = color;
+    context.fillRect(0, 0, workingWidth, workingHeight);
+  };
+
+  if (controls.flavor === 'snh') {
+    const bandWidth = controls.envelope.outlineStrokeWidth;
+    const envelopeMask = fillEnclosedRegions(dilateMaskRound(sourceMask, bandWidth));
+    const edgeMask = subtractMask(
+      envelopeMask,
+      erodeMaskRound(envelopeMask, controls.envelope.edgeWidth),
+    );
+    const envelopeMaskCanvas = maskToCanvas(envelopeMask, ENVELOPE_ANTIALIAS);
+    const edgeMaskCanvas = maskToCanvas(edgeMask, OUTLINE_ANTIALIAS);
+    const glyphMaskCanvas = maskToCanvas(sourceMask, OUTLINE_ANTIALIAS);
+
+    paintMask(outputContext, envelopeMaskCanvas, (context) => {
+      paintFamilyGradient(context, gradientStops);
     });
-    const base64 = dataUrl.replace(/^data:image\/png;base64,/, '');
-    return Buffer.from(base64, 'base64');
-  } finally {
-    await page.close();
+    paintMask(
+      outputContext,
+      edgeMaskCanvas,
+      (context) => {
+        paintFamilyGradient(
+          context,
+          gradientStops.map((color) => darken(color, 0.45)),
+        );
+      },
+      controls.envelope.edgeOpacity,
+      'multiply',
+    );
+    if (controls.shadow.opacity > 0) {
+      paintMask(
+        outputContext,
+        envelopeMaskCanvas,
+        (context) => {
+          context.fillStyle = controls.shadow.color;
+          context.filter = `blur(${controls.shadow.blur}px)`;
+          drawPlacedGlyphs(
+            context,
+            controls,
+            layout,
+            originX + controls.shadow.offsetX,
+            originY + controls.shadow.offsetY,
+            (current, grapheme) => {
+              current.fillText(grapheme, 0, 0);
+            }
+          );
+        },
+        controls.shadow.opacity,
+        'multiply',
+      );
+    }
+    paintMask(outputContext, glyphMaskCanvas, (context) => {
+      paintSolid(context, '#ffffff');
+    });
+  } else {
+    const rimWidth = controls.envelope.outlineStrokeWidth + controls.envelope.edgeWidth;
+    const deepMask = fillEnclosedRegions(dilateMaskRound(sourceMask, rimWidth));
+    const deepMaskCanvas = maskToCanvas(deepMask, ENVELOPE_ANTIALIAS);
+    const glyphMaskCanvas = maskToCanvas(sourceMask, OUTLINE_ANTIALIAS);
+
+    paintMask(outputContext, deepMaskCanvas, (context) => {
+      paintFamilyGradient(
+        context,
+        gradientStops.map((color) => darken(color, 0.42)),
+      );
+    });
+    paintMask(outputContext, glyphMaskCanvas, (context) => {
+      paintFamilyGradient(context, gradientStops);
+    });
   }
+
+  const croppedCanvas = cropCanvasAlpha(outputCanvas);
+  const contentHeight = Math.max(1, layout.bounds.maxY - layout.bounds.minY);
+  const exportScale = (BASE_FONT_SIZE * renderScale) / contentHeight;
+  const resizedCanvas = resizeCanvasByScale(
+    croppedCanvas,
+    exportScale,
+    Math.round(MAX_OUTPUT_EDGE * renderScale)
+  );
+  const exportCanvas = padCanvas(resizedCanvas, targetControls.padding.x, targetControls.padding.y);
+  return exportCanvas.toBuffer('image/png');
+}
+
+export async function closeStyleStickerRenderer() {
+  return;
 }
 
 export async function renderStyleStickerImage(
