@@ -91,7 +91,7 @@ type AddCronCommand = {
   commandText: string;
 };
 
-type PassiveFeature = 'reaction' | 'repeat' | 'llm_reply' | 'media_repeat' | 'media_reverse';
+type PassiveFeature = 'reaction' | 'repeat' | 'llm_reply' | 'media_repeat' | 'image_reverse' | 'sticker_reverse';
 
 type PassiveToggleCommand =
   | { isPassiveToggle: false }
@@ -131,7 +131,8 @@ type PassiveInteractionConfig = {
   reactionRate: number;
   repeatRate: number;
   imageRepeatRate: number;
-  imageReverseRate: number;
+  imageReverseImageRate: number;
+  imageReverseStickerRate: number;
   imitateRate: number;
   repeatMaxChars: number;
   contextSize: number;
@@ -211,7 +212,8 @@ const PASSIVE_TOGGLE_COMMANDS = [
   { command: '/repeat', feature: 'repeat', featureName: '复读' },
   { command: '/llm-reply', feature: 'llm_reply', featureName: '大模型接话' },
   { command: '/media-repeat', feature: 'media_repeat', featureName: '图片/表情包复读' },
-  { command: '/media-reverse', feature: 'media_reverse', featureName: '图片镜像反转' }
+    { command: '/image-reverse', feature: 'image_reverse', featureName: '图片镜像反转' },
+    { command: '/sticker-reverse', feature: 'sticker_reverse', featureName: '表情包镜像反转' }
 ] as const;
 const recentChatMessages = new Map<string, RecentChatMessage[]>();
 
@@ -552,7 +554,8 @@ function passiveInteractionConfig(): PassiveInteractionConfig {
     reactionRate: parseRate(process.env.DOGEBOT_FEISHU_REACTION_RATE, 0.1),
     repeatRate,
       imageRepeatRate: parseRate(process.env.DOGEBOT_FEISHU_IMAGE_REPEAT_RATE, 0),
-      imageReverseRate: parseRate(process.env.DOGEBOT_FEISHU_IMAGE_REVERSE_RATE, 0.1),
+      imageReverseImageRate: parseRate(process.env.DOGEBOT_FEISHU_IMAGE_REVERSE_IMAGE_RATE, 0.05),
+      imageReverseStickerRate: parseRate(process.env.DOGEBOT_FEISHU_IMAGE_REVERSE_STICKER_RATE, 0.2),
     imitateRate: parseRate(process.env.DOGEBOT_FEISHU_IMITATE_RATE, 0.05),
     repeatMaxChars: parsePositiveInt(process.env.DOGEBOT_FEISHU_REPEAT_MAX_CHARS, 300),
     contextSize: parsePositiveInt(process.env.DOGEBOT_FEISHU_IMITATE_CONTEXT_SIZE, 8),
@@ -1133,14 +1136,14 @@ async function runPassiveInteractions(bot: FeishuBot, event: any, messageId: str
   const reactionDecision = triggerDecision(config.reactionRate);
   const repeatDecision = triggerDecision(config.repeatRate);
   const imageRepeatDecision = triggerDecision(config.imageRepeatRate);
-  const imageReverseDecision = triggerDecision(config.imageReverseRate);
   const imitateDecision = triggerDecision(config.imitateRate);
   const reactionTriggered = config.reactionEmojis.length > 0 && reactionDecision.triggered;
   const repeatEligible = Boolean(text) && text.length <= config.repeatMaxChars;
   const repeatTriggered = repeatEligible && repeatDecision.triggered;
   const mediaRepeatEligible = Boolean(parsedMessage.imageKey || parsedMessage.stickerFileKey);
   const mediaRepeatTriggered = mediaRepeatEligible && imageRepeatDecision.triggered;
-  const mediaReverseTriggered = mediaRepeatEligible && imageReverseDecision.triggered;
+  const imageReverseTriggered = Boolean(parsedMessage.imageKey) && triggerDecision(config.imageReverseImageRate).triggered;
+  const stickerReverseTriggered = Boolean(parsedMessage.stickerFileKey) && triggerDecision(config.imageReverseStickerRate).triggered;
   const imitateEligible = !mentionsBot && Boolean(text);
   const imitateTriggered = imitateEligible && imitateDecision.triggered;
 
@@ -1157,7 +1160,11 @@ async function runPassiveInteractions(bot: FeishuBot, event: any, messageId: str
     tasks.push(sendPassiveMediaRepeat(bot, event, messageId, parsedMessage));
   }
 
-  if (mediaReverseTriggered && isPassiveFeatureEnabled(bot.id, chatId, 'media_reverse')) {
+  if (imageReverseTriggered && isPassiveFeatureEnabled(bot.id, chatId, 'image_reverse')) {
+    tasks.push(sendPassiveMediaReverse(bot, event, messageId, parsedMessage));
+  }
+
+  if (stickerReverseTriggered && isPassiveFeatureEnabled(bot.id, chatId, 'sticker_reverse')) {
     tasks.push(sendPassiveMediaReverse(bot, event, messageId, parsedMessage));
   }
 

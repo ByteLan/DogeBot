@@ -66,9 +66,10 @@ pnpm add-user <用户名> <密码>
 - `DOGEBOT_FEISHU_REACTION_EMOJIS`：自动 reaction 的候选 emoji key，逗号分隔，默认 `OK,DONE,THUMBSUP,HEART,LAUGH`。
 - `DOGEBOT_FEISHU_REPEAT_RATE`：普通消息自动复读的概率，默认 `0.05`。
 - `DOGEBOT_FEISHU_IMAGE_REPEAT_RATE`：图片/图文首图/表情包自动复读为新消息的概率；未配置时默认 `0`。该能力默认关闭，只有显式执行 `/media-repeat --enable` 的会话才会命中概率后触发。
-- `DOGEBOT_FEISHU_IMAGE_REVERSE_RATE`：图片/图文首图/表情包镜像反转后发送为新图片的概率；未配置时默认 `0.1`。该能力默认开启，可用 `/media-reverse --disable` 针对单个会话关闭。
+- `DOGEBOT_FEISHU_IMAGE_REVERSE_IMAGE_RATE`：聊天消息中的图片触发镜像反转后发送为新图片的概率；未配置时默认 `0.05`。该能力默认开启，可用 `/image-reverse --disable` 针对单个会话关闭。
+- `DOGEBOT_FEISHU_IMAGE_REVERSE_STICKER_RATE`：聊天消息中的表情包触发镜像反转后发送为新图片的概率；未配置时默认 `0.2`。该能力默认开启，可用 `/sticker-reverse --disable` 针对单个会话关闭。
 - 图片/表情包复读在完整下载前会先探测资源大小；如果探测不到大小，则边下载边限制。只有严格小于 `4MB` 的资源才会继续下载并复读；下载后的原始资源会缓存在系统临时目录下的 `dogebot-feishu-image-cache`，例如 macOS 上通常是 `/var/folders/.../T/dogebot-feishu-image-cache`，3 天未命中的缓存会定时清理，命中缓存会刷新时间戳。
-- `/media-reverse` 发送前会在水平或垂直中心线上随机选择一种轴对称方式，把图片一侧镜像覆盖到另一侧；处理后的临时文件会放在系统临时目录下的 `dogebot-feishu-image-processed`，例如 macOS 上通常是 `/var/folders/.../T/dogebot-feishu-image-processed`，发送完成后立即删除。该能力现在依赖 `python3` 和 `pillow`，可通过 `python3 -m pip install -r apps/server/requirements.txt` 安装。
+- `/image-reverse` 与 `/sticker-reverse` 会在发送前随机选择水平或垂直中心线，再把图片一侧镜像覆盖到另一侧；处理后的临时文件会放在系统临时目录下的 `dogebot-feishu-image-processed`，例如 macOS 上通常是 `/var/folders/.../T/dogebot-feishu-image-processed`，发送完成后立即删除。该能力现在依赖 `python3` 和 `pillow`，可通过 `python3 -m pip install -r apps/server/requirements.txt` 安装。
 - `DOGEBOT_FEISHU_REPEAT_MAX_CHARS`：允许复读的最大文本长度，默认 `300`。
 - `DOGEBOT_FEISHU_IMITATE_RATE`：普通消息触发大模型模仿接话的概率，默认 `0.05`。
 - `DOGEBOT_FEISHU_IMITATE_CONTEXT_SIZE`：模仿接话时带入的最近群聊消息条数，默认 `8`。

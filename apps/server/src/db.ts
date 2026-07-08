@@ -110,7 +110,7 @@ db.exec(`
     enabled INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        CHECK(feature IN ('reaction', 'repeat', 'llm_reply', 'media_repeat', 'media_reverse')),
+          CHECK(feature IN ('reaction', 'repeat', 'llm_reply', 'media_repeat', 'image_reverse', 'sticker_reverse')),
     UNIQUE(bot_id, chat_id, feature)
   );
 `);
@@ -133,7 +133,7 @@ if (!douyinAwemeColumns.some((column) => column.name === 'deleted_at')) {
     FROM sqlite_master
     WHERE type = 'table' AND name = 'feishu_chat_passive_settings'
   `).get() as { sql?: string } | undefined;
-  if (!passiveSettingsSchema?.sql?.includes("'media_reverse'")) {
+  if (!passiveSettingsSchema?.sql?.includes("'image_reverse'") || !passiveSettingsSchema?.sql?.includes("'sticker_reverse'")) {
     db.exec(`
       ALTER TABLE feishu_chat_passive_settings RENAME TO feishu_chat_passive_settings_old;
 
@@ -145,13 +145,24 @@ if (!douyinAwemeColumns.some((column) => column.name === 'deleted_at')) {
         enabled INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        CHECK(feature IN ('reaction', 'repeat', 'llm_reply', 'media_repeat', 'media_reverse')),
+        CHECK(feature IN ('reaction', 'repeat', 'llm_reply', 'media_repeat', 'image_reverse', 'sticker_reverse')),
         UNIQUE(bot_id, chat_id, feature)
       );
 
       INSERT INTO feishu_chat_passive_settings (id, bot_id, chat_id, feature, enabled, created_at, updated_at)
       SELECT id, bot_id, chat_id, feature, enabled, created_at, updated_at
-      FROM feishu_chat_passive_settings_old;
+      FROM feishu_chat_passive_settings_old
+      WHERE feature != 'media_reverse';
+
+      INSERT INTO feishu_chat_passive_settings (bot_id, chat_id, feature, enabled, created_at, updated_at)
+      SELECT bot_id, chat_id, 'image_reverse', enabled, created_at, updated_at
+      FROM feishu_chat_passive_settings_old
+      WHERE feature = 'media_reverse';
+
+      INSERT INTO feishu_chat_passive_settings (bot_id, chat_id, feature, enabled, created_at, updated_at)
+      SELECT bot_id, chat_id, 'sticker_reverse', enabled, created_at, updated_at
+      FROM feishu_chat_passive_settings_old
+      WHERE feature = 'media_reverse';
 
       DROP TABLE feishu_chat_passive_settings_old;
     `);
