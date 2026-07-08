@@ -84,7 +84,7 @@ pnpm add-user <用户名> <密码>
 - `DOGEBOT_FEISHU_SCALE_NEW_HEIGHTS_RATE`：普通文本消息随机生成为“勇攀高峰”图片的概率，默认 `0.05`。该能力默认开启，可用 `/scale-new-heights --disable` 或 `/勇攀高峰 --disable` 针对单个会话关闭。
 - `DOGEBOT_FEISHU_STYLE_STICKER_MAX_CHARS`：`/byte-style`、`/字节范`、`/scale-new-heights` 与 `/勇攀高峰` 在当前会话未显式设置 `--max` 时的默认最大处理字符数，默认 `10`。
 - `DOGEBOT_FEISHU_STYLE_STICKER_MAX_CHARS_LIMIT`：随机生图允许处理的绝对字符上限。即使会话里配置了更大的 `--max`，或者 `DOGEBOT_FEISHU_STYLE_STICKER_MAX_CHARS` 更大，实际处理长度也不会超过这个值；未配置时默认 `150`。
-- 飞书里直接发送 `/byte-style`、`/字节范`、`/scale-new-heights` 或 `/勇攀高峰` 且不带其他参数时，会回复一个交互卡片：顶部展示随机颜色和随机渐变角度生成的预览图，下方可编辑文案、两个色值和渐变角度，并通过“预览”刷新卡片或通过“发送”撤回卡片后发送图片。
+- 飞书里直接发送 `/byte-style`、`/字节范`、`/scale-new-heights` 或 `/勇攀高峰` 且不带其他参数时，会回复一个交互卡片：顶部展示随机颜色和随机渐变角度生成的预览图，下方可编辑文案、通过下拉选择两个常用色，也可填写自定义 `#RRGGBB` 色值，并填写渐变角度；通过“预览”刷新卡片，通过“发送”撤回卡片后发送图片，或通过“撤回”只撤回卡片。
 
 ## 宝塔面板长期运行
 
@@ -255,7 +255,7 @@ pm2 restart dogebot-server --update-env
 
 - `/byte-style 测试文案` 或 `/字节范 测试文案`：立即把文本渲染成“字节范”图片并发送到当前会话。
 - `/scale-new-heights 测试文案` 或 `/勇攀高峰 测试文案`：立即把文本渲染成“勇攀高峰”图片并发送到当前会话。
-- `/byte-style`、`/字节范`、`/scale-new-heights` 或 `/勇攀高峰`：不带参数时会回复一个交互卡片，可在卡片内输入文案、两个色值和渐变角度；点击“预览”会更新顶部预览图，点击“发送”会撤回卡片并把图片发到当前会话。
+- `/byte-style`、`/字节范`、`/scale-new-heights` 或 `/勇攀高峰`：不带参数时会回复一个交互卡片，可在卡片内输入文案、通过下拉选择两个常用色，也可填写自定义 `#RRGGBB` 色值，并填写渐变角度；点击“预览”会更新顶部预览图，点击“发送”会撤回卡片并把图片发到当前会话，点击“撤回”只撤回卡片。
 - `/byte-style --enable` / `/byte-style --disable`，以及 `/字节范 --enable` / `/字节范 --disable`：当前会话重新开启或关闭“字节范”随机生图。该能力默认开启。
 - `/scale-new-heights --enable` / `/scale-new-heights --disable`，以及 `/勇攀高峰 --enable` / `/勇攀高峰 --disable`：当前会话重新开启或关闭“勇攀高峰”随机生图。该能力默认开启。
 - `/byte-style --max 12`、`/字节范 --max 12`、`/scale-new-heights --max 12`、`/勇攀高峰 --max 12`：设置当前会话该风格随机生图允许处理的最大文本长度；超过该长度则不会处理。如果配置值超过 `DOGEBOT_FEISHU_STYLE_STICKER_MAX_CHARS_LIMIT`，实际仍会按上限截断。
