@@ -92,8 +92,10 @@ const fontLoadPromises = new Map<StickerFlavor, Promise<void>>();
 let fallbackFontsLoaded = false;
 
 const FALLBACK_FONT_DESCRIPTORS = [
-  { family: 'Noto Color Emoji', file: 'NotoColorEmoji.ttf' },
-  { family: 'Noto Sans Symbols 2', file: 'NotoSansSymbols2-Regular.ttf' },
+  { family: 'Apple Color Emoji', file: 'AppleColorEmoji.ttf', optional: true },
+  { family: 'Apple Symbols', file: 'AppleSymbols.ttf', optional: true },
+  { family: 'Noto Color Emoji', file: 'NotoColorEmoji.ttf', optional: false },
+  { family: 'Noto Sans Symbols 2', file: 'NotoSansSymbols2-Regular.ttf', optional: false },
 ] as const;
 
 function normalizeRenderScale(value: unknown) {
@@ -198,6 +200,14 @@ function resolveFontPath(fileName: string) {
   return matched;
 }
 
+function resolveOptionalFontPath(fileName: string) {
+  const candidates = [
+    join(appDir, 'assets', 'fonts', fileName),
+    join(appRootDir, 'assets', 'fonts', fileName)
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) || '';
+}
+
 function darkenHexColor(hexColor: string, factor: number) {
   const red = Math.max(0, Math.min(255, Math.round(Number.parseInt(hexColor.slice(1, 3), 16) * factor)));
   const green = Math.max(0, Math.min(255, Math.round(Number.parseInt(hexColor.slice(3, 5), 16) * factor)));
@@ -217,6 +227,8 @@ function fontSpec(flavor: StickerFlavor, fontSize: number) {
   return [
     `normal ${descriptor.fontWeight} ${fontSize}px "${descriptor.family}"`,
     '"PingFang SC"',
+    '"Apple Color Emoji"',
+    '"Apple Symbols"',
     '"Noto Color Emoji"',
     '"Noto Sans Symbols 2"',
     'sans-serif'
@@ -228,7 +240,9 @@ function ensureFallbackFontsLoaded() {
   fallbackFontsLoaded = true;
   for (const descriptor of FALLBACK_FONT_DESCRIPTORS) {
     if (GlobalFonts.has(descriptor.family)) continue;
-    const registered = GlobalFonts.registerFromPath(resolveFontPath(descriptor.file), descriptor.family);
+    const fontPath = descriptor.optional ? resolveOptionalFontPath(descriptor.file) : resolveFontPath(descriptor.file);
+    if (!fontPath) continue;
+    const registered = GlobalFonts.registerFromPath(fontPath, descriptor.family);
     if (!registered) {
       console.warn(`[style-sticker] failed to register fallback font: ${descriptor.family}`);
     }
