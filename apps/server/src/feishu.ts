@@ -92,6 +92,12 @@ type AddCronCommand = {
   commandText: string;
 };
 
+type HelpCommandRow = {
+  command: string;
+  params: string;
+  description: string;
+};
+
 type PassiveFeature = 'reaction' | 'repeat' | 'llm_reply' | 'media_repeat' | 'image_reverse' | 'sticker_reverse';
 
 type PassiveToggleCommand =
@@ -270,6 +276,63 @@ const STYLE_STICKER_COMMANDS = [
   { command: '/scale-new-heights', feature: 'scale_new_heights', featureName: '勇攀高峰', flavor: 'snh' },
   { command: '/勇攀高峰', feature: 'scale_new_heights', featureName: '勇攀高峰', flavor: 'snh' }
 ] as const;
+const HELP_COMMAND_ROWS: HelpCommandRow[] = [
+  {
+    command: '/help',
+    params: '无',
+    description: '查看当前机器人支持的斜杠命令、可填参数和功能说明。'
+  },
+  {
+    command: '/users',
+    params: '@用户...、delete [@用户...]、top @用户、new n',
+    description: '记录和查看当前发起人 at 过的用户；支持删除、置顶和只看最新 n 个。'
+  },
+  {
+    command: '/douyin',
+    params: '{模拟点击文案} [--count n]',
+    description: '随机发送匹配文案的抖音收藏视频；n 必须是大于 0 的整数。'
+  },
+  {
+    command: '/douyin',
+    params: '--subscribe {模拟点击文案} / --unsubscribe {模拟点击文案}',
+    description: '订阅或取消订阅当前会话的抖音收藏分组新增视频通知。'
+  },
+  {
+    command: '/douyin',
+    params: '--delete {aweme_id}',
+    description: '软删除指定抖音收藏记录；仅 /set-default 管理员可用，aweme_id 需大于 5 位。'
+  },
+  {
+    command: '/set-default',
+    params: '"{兜底指令}"',
+    description: '设置当前 bot 的默认兜底指令；首次设置者会成为该命令管理员。'
+  },
+  {
+    command: '/add-cron',
+    params: '"*/5 * * * *" "[命令]"',
+    description: '给当前会话添加定时任务；命令可省略，省略时使用 /set-default 配置。'
+  },
+  {
+    command: '/reaction、/repeat、/llm-reply',
+    params: '--enable / --disable',
+    description: '开启或关闭当前会话的贴表情、文本复读、大模型接话等被动能力。'
+  },
+  {
+    command: '/media-repeat、/image-reverse、/sticker-reverse',
+    params: '--enable / --disable',
+    description: '开启或关闭当前会话的图片/表情包复读、图片镜像、表情包镜像能力。'
+  },
+  {
+    command: '/byte-style、/字节范',
+    params: '[文案]、--enable、--disable、--max n',
+    description: '把文案生成“字节范”图片；不带参数会发交互卡片；开关和 --max 控制随机生图。'
+  },
+  {
+    command: '/scale-new-heights、/勇攀高峰',
+    params: '[文案]、--enable、--disable、--max n',
+    description: '把文案生成“勇攀高峰”图片；不带参数会发交互卡片；开关和 --max 控制随机生图。'
+  }
+];
 const recentChatMessages = new Map<string, RecentChatMessage[]>();
 
 function cleanupRecentFeishuEventKeys(now: number) {
@@ -716,6 +779,84 @@ async function renderStyleStickerCardState(
 async function replyStyleStickerGeneratorCard(bot: FeishuBot, messageId: string, feature: StyleStickerFeature) {
   const state = await renderStyleStickerCardState(bot, feature, styleStickerFeatureName(feature));
   await replyCard(bot, messageId, buildStyleStickerCard(state));
+}
+
+function helpTableCell(content: string, weight: number, bold = false) {
+  return {
+    tag: 'column',
+    width: 'weighted',
+    weight,
+    vertical_align: 'top',
+    elements: [
+      {
+        tag: 'markdown',
+        content: bold ? `**${content}**` : content
+      }
+    ]
+  };
+}
+
+function helpTableRow(row: HelpCommandRow, index: number) {
+  return {
+    tag: 'column_set',
+    element_id: `help_row_${index}`,
+    flex_mode: 'none',
+    horizontal_spacing: '8px',
+    columns: [
+      helpTableCell(row.command, 2),
+      helpTableCell(row.params, 3),
+      helpTableCell(row.description, 5)
+    ]
+  };
+}
+
+function buildHelpCard() {
+  const elements: object[] = [
+    {
+      tag: 'markdown',
+      content: '下面是当前支持的斜杠命令。群聊里需要先 @ 机器人，单聊里可以直接发送。'
+    },
+    {
+      tag: 'column_set',
+      element_id: 'help_header',
+      flex_mode: 'none',
+      horizontal_spacing: '8px',
+      columns: [
+        helpTableCell('命令', 2, true),
+        helpTableCell('可填参数', 3, true),
+        helpTableCell('功能', 5, true)
+      ]
+    },
+    { tag: 'hr' }
+  ];
+
+  HELP_COMMAND_ROWS.forEach((row, index) => {
+    elements.push(helpTableRow(row, index));
+    if (index < HELP_COMMAND_ROWS.length - 1) elements.push({ tag: 'hr' });
+  });
+
+  return {
+    schema: '2.0',
+    config: {
+      wide_screen_mode: true,
+      enable_forward: true,
+      summary: { content: 'DogeBot 命令帮助' }
+    },
+    header: {
+      title: plainText('DogeBot 命令帮助'),
+      template: 'blue'
+    },
+    body: {
+      direction: 'vertical',
+      padding: '12px 12px 12px 12px',
+      vertical_spacing: '8px',
+      elements
+    }
+  };
+}
+
+async function replyHelpCard(bot: FeishuBot, messageId: string) {
+  await replyCard(bot, messageId, buildHelpCard());
 }
 
 async function addReaction(bot: FeishuBot, messageId: string, reactionType: string) {
@@ -1743,6 +1884,10 @@ function parseSetDefaultCommand(text: string): SetDefaultCommand {
   };
 }
 
+function isHelpCommand(text: string) {
+  return /(?:^|\s)\/help(?:\s|$)/.test(text);
+}
+
 function readQuotedToken(value: string) {
   const text = value.trimStart();
   if (!text) return { token: '', rest: '' };
@@ -2335,6 +2480,10 @@ async function replyUsersCard(bot: FeishuBot, messageId: string, records: AtReco
 async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string, text: string, options: { allowSetDefault: boolean }): Promise<boolean> {
   const message = event?.message;
   const chatId = String(message?.chat_id || '').trim();
+  if (isHelpCommand(text)) {
+    await replyHelpCard(bot, messageId);
+    return true;
+  }
   if (options.allowSetDefault) {
     const addCron = parseAddCronCommand(text);
     if (addCron.isAddCron) {

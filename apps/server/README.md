@@ -199,7 +199,7 @@ pm2 restart dogebot-server --update-env
 
 服务端默认使用飞书长连接接收事件。收到 `im.message.receive_v1` 后：
 
-- 如果是 `/users`、`/douyin`、`/set-default`、`/add-cron` 等命令，优先按命令逻辑处理。
+- 如果是 `/help`、`/users`、`/douyin`、`/set-default`、`/add-cron` 等命令，优先按命令逻辑处理。
 - 如果配置了 bot 默认兜底指令，继续执行默认指令。
 - 普通文本消息不会要求 @ 机器人；服务端会按概率自动触发消息 reaction、复读、以及大模型模仿接话。
 - 大模型模仿接话需要配置 OpenAI 兼容接口的 URL、Key 和 model；未配置时只会跳过该项，不影响 reaction 和复读。
@@ -209,6 +209,10 @@ pm2 restart dogebot-server --update-env
 ```text
 <at id=ou_xxx></at>
 ```
+
+## `/help` 命令
+
+- `/help`：用飞书卡片表格返回当前支持的斜杠命令、可填参数和功能说明。
 
 ## `/users` 命令
 
@@ -232,6 +236,20 @@ pm2 restart dogebot-server --update-env
 
 - `/set-default "{兜底指令}"`：设置当前 bot 的默认兜底指令。
 - 每个 bot 第一次成功执行 `/set-default` 的飞书用户会被记录为管理员；之后只有这个管理员可以继续修改默认兜底指令。
+
+## `/add-cron` 命令
+
+- `/add-cron "*/5 * * * *" "/douyin 123 [--count n]"`：给当前会话添加定时任务。
+- `/add-cron "*/5 * * * *"`：如果当前 bot 已设置 `/set-default`，可以省略第二个参数，定时执行默认兜底指令。
+
+## 被动能力开关命令
+
+- `/reaction --enable` / `/reaction --disable`：当前会话开启或关闭随机贴表情。
+- `/repeat --enable` / `/repeat --disable`：当前会话开启或关闭文本复读。
+- `/llm-reply --enable` / `/llm-reply --disable`：当前会话开启或关闭大模型接话。
+- `/media-repeat --enable` / `/media-repeat --disable`：当前会话开启或关闭图片/表情包复读。
+- `/image-reverse --enable` / `/image-reverse --disable`：当前会话开启或关闭图片镜像反转。
+- `/sticker-reverse --enable` / `/sticker-reverse --disable`：当前会话开启或关闭表情包镜像反转。
 
 ## `/byte-style`、`/字节范`、`/scale-new-heights` 与 `/勇攀高峰` 命令
 
