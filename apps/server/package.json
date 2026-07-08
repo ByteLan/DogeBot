@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node -e \"const fs=require('fs'); const path=require('path'); const src=path.join(process.cwd(),'scripts'); const dst=path.join(process.cwd(),'dist','scripts'); fs.mkdirSync(dst,{recursive:true}); for (const name of fs.readdirSync(src)) { if (!name.endsWith('.py')) continue; fs.copyFileSync(path.join(src,name), path.join(dst,name)); }\"",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "add-user": "tsx scripts/add-user.ts"

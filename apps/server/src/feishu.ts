@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { promises as fs } from 'node:fs';
+import { existsSync, promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, extname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -178,7 +178,9 @@ type MirroredImageVariant = {
 
 let cronSchedulerTimer: NodeJS.Timeout | undefined;
 let cronSchedulerRunning = false;
-const appDir = dirname(dirname(fileURLToPath(import.meta.url)));
+const moduleDir = dirname(fileURLToPath(import.meta.url));
+const appDir = dirname(moduleDir);
+const appRootDir = basename(appDir) === 'dist' ? dirname(appDir) : appDir;
 const execFileAsync = promisify(execFile);
 const FEISHU_EVENT_DEDUP_TTL_MS = 10 * 60 * 1000;
 const MESSAGE_RESOURCE_MAX_BYTES = 4 * 1024 * 1024;
@@ -186,7 +188,16 @@ const MESSAGE_RESOURCE_CACHE_DIR = join(tmpdir(), 'dogebot-feishu-image-cache');
 const MESSAGE_RESOURCE_PROCESSED_DIR = join(tmpdir(), 'dogebot-feishu-image-processed');
 const MESSAGE_RESOURCE_CACHE_TTL_MS = 3 * 24 * 60 * 60 * 1000;
 const MESSAGE_RESOURCE_CACHE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
-const IMAGE_MIRROR_SCRIPT_PATH = join(appDir, 'scripts', 'mirror-image.py');
+function resolveRuntimeScriptPath(fileName: string) {
+  const candidates = [
+    join(appDir, 'scripts', fileName),
+    join(appRootDir, 'scripts', fileName)
+  ];
+  const matched = candidates.find((candidate) => existsSync(candidate));
+  return matched || candidates[0];
+}
+
+const IMAGE_MIRROR_SCRIPT_PATH = resolveRuntimeScriptPath('mirror-image.py');
 const recentFeishuEventKeys = new Map<string, number>();
 const messageResourceCache = new Map<string, string>();
 const messageResourceDownloads = new Map<string, Promise<DownloadedMessageResource>>();
