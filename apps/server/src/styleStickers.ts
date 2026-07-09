@@ -604,6 +604,8 @@ function maskToCanvas(mask: BinaryMask, softenRadius = 0) {
   return canvas;
 }
 
+let reusableTempCanvas: Canvas | null = null;
+
 function paintMask(
   targetContext: SKRSContext2D,
   maskCanvas: Canvas,
@@ -611,8 +613,20 @@ function paintMask(
   opacity = 1,
   compositeOperation: GlobalCompositeOperation = 'source-over',
 ) {
-  const temporaryCanvas: Canvas = createCanvas(maskCanvas.width, maskCanvas.height);
+  const width = maskCanvas.width;
+  const height = maskCanvas.height;
+  let temporaryCanvas: Canvas;
+  if (reusableTempCanvas && reusableTempCanvas.width === width && reusableTempCanvas.height === height) {
+    temporaryCanvas = reusableTempCanvas;
+  } else {
+    temporaryCanvas = createCanvas(width, height);
+    reusableTempCanvas = temporaryCanvas;
+  }
   const temporaryContext = temporaryCanvas.getContext('2d');
+  temporaryContext.clearRect(0, 0, width, height);
+  temporaryContext.globalCompositeOperation = 'source-over';
+  temporaryContext.globalAlpha = 1;
+  temporaryContext.filter = 'none';
 
   painter(temporaryContext);
   temporaryContext.globalCompositeOperation = 'destination-in';
@@ -639,27 +653,35 @@ function calculateWorkingPadding(controls: StickerControls) {
   );
 }
 
+const glyphMeasureCanvas: Canvas = createCanvas(1, 1);
+const glyphMeasureContext = glyphMeasureCanvas.getContext('2d');
+const glyphMeasureCache = new Map<string, GlyphMeasurement>();
+
 function measureGlyphWithCanvas(
   grapheme: string,
   fontSize: number,
   flavor: StickerFlavor,
 ): GlyphMeasurement {
-  const canvas: Canvas = createCanvas(1, 1);
-  const context = canvas.getContext('2d');
-  context.font = fontSpec(flavor, fontSize);
-  context.textBaseline = 'alphabetic';
-  const metrics = context.measureText(grapheme);
+  const cacheKey = `${flavor}:${fontSize}:${grapheme}`;
+  const cached = glyphMeasureCache.get(cacheKey);
+  if (cached) return cached;
+
+  glyphMeasureContext.font = fontSpec(flavor, fontSize);
+  glyphMeasureContext.textBaseline = 'alphabetic';
+  const metrics = glyphMeasureContext.measureText(grapheme);
   const left = metrics.actualBoundingBoxLeft || 0;
   const right = metrics.actualBoundingBoxRight || metrics.width;
   const ascent = metrics.actualBoundingBoxAscent || fontSize * 0.82;
   const descent = metrics.actualBoundingBoxDescent || fontSize * 0.18;
-  return {
+  const result: GlyphMeasurement = {
     advanceWidth: metrics.width || right + left || fontSize,
     left,
     right,
     ascent,
     descent,
   };
+  glyphMeasureCache.set(cacheKey, result);
+  return result;
 }
 
 function drawPlacedGlyphs(
@@ -870,6 +892,22 @@ export async function closeStyleStickerRenderer() {
   return;
 }
 
+const RENDER_CACHE_TTL_MS = 60_000;
+const RENDER_CACHE_MAX_ENTRIES = 20;
+const renderResultCache = new Map<string, { image: Buffer; colors: readonly [string, string]; renderScale: number; gradientAngle: number; expiresAt: number }>();
+
+function pruneRenderCache() {
+  if (renderResultCache.size <= RENDER_CACHE_MAX_ENTRIES) return;
+  const now = Date.now();
+  for (const [key, entry] of renderResultCache) {
+    if (entry.expiresAt <= now) renderResultCache.delete(key);
+  }
+  if (renderResultCache.size <= RENDER_CACHE_MAX_ENTRIES) return;
+  const sorted = [...renderResultCache.entries()].sort((a, b) => a[1].expiresAt - b[1].expiresAt);
+  const toRemove = sorted.slice(0, sorted.length - RENDER_CACHE_MAX_ENTRIES);
+  for (const [key] of toRemove) renderResultCache.delete(key);
+}
+
 export async function renderStyleStickerImage(
   text: string,
   flavor: StickerFlavor,
@@ -883,7 +921,16 @@ export async function renderStyleStickerImage(
   const colors = resolveGradientColors(options.color1, options.color2);
   const renderScale = normalizeRenderScale(options.scale);
   const gradientAngle = normalizeGradientAngle(options.gradientAngle);
+
+  const cacheKey = `${flavor}:${text}:${colors[0]}:${colors[1]}:${renderScale}:${gradientAngle}`;
+  const cached = renderResultCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return { image: cached.image, colors: cached.colors, renderScale: cached.renderScale, gradientAngle: cached.gradientAngle };
+  }
+
   const image = await runStyleStickerRenderTask(() => renderStickerBuffer(text, flavor, colors, renderScale, gradientAngle));
+  pruneRenderCache();
+  renderResultCache.set(cacheKey, { image, colors, renderScale, gradientAngle, expiresAt: Date.now() + RENDER_CACHE_TTL_MS });
   return { image, colors, renderScale, gradientAngle };
 }
 
