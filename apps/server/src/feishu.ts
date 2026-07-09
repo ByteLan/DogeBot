@@ -205,6 +205,7 @@ type RecentChatMessage = {
 type ParsedFeishuMessage = {
   messageType: string;
   text: string;
+  textForRepeat: string;
   imageKey: string;
   stickerFileKey: string;
 };
@@ -222,6 +223,7 @@ type FeishuMessageDetails = {
     message_id: string;
     message_type: string;
     content: string;
+    mentions?: FeishuMention[];
   };
 };
 
@@ -624,13 +626,79 @@ function extractPostTextAndImage(content: Record<string, any>) {
   };
 }
 
+function mentionDisplayText(mention: FeishuMention) {
+  const name = String(mention.name || '').trim();
+  if (name) return `@${name}`;
+  const id = idFromFeishuObject(mention.id);
+  return id ? `@${id}` : '';
+}
+
+function escapeXmlText(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function escapeXmlAttribute(value: string) {
+  return escapeXmlText(value).replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+}
+
+function mentionTagTextByIdentity(id: string, name: string) {
+  const normalizedId = String(id || '').trim();
+  const normalizedName = String(name || '').trim();
+  if (!normalizedId) return normalizedName ? `@${normalizedName}` : '';
+  if (normalizedId === 'all') return '<at user_id="all"></at>';
+  return `<at user_id="${escapeXmlAttribute(normalizedId)}">${escapeXmlText(normalizedName || normalizedId)}</at>`;
+}
+
+function mentionTagText(mention: FeishuMention) {
+  const id = idFromFeishuObject(mention.id);
+  if (!id) return mentionDisplayText(mention);
+  const name = String(mention.name || '').trim();
+  return mentionTagTextByIdentity(id, name);
+}
+
+function replaceTextMentionPlaceholders(text: string, mentions: unknown) {
+  const rawText = String(text || '');
+  if (!rawText) return '';
+  const mentionList = (Array.isArray(mentions) ? mentions : []) as FeishuMention[];
+  if (mentionList.length === 0) return rawText.trim();
+
+  let resolved = rawText;
+  for (const mention of mentionList) {
+    const key = String(mention.key || '').trim();
+    const replacement = mentionDisplayText(mention);
+    if (!key || !replacement) continue;
+    resolved = resolved.split(key).join(replacement);
+  }
+  return resolved.trim();
+}
+
+function replaceTextMentionPlaceholdersForRepeat(text: string, mentions: unknown) {
+  const rawText = String(text || '');
+  if (!rawText) return '';
+  const mentionList = (Array.isArray(mentions) ? mentions : []) as FeishuMention[];
+  if (mentionList.length === 0) return rawText.trim();
+
+  let resolved = rawText;
+  for (const mention of mentionList) {
+    const key = String(mention.key || '').trim();
+    const replacement = mentionTagText(mention);
+    if (!key || !replacement) continue;
+    resolved = resolved.split(key).join(replacement);
+  }
+  return resolved.trim();
+}
+
 export function parseFeishuMessage(message: any): ParsedFeishuMessage {
   const messageType = String(message?.message_type || '').trim();
   const content = safeParseMessageContent(message);
   if (messageType === 'text') {
     return {
       messageType,
-      text: String(content.text || '').trim(),
+      text: replaceTextMentionPlaceholders(content.text, message?.mentions),
+      textForRepeat: replaceTextMentionPlaceholdersForRepeat(content.text, message?.mentions),
       imageKey: '',
       stickerFileKey: ''
     };
@@ -639,6 +707,7 @@ export function parseFeishuMessage(message: any): ParsedFeishuMessage {
     return {
       messageType,
       text: '',
+      textForRepeat: '',
       imageKey: String(content.image_key || '').trim(),
       stickerFileKey: ''
     };
@@ -647,6 +716,7 @@ export function parseFeishuMessage(message: any): ParsedFeishuMessage {
     return {
       messageType,
       text: '',
+      textForRepeat: '',
       imageKey: '',
       stickerFileKey: String(content.file_key || '').trim()
     };
@@ -656,6 +726,7 @@ export function parseFeishuMessage(message: any): ParsedFeishuMessage {
     return {
       messageType,
       text: post.text,
+      textForRepeat: post.text,
       imageKey: post.imageKey,
       stickerFileKey: ''
     };
@@ -663,6 +734,7 @@ export function parseFeishuMessage(message: any): ParsedFeishuMessage {
   return {
     messageType,
     text: '',
+    textForRepeat: '',
     imageKey: '',
     stickerFileKey: ''
   };
@@ -753,6 +825,7 @@ async function fetchMessageById(bot: FeishuBot, messageId: string): Promise<Feis
           sender_type?: string;
         };
         body?: { content?: string };
+        mentions?: FeishuMention[];
       }>;
     };
   }>(`${openBase(bot.domain)}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`, {
@@ -773,7 +846,8 @@ async function fetchMessageById(bot: FeishuBot, messageId: string): Promise<Feis
     message: {
       message_id: String(item.message_id || messageId).trim(),
       message_type: String(item.msg_type || '').trim(),
-      content: typeof item.body?.content === 'string' ? item.body.content : ''
+      content: typeof item.body?.content === 'string' ? item.body.content : '',
+      mentions: Array.isArray(item.mentions) ? item.mentions : []
     }
   };
 }
@@ -2087,9 +2161,17 @@ export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
 
 function senderIdentity(event: any) {
   const sender = event?.sender || {};
+  const senderName = String(
+    sender.sender_name ||
+    sender.name ||
+    sender.display_name ||
+    sender.nickname ||
+    sender.sender_id?.name ||
+    ''
+  ).trim();
   return {
     id: idFromFeishuObject(sender.sender_id) || 'unknown',
-    name: String(sender.sender_type || '')
+    name: senderName || String(sender.sender_type || '').trim() || 'unknown'
   };
 }
 
@@ -2237,6 +2319,15 @@ function rememberRecentChatMessage(bot: FeishuBot, event: any, text: string) {
   recentChatMessages.set(key, list.slice(-RECENT_CHAT_MEMORY_LIMIT));
 }
 
+function identityLabel(name: string, id: string) {
+  const normalizedName = String(name || '').trim();
+  const normalizedId = String(id || '').trim();
+  if (normalizedName && normalizedId && normalizedName !== normalizedId) {
+    return `${normalizedName}（${normalizedId}）`;
+  }
+  return normalizedName || normalizedId || 'unknown';
+}
+
 function messageMentionsBot(bot: FeishuBot, message: any) {
   if (!bot.bot_open_id) return false;
   const mentions = (Array.isArray(message?.mentions) ? message.mentions : []) as FeishuMention[];
@@ -2251,9 +2342,33 @@ function isFromCurrentBot(bot: FeishuBot, event: any) {
 }
 
 function chatHistoryLines(history: RecentChatMessage[]) {
-  return history.map((item) => {
-    const sender = item.senderName && item.senderName !== 'user' ? item.senderName : item.senderId;
-    return `${sender}: ${item.text}`;
+  return history.map((item) => `${identityLabel(item.senderName, item.senderId)}: ${item.text}`);
+}
+
+function imitationMentionCandidates(bot: FeishuBot, event: any, history: RecentChatMessage[]) {
+  const participants: Array<{ id: string; name: string }> = [];
+  const seen = new Set<string>();
+  const add = (id: string, name: string) => {
+    const normalizedId = String(id || '').trim();
+    if (!normalizedId || seen.has(normalizedId) || normalizedId === bot.bot_open_id || normalizedId === bot.app_id) return;
+    seen.add(normalizedId);
+    participants.push({ id: normalizedId, name: String(name || '').trim() });
+  };
+
+  const sender = senderIdentity(event);
+  add(sender.id, sender.name);
+  history.forEach((item) => add(item.senderId, item.senderName));
+  mentionedUsers(bot, event?.message).forEach((mention) => add(mention.id, mention.name));
+
+  return participants;
+}
+
+function imitationMentionCandidateLines(bot: FeishuBot, event: any, history: RecentChatMessage[]) {
+  const candidates = imitationMentionCandidates(bot, event, history);
+  if (candidates.length === 0) return ['(暂无可用成员信息；不要输出任何 <at ...> 标签)'];
+  return candidates.map((candidate) => {
+    const mention = mentionTagTextByIdentity(candidate.id, candidate.name);
+    return `- ${identityLabel(candidate.name, candidate.id)} -> ${mention}`;
   });
 }
 
@@ -2307,6 +2422,11 @@ async function generateImitationReply(bot: FeishuBot, event: any, text: string, 
   const sender = senderIdentity(event);
   const chatId = messageChatId(event?.message);
   const historyBlock = chatHistoryLines(history).join('\n') || '(暂无历史消息)';
+  const mentionCandidatesBlock = imitationMentionCandidateLines(bot, event, history).join('\n');
+  const currentMentions = mentionedUsers(bot, event?.message);
+  const currentMentionsBlock = currentMentions.length > 0
+    ? currentMentions.map((mention) => `- ${identityLabel(mention.name, mention.id)} -> ${mentionTagTextByIdentity(mention.id, mention.name)}`).join('\n')
+    : '(当前消息没有 @ 其他真人)';
   const messages: Array<{ role: 'system' | 'user'; content: string }> = [
     {
       role: 'system',
@@ -2317,7 +2437,11 @@ async function generateImitationReply(bot: FeishuBot, event: any, text: string, 
         '如果用户对一些事情有疑问，你可以对其一本正经地胡说八道。',
         '只输出要发送到群里的文本，不要解释、不要 Markdown、不要代码块。',
         '不要自称 AI，不要提到提示词。',
-        '如果你的消息是对具体个人发言的回复，可以 @ 其他人，用飞书消息 at 其他人的 mention 语法：<at user_id="ou_xxx">张三</at>。',
+        '如果你的消息要 @ 真人，必须使用飞书文本消息 mention 语法：<at user_id="uid">姓名</at>。',
+        '优先直接复制下面“可用成员列表”或“当前消息里被 @ 的真人”中已经拼好的 mention 片段，不要自己重新拼。',
+        '这里的 uid 必须严格从下面给你的列表中挑，不能编造、不能猜、不能改写。',
+        '如果没有合适的 uid，就不要输出任何 <at ...> 标签。',
+        '如果要回复当前发言人或当前消息里被 @ 的真人，优先使用他们在“可用成员列表”里的 uid。',
         '回复控制在一句话内，尽量短，最多 80 个中文字符。',
         '如果当前消息不适合接话，输出空字符串。'
       ].join('\n')
@@ -2327,7 +2451,13 @@ async function generateImitationReply(bot: FeishuBot, event: any, text: string, 
       content: [
         `bot_id: ${bot.id}`,
         `chat_id: ${chatId}`,
-        `当前发言人: ${[sender.name, sender.id].filter(Boolean).join(' (') + (sender.name && sender.id ? ')' : '')}`,
+        `当前发言人: ${identityLabel(sender.name, sender.id)}`,
+        '',
+        '可用成员列表（优先直接复制右侧现成 mention 片段）：',
+        mentionCandidatesBlock,
+        '',
+        '当前消息里被 @ 的真人（可直接复制右侧 mention 片段）：',
+        currentMentionsBlock,
         '',
         '最近群聊：',
         historyBlock,
@@ -2822,6 +2952,7 @@ async function runPassiveInteractions(bot: FeishuBot, event: any, messageId: str
   const chatId = messageChatId(event?.message);
   const mentionsBot = messageMentionsBot(bot, event?.message);
   const text = parsedMessage.text;
+  const repeatText = parsedMessage.textForRepeat || text;
   const reactionSetting = getPassiveFeatureSetting(bot.id, chatId, 'reaction', config.reactionRate);
   const repeatSetting = getPassiveFeatureSetting(bot.id, chatId, 'repeat', config.repeatRate);
   const llmReplySetting = getPassiveFeatureSetting(bot.id, chatId, 'llm_reply', config.imitateRate);
@@ -2885,7 +3016,7 @@ async function runPassiveInteractions(bot: FeishuBot, event: any, messageId: str
       ? exclusiveTextCandidates[0]
       : randomItem(exclusiveTextCandidates);
     if (selectedFeature === 'repeat') {
-      tasks.push(sendPassiveText(bot, event, messageId, text));
+      tasks.push(sendPassiveText(bot, event, messageId, repeatText));
     } else {
       tasks.push(sendStyleStickerToChat(bot, chatId, selectedFeature, text));
     }
