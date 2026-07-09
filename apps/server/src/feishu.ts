@@ -2398,6 +2398,10 @@ function shouldNormalizeBareName(name: string, id: string) {
   return true;
 }
 
+function stripBareAtPrefixBeforeMentions(text: string) {
+  return text.replace(/[@＠]+(?=\s*<at\b)/g, '');
+}
+
 function normalizeImitationReplyMentions(text: string, candidates: Array<{ id: string; name: string }>) {
   if (!text) return '';
   const replacementEntries = new Map<string, string>();
@@ -2443,6 +2447,7 @@ function normalizeImitationReplyMentions(text: string, candidates: Array<{ id: s
   for (const [token, mention] of replacements) {
     normalized = normalized.replace(new RegExp(escapeRegExp(token), 'g'), mention);
   }
+  normalized = stripBareAtPrefixBeforeMentions(normalized);
   const bareProtected = protectMentionTags(normalized);
   normalized = bareProtected.protectedText;
   const bareNameReplacements = [...bareNameEntries.entries()].sort((left, right) => right[0].length - left[0].length);
@@ -2457,6 +2462,7 @@ function normalizeImitationReplyMentions(text: string, candidates: Array<{ id: s
     );
   }
   normalized = restoreMentionTags(normalized, bareProtected.placeholders);
+  normalized = stripBareAtPrefixBeforeMentions(normalized);
   return restoreMentionTags(normalized, placeholders);
 }
 
