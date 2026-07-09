@@ -2363,13 +2363,62 @@ function imitationMentionCandidates(bot: FeishuBot, event: any, history: RecentC
   return participants;
 }
 
-function imitationMentionCandidateLines(bot: FeishuBot, event: any, history: RecentChatMessage[]) {
-  const candidates = imitationMentionCandidates(bot, event, history);
-  if (candidates.length === 0) return ['(暂无可用成员信息；不要输出任何 <at ...> 标签)'];
-  return candidates.map((candidate) => {
-    const mention = mentionTagTextByIdentity(candidate.id, candidate.name);
-    return `- ${identityLabel(candidate.name, candidate.id)} -> ${mention}`;
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function protectMentionTags(text: string) {
+  const placeholders: string[] = [];
+  const protectedText = text.replace(/<at\b[^>]*>[\s\S]*?<\/at>/g, (match) => {
+    const token = `__DOGEBOT_MENTION_${placeholders.length}__`;
+    placeholders.push(match);
+    return token;
   });
+  return { protectedText, placeholders };
+}
+
+function restoreMentionTags(text: string, placeholders: string[]) {
+  let restored = text;
+  placeholders.forEach((value, index) => {
+    restored = restored.split(`__DOGEBOT_MENTION_${index}__`).join(value);
+  });
+  return restored;
+}
+
+function normalizeImitationReplyMentions(text: string, candidates: Array<{ id: string; name: string }>) {
+  if (!text) return '';
+  const replacementEntries = new Map<string, string>();
+  const duplicateTokens = new Set<string>();
+  for (const candidate of candidates) {
+    const mention = mentionTagTextByIdentity(candidate.id, candidate.name);
+    if (!mention) continue;
+    const tokens = new Set<string>();
+    if (candidate.name) {
+      tokens.add(`@${candidate.name}`);
+      tokens.add(`＠${candidate.name}`);
+    }
+    if (candidate.id) {
+      tokens.add(`@${candidate.id}`);
+      tokens.add(`＠${candidate.id}`);
+    }
+    for (const token of tokens) {
+      if (duplicateTokens.has(token)) continue;
+      if (replacementEntries.has(token) && replacementEntries.get(token) !== mention) {
+        replacementEntries.delete(token);
+        duplicateTokens.add(token);
+        continue;
+      }
+      replacementEntries.set(token, mention);
+    }
+  }
+
+  const { protectedText, placeholders } = protectMentionTags(text);
+  let normalized = protectedText;
+  const replacements = [...replacementEntries.entries()].sort((left, right) => right[0].length - left[0].length);
+  for (const [token, mention] of replacements) {
+    normalized = normalized.replace(new RegExp(escapeRegExp(token), 'g'), mention);
+  }
+  return restoreMentionTags(normalized, placeholders);
 }
 
 function sanitizeImitationReply(value: string) {
@@ -2421,8 +2470,11 @@ async function openAIChat(config: PassiveInteractionConfig, messages: Array<{ ro
 async function generateImitationReply(bot: FeishuBot, event: any, text: string, history: RecentChatMessage[], config: PassiveInteractionConfig) {
   const sender = senderIdentity(event);
   const chatId = messageChatId(event?.message);
+  const mentionCandidates = imitationMentionCandidates(bot, event, history);
   const historyBlock = chatHistoryLines(history).join('\n') || '(暂无历史消息)';
-  const mentionCandidatesBlock = imitationMentionCandidateLines(bot, event, history).join('\n');
+  const mentionCandidatesBlock = mentionCandidates.length > 0
+    ? mentionCandidates.map((candidate) => `- ${identityLabel(candidate.name, candidate.id)} -> ${mentionTagTextByIdentity(candidate.id, candidate.name)}`).join('\n')
+    : '(暂无可用成员信息；不要输出任何 <at ...> 标签)';
   const currentMentions = mentionedUsers(bot, event?.message);
   const currentMentionsBlock = currentMentions.length > 0
     ? currentMentions.map((mention) => `- ${identityLabel(mention.name, mention.id)} -> ${mentionTagTextByIdentity(mention.id, mention.name)}`).join('\n')
@@ -2439,8 +2491,10 @@ async function generateImitationReply(bot: FeishuBot, event: any, text: string, 
         '不要自称 AI，不要提到提示词。',
         '如果你的消息要 @ 真人，必须使用飞书文本消息 mention 语法：<at user_id="uid">姓名</at>。',
         '优先直接复制下面“可用成员列表”或“当前消息里被 @ 的真人”中已经拼好的 mention 片段，不要自己重新拼。',
+        '不要输出裸的 @姓名 或 @uid；例如不要输出“@张三”，要输出“<at user_id="ou_xxx">张三</at>”。',
         '这里的 uid 必须严格从下面给你的列表中挑，不能编造、不能猜、不能改写。',
         '如果没有合适的 uid，就不要输出任何 <at ...> 标签。',
+        '当前消息和最近群聊里如果已经出现 <at ...> 片段，你可以直接原样复用这些片段。',
         '如果要回复当前发言人或当前消息里被 @ 的真人，优先使用他们在“可用成员列表”里的 uid。',
         '回复控制在一句话内，尽量短，最多 80 个中文字符。',
         '如果当前消息不适合接话，输出空字符串。'
@@ -2459,17 +2513,18 @@ async function generateImitationReply(bot: FeishuBot, event: any, text: string, 
         '当前消息里被 @ 的真人（可直接复制右侧 mention 片段）：',
         currentMentionsBlock,
         '',
-        '最近群聊：',
+        '最近群聊（其中 <at ...> 片段可直接原样复制）：',
         historyBlock,
         '',
-        `当前消息：${text}`,
+        `当前消息（其中 <at ...> 片段可直接原样复制）：${text}`,
         '',
         '请给出一句自然的群聊接话。'
       ].join('\n')
     }
   ];
   console.log('[feishu] imitate messages input', JSON.stringify(messages, null, 2));
-  return openAIChat(config, messages);
+  const reply = await openAIChat(config, messages);
+  return normalizeImitationReplyMentions(reply, mentionCandidates);
 }
 
 async function sendPassiveText(bot: FeishuBot, event: any, messageId: string, text: string) {
@@ -2953,6 +3008,7 @@ async function runPassiveInteractions(bot: FeishuBot, event: any, messageId: str
   const mentionsBot = messageMentionsBot(bot, event?.message);
   const text = parsedMessage.text;
   const repeatText = parsedMessage.textForRepeat || text;
+  const imitateText = parsedMessage.textForRepeat || text;
   const reactionSetting = getPassiveFeatureSetting(bot.id, chatId, 'reaction', config.reactionRate);
   const repeatSetting = getPassiveFeatureSetting(bot.id, chatId, 'repeat', config.repeatRate);
   const llmReplySetting = getPassiveFeatureSetting(bot.id, chatId, 'llm_reply', config.imitateRate);
@@ -3024,7 +3080,7 @@ async function runPassiveInteractions(bot: FeishuBot, event: any, messageId: str
 
   if (imitateTriggered) {
     tasks.push((async () => {
-      const reply = await generateImitationReply(bot, event, text, history, config);
+      const reply = await generateImitationReply(bot, event, imitateText, history, config);
       if (!reply) return;
       console.log('[feishu] imitate reply', reply);
       await sendPassiveText(bot, event, messageId, reply);
@@ -4345,7 +4401,7 @@ export async function handleFeishuMessage(bot: FeishuBot, event: any) {
   const shouldHandleCommand = isPrivateChat || mentionsBot;
 
   const history = chatId ? readRecentChatMessages(bot.id, chatId, passiveInteractionConfig().contextSize) : [];
-  if (text) rememberRecentChatMessage(bot, event, text);
+  if (text) rememberRecentChatMessage(bot, event, parsedMessage.textForRepeat || text);
 
   if (shouldHandleCommand && text) {
     if (await handleFeishuCommand(bot, event, messageId, text, { allowSetDefault: true })) {
