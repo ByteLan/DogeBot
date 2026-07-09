@@ -426,6 +426,11 @@ const HELP_COMMAND_ROWS: HelpCommandRow[] = [
     description: '给当前会话添加定时任务；支持列出当前任务并按序号删除；命令可省略，省略时使用 /set-default 配置。'
   },
   {
+    command: '/reverse、/反转',
+    params: '也支持直接发送 reverse / 反转；优先取当前消息首图，否则取引用消息里的图片或表情包',
+    description: '将找到的图片或表情包做一次镜像反转后发送到当前会话。'
+  },
+  {
     command: '/reaction、/repeat、/llm-reply',
     params: '--enable / --disable / --rate n',
     description: '开启或关闭当前会话的贴表情、文本复读、大模型接话等被动能力，并可设置会话概率。'
@@ -630,6 +635,11 @@ export function textFromMessage(message: any) {
   return parseFeishuMessage(message).text;
 }
 
+function isManualReverseCommand(text: string) {
+  if (!text.trim()) return false;
+  return /(?:^|[\s,.;!?，。！？、])\/?reverse(?=$|[\s,.;!?，。！？、])/i.test(text) || text.includes('反转');
+}
+
 export function previewTextFromMessage(message: any) {
   const parsed = parseFeishuMessage(message);
   if (parsed.text) return parsed.text.slice(0, 50);
@@ -687,6 +697,36 @@ async function sendImageToChat(bot: FeishuBot, chatId: string, imageKey: string)
 
 async function sendStickerToChat(bot: FeishuBot, chatId: string, fileKey: string) {
   await createChatMessage(bot, chatId, 'sticker', { file_key: fileKey });
+}
+
+async function fetchMessageById(bot: FeishuBot, messageId: string) {
+  const token = await tenantAccessToken(bot);
+  const response = await feishuJson<{
+    data?: {
+      items?: Array<{
+        message_id?: string;
+        parent_id?: string;
+        root_id?: string;
+        msg_type?: string;
+        body?: { content?: string };
+      }>;
+    };
+  }>(`${openBase(bot.domain)}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`, {
+    method: 'GET',
+    headers: { authorization: `Bearer ${token}` }
+  });
+  const item = response.data?.items?.[0];
+  if (!item) return undefined;
+  return {
+    messageId: String(item.message_id || messageId).trim(),
+    parentId: String(item.parent_id || '').trim(),
+    rootId: String(item.root_id || '').trim(),
+    message: {
+      message_id: String(item.message_id || messageId).trim(),
+      message_type: String(item.msg_type || '').trim(),
+      content: typeof item.body?.content === 'string' ? item.body.content : ''
+    }
+  };
 }
 
 function styleStickerFlavor(feature: StyleStickerFeature): StickerFlavor {
@@ -2492,6 +2532,19 @@ async function buildMirroredImage(resource: PassiveMediaResource, chatId: string
   };
 }
 
+async function sendMirroredMediaResource(bot: FeishuBot, chatId: string, media: PassiveMediaResource) {
+  let transformed: { variant: MirroredImageVariant; filePath: string; fileName: string; data: Buffer } | undefined;
+  try {
+    transformed = await buildMirroredImage(media, chatId);
+    const uploadedImageKey = await uploadImage(bot, transformed.data, transformed.fileName);
+    await sendImageToChat(bot, chatId, uploadedImageKey);
+  } finally {
+    if (transformed?.filePath) {
+      await fs.unlink(transformed.filePath).catch(() => undefined);
+    }
+  }
+}
+
 async function sendPassiveMediaRepeat(bot: FeishuBot, event: any, messageId: string, parsedMessage: ParsedFeishuMessage) {
   const chatId = messageChatId(event?.message);
   if (!chatId) return;
@@ -2514,17 +2567,61 @@ async function sendPassiveMediaReverse(bot: FeishuBot, event: any, messageId: st
 
   const media = await resolvePassiveMediaResource(bot, messageId, chatId, parsedMessage);
   if (!media) return;
+  await sendMirroredMediaResource(bot, chatId, media);
+}
 
-  let transformed: { variant: MirroredImageVariant; filePath: string; fileName: string; data: Buffer } | undefined;
-  try {
-    transformed = await buildMirroredImage(media, chatId);
-    const uploadedImageKey = await uploadImage(bot, transformed.data, transformed.fileName);
-    await sendImageToChat(bot, chatId, uploadedImageKey);
-  } finally {
-    if (transformed?.filePath) {
-      await fs.unlink(transformed.filePath).catch(() => undefined);
+async function resolveManualReverseMedia(bot: FeishuBot, event: any, messageId: string, parsedMessage: ParsedFeishuMessage) {
+  const chatId = messageChatId(event?.message);
+  if (!chatId) return undefined;
+
+  if (parsedMessage.imageKey) {
+    return resolvePassiveMediaResource(bot, messageId, chatId, parsedMessage);
+  }
+
+  const referencedMessageIds = [...new Set([
+    String(event?.message?.parent_id || '').trim(),
+    String(event?.message?.root_id || '').trim()
+  ].filter(Boolean))];
+
+  for (const referencedMessageId of referencedMessageIds) {
+    try {
+      const referencedMessage = await fetchMessageById(bot, referencedMessageId);
+      if (!referencedMessage) continue;
+      const referencedParsedMessage = parseFeishuMessage(referencedMessage.message);
+      const media = await resolvePassiveMediaResource(bot, referencedMessage.messageId, chatId, referencedParsedMessage);
+      if (media) return media;
+    } catch (error) {
+      console.warn('[feishu] failed to resolve referenced message for manual reverse', {
+        botId: bot.id,
+        messageId,
+        referencedMessageId,
+        error: error instanceof Error ? error.message : String(error)
+      });
     }
   }
+
+  return undefined;
+}
+
+async function handleManualReverseCommand(bot: FeishuBot, event: any, messageId: string, parsedMessage: ParsedFeishuMessage) {
+  const chatId = messageChatId(event?.message);
+  if (!chatId) {
+    await replyText(bot, messageId, '当前消息缺少 chat_id，无法反转图片或表情包');
+    return true;
+  }
+
+  try {
+    const media = await resolveManualReverseMedia(bot, event, messageId, parsedMessage);
+    if (!media) {
+      await replyText(bot, messageId, '没找到可反转的图片或表情包；请在当前消息里带首图，或引用一条图片/表情包消息后再试。');
+      return true;
+    }
+
+    await sendMirroredMediaResource(bot, chatId, media);
+  } catch (error) {
+    await replyText(bot, messageId, error instanceof Error ? `反转失败：${error.message}` : '反转失败');
+  }
+  return true;
 }
 
 async function runPassiveInteractions(bot: FeishuBot, event: any, messageId: string, parsedMessage: ParsedFeishuMessage, history: RecentChatMessage[]) {
@@ -3551,6 +3648,7 @@ async function replyUsersCard(bot: FeishuBot, messageId: string, records: AtReco
 async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string, text: string, options: { allowSetDefault: boolean }): Promise<boolean> {
   const message = event?.message;
   const chatId = String(message?.chat_id || '').trim();
+  const parsedMessage = parseFeishuMessage(message);
   if (isHelpCommand(text)) {
     await replyHelpCard(bot, messageId, chatId);
     return true;
@@ -3635,6 +3733,9 @@ async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string
       );
       return true;
     }
+  }
+  if (isManualReverseCommand(text)) {
+    return handleManualReverseCommand(bot, event, messageId, parsedMessage);
   }
   const passiveToggle = parsePassiveToggleCommand(text);
   const styleStickerCommand = parseStyleStickerCommand(text);

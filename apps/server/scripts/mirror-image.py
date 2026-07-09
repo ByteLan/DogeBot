@@ -33,7 +33,10 @@ except Exception as exc:
 def mirror_frame(frame: Image.Image) -> Image.Image:
     rgba = frame.convert("RGBA")
     width, height = rgba.size
-    result = rgba.copy()
+    # Always start from a fresh transparent canvas for each frame, otherwise
+    # transparent animated images may retain pixels from prior frames.
+    result = Image.new("RGBA", rgba.size, (0, 0, 0, 0))
+    result.alpha_composite(rgba)
     if axis == "vertical":
         half_width = width // 2
         if source_side == "start":
@@ -64,10 +67,8 @@ try:
     if is_animated:
         frames = [mirror_frame(frame.copy()) for frame in ImageSequence.Iterator(image)]
         durations = []
-        disposals = []
         for frame in ImageSequence.Iterator(image):
             durations.append(frame.info.get("duration", image.info.get("duration", 100)))
-            disposals.append(frame.info.get("disposal", image.info.get("disposal", 2)))
         save_kwargs = {
             "save_all": True,
             "append_images": frames[1:],
@@ -75,12 +76,18 @@ try:
             "duration": durations,
         }
         if output_ext == "gif":
-            save_kwargs["disposal"] = disposals
+            # Save every output frame as "restore to background" so transparent
+            # animated images do not accumulate prior frame pixels as afterimages.
+            save_kwargs["disposal"] = [2] * len(frames)
+            save_kwargs["optimize"] = False
             frames[0].save(output_path, format="GIF", **save_kwargs)
         elif output_ext == "webp":
             save_kwargs["lossless"] = True
+            save_kwargs["background"] = (0, 0, 0, 0)
             frames[0].save(output_path, format="WEBP", **save_kwargs)
         else:
+            save_kwargs["disposal"] = [2] * len(frames)
+            save_kwargs["optimize"] = False
             frames[0].save(output_path, format="GIF", **save_kwargs)
     else:
         result = mirror_frame(image)
