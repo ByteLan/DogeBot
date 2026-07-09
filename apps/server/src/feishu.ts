@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import type { Request, Response as ExpressResponse } from 'express';
 import type { AuthenticatedRequest } from './auth.js';
+import { createConcurrencyLimiter } from './concurrency.js';
 import { db } from './db.js';
 import { randomDouyinAwemeIds, setDouyinAwemeNotifier, softDeleteDouyinAwemeRecords } from './douyin.js';
 import { renderStyleStickerImage, type StickerFlavor } from './styleStickers.js';
@@ -284,6 +285,15 @@ const appRootDir = basename(appDir) === 'dist' ? dirname(appDir) : appDir;
 const execFileAsync = promisify(execFile);
 const FEISHU_EVENT_DEDUP_TTL_MS = 10 * 60 * 1000;
 const MESSAGE_RESOURCE_MAX_BYTES = 4 * 1024 * 1024;
+const PYTHON_TASK_CONCURRENCY = parsePositiveInt(process.env.DOGEBOT_PYTHON_TASK_CONCURRENCY, 2);
+const PYTHON_TASK_QUEUE_MAX = parsePositiveInt(process.env.DOGEBOT_PYTHON_TASK_QUEUE_MAX, 20);
+const PYTHON_TASK_TIMEOUT_MS = parsePositiveInt(process.env.DOGEBOT_PYTHON_TASK_TIMEOUT_MS, 20_000);
+const runPythonTask = createConcurrencyLimiter({
+  name: 'python-task',
+  limit: PYTHON_TASK_CONCURRENCY,
+  maxQueue: PYTHON_TASK_QUEUE_MAX,
+  taskTimeoutMs: PYTHON_TASK_TIMEOUT_MS
+});
 const MESSAGE_RESOURCE_CACHE_DIR = join(tmpdir(), 'dogebot-feishu-image-cache');
 const MESSAGE_RESOURCE_PROCESSED_DIR = join(tmpdir(), 'dogebot-feishu-image-processed');
 const MESSAGE_RESOURCE_CACHE_TTL_MS = 3 * 24 * 60 * 60 * 1000;
@@ -2555,7 +2565,12 @@ async function buildMirroredImage(resource: PassiveMediaResource, chatId: string
   const variant = randomMirrorVariant();
   const outputExtension = extname(resource.resource.fileName) || guessExtensionFromContentType(resource.resource.contentType, '.png');
   const outputPath = join(MESSAGE_RESOURCE_PROCESSED_DIR, buildProcessedMediaFileNameWithExtension(resource.fileKey, resource.sourceType, chatId, variant, outputExtension));
-  await execFileAsync('python3', [IMAGE_MIRROR_SCRIPT_PATH, resource.resource.filePath, outputPath, variant.axis, variant.sourceSide], { maxBuffer: 1024 * 1024 });
+  await runPythonTask((signal) =>
+    execFileAsync('python3', [IMAGE_MIRROR_SCRIPT_PATH, resource.resource.filePath, outputPath, variant.axis, variant.sourceSide], {
+      maxBuffer: 1024 * 1024,
+      signal
+    })
+  );
   return {
     variant,
     filePath: outputPath,
@@ -4159,14 +4174,16 @@ export async function feishuWebhook(req: Request, res: ExpressResponse) {
   if (eventType === 'card.action.trigger') {
     const eventId = String(payload.header?.event_id || '').trim();
     const messageId = String(payload.event?.context?.open_message_id || '').trim();
-    handleFeishuCardAction(bot, payload).catch((error) => {
-      console.error('[feishu] card action handling failed', {
-        botId: bot.id,
-        messageId,
-        eventId,
-        error: error instanceof Error ? error.message : String(error)
+    void Promise.resolve()
+      .then(() => handleFeishuCardAction(bot, payload))
+      .catch((error) => {
+        console.error('[feishu] card action handling failed', {
+          botId: bot.id,
+          messageId,
+          eventId,
+          error: error instanceof Error ? error.message : String(error)
+        });
       });
-    });
     res.json({ toast: { type: 'info', content: '正在生成，请稍等' } });
     return;
   }

@@ -80,6 +80,12 @@ pnpm add-user <用户名> <密码>
 - `DOGEBOT_LLM_MAX_TOKENS`：大模型回复 token 上限，默认 `160`。
 - `DOGEBOT_LLM_DISABLE_THINKING`：设为 `1` 时，请求 OpenAI 兼容接口会额外带 `enable_thinking: false`，用于关闭支持该参数的模型思考模式。
 - `/open-api/v1/byte-style` 与 `/open-api/v1/scale-new-heights` 现在直接通过 `@napi-rs/canvas` 在服务端出图；所需字体资源已随 `apps/server/assets/fonts` 一起纳入仓库，并会在构建时复制到 `dist/assets/fonts`，其中包含 emoji / symbol fallback 字体以支持 `⛰` 等符号。
+- `DOGEBOT_STYLE_STICKER_RENDER_CONCURRENCY`：字节范/勇攀高峰生图的全局并发数，默认 `2`；`/open-api/v1/byte-style`、`/open-api/v1/scale-new-heights`、飞书命令生图、随机生图、卡片预览共用这一组并发额度。
+- `DOGEBOT_STYLE_STICKER_RENDER_QUEUE_MAX`：字节范/勇攀高峰生图的等待队列上限，默认 `20`；超过后新任务会立即抛出 `QUEUE_FULL` 错误，避免请求堆积占用内存。
+- `DOGEBOT_STYLE_STICKER_RENDER_TIMEOUT_MS`：单个字节范/勇攀高峰生图任务的最大执行时间（毫秒），默认 `20000`；超时后会立即释放并发额度并抛出 `TASK_TIMEOUT` 错误，避免卡死后续任务。
+- `DOGEBOT_PYTHON_TASK_CONCURRENCY`：服务端调用 `python3` 子进程任务的全局并发数，默认 `2`；当前主要用于图片/表情包镜像反转。
+- `DOGEBOT_PYTHON_TASK_QUEUE_MAX`：`python3` 子进程任务的等待队列上限，默认 `20`；超过后新任务会立即抛出 `QUEUE_FULL` 错误。
+- `DOGEBOT_PYTHON_TASK_TIMEOUT_MS`：单个 `python3` 子进程任务的最大执行时间（毫秒），默认 `20000`；超时后会通过 `AbortSignal` 结束子进程并抛出 `TASK_TIMEOUT` 错误。
 - `OpenApiBaseUrl`：`/help` 卡片里展示 OpenAPI 示例地址时使用的基础域名，默认 `https://doge.bbyte.cn`；同时兼容 `DOGEBOT_OPEN_API_BASE_URL` 与 `OPEN_API_BASE_URL`。
 - `DOGEBOT_FEISHU_BYTE_STYLE_RATE`：普通文本消息随机生成为“字节范”图片的概率，默认 `0.05`。该能力默认开启，可用 `/byte-style --disable` 或 `/字节范 --disable` 针对单个会话关闭。
 - `DOGEBOT_FEISHU_SCALE_NEW_HEIGHTS_RATE`：普通文本消息随机生成为“勇攀高峰”图片的概率，默认 `0.05`。该能力默认开启，可用 `/scale-new-heights --disable` 或 `/勇攀高峰 --disable` 针对单个会话关闭。

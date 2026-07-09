@@ -85,22 +85,26 @@ class FeishuConnectionManager {
           encryptKey: bot.encrypt_key || undefined,
           verificationToken: bot.verification_token || undefined
         }).register({
-          'im.message.receive_v1': async (data: any) => {
+          'im.message.receive_v1': (data: any) => {
             const event = data?.event || data;
             console.log('[feishu] message event received', {
               senderName: senderName(event),
               text: messageTextPreview(event)
             });
-            void handleFeishuMessage(bot, data?.event || data).catch((error) => {
-              console.error(`[feishu] bot ${bot.id} message handling failed`, error);
+            queueMicrotask(() => {
+              handleFeishuMessage(bot, data?.event || data).catch((error) => {
+                console.error(`[feishu] bot ${bot.id} message handling failed`, error);
+              });
             });
           },
-          'card.action.trigger': async (data: any) => {
-            void handleFeishuCardAction(bot, data).catch((error) => {
-              console.error(`[feishu] bot ${bot.id} card action handling failed`, error);
+          'card.action.trigger': (data: any) => {
+            queueMicrotask(() => {
+              handleFeishuCardAction(bot, data).catch((error) => {
+                console.error(`[feishu] bot ${bot.id} card action handling failed`, error);
+              });
             });
           },
-          'im.message.reaction.created_v1': async () => {}
+          'im.message.reaction.created_v1': () => {}
         })
       });
     } catch (error) {
