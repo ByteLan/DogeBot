@@ -97,6 +97,12 @@ type AddCronCommand = {
   hasConflictingAction: boolean;
 };
 
+type RevertCommand = {
+  isRevert: boolean;
+  command: string;
+  hasUnknownArgs: boolean;
+};
+
 type HelpCommandRow = {
   command: string;
   params: string;
@@ -201,6 +207,22 @@ type ParsedFeishuMessage = {
   text: string;
   imageKey: string;
   stickerFileKey: string;
+};
+
+type FeishuMessageDetails = {
+  messageId: string;
+  parentId: string;
+  rootId: string;
+  threadId: string;
+  chatId: string;
+  senderId: string;
+  senderType: string;
+  deleted: boolean;
+  message: {
+    message_id: string;
+    message_type: string;
+    content: string;
+  };
 };
 
 type DownloadedMessageResource = {
@@ -439,6 +461,11 @@ const HELP_COMMAND_ROWS: HelpCommandRow[] = [
     command: '/reverse、/反转',
     params: '也支持直接发送 reverse / 反转；优先取当前消息首图，否则取引用消息里的图片或表情包',
     description: '将找到的图片或表情包做一次镜像反转后发送到当前会话。'
+  },
+  {
+    command: '/revert、/撤回',
+    params: '必须引用消息，或在 bot 发起的话题里使用',
+    description: '撤回 bot 自己发出的消息；普通用户仅限当前会话。'
   },
   {
     command: '/reaction、/repeat、/llm-reply',
@@ -709,7 +736,7 @@ async function sendStickerToChat(bot: FeishuBot, chatId: string, fileKey: string
   await createChatMessage(bot, chatId, 'sticker', { file_key: fileKey });
 }
 
-async function fetchMessageById(bot: FeishuBot, messageId: string) {
+async function fetchMessageById(bot: FeishuBot, messageId: string): Promise<FeishuMessageDetails | undefined> {
   const token = await tenantAccessToken(bot);
   const response = await feishuJson<{
     data?: {
@@ -717,7 +744,14 @@ async function fetchMessageById(bot: FeishuBot, messageId: string) {
         message_id?: string;
         parent_id?: string;
         root_id?: string;
+        thread_id?: string;
+        chat_id?: string;
         msg_type?: string;
+        deleted?: boolean;
+        sender?: {
+          id?: string | { open_id?: string; user_id?: string; union_id?: string };
+          sender_type?: string;
+        };
         body?: { content?: string };
       }>;
     };
@@ -731,6 +765,11 @@ async function fetchMessageById(bot: FeishuBot, messageId: string) {
     messageId: String(item.message_id || messageId).trim(),
     parentId: String(item.parent_id || '').trim(),
     rootId: String(item.root_id || '').trim(),
+    threadId: String(item.thread_id || '').trim(),
+    chatId: String(item.chat_id || '').trim(),
+    senderId: idFromFeishuObject(item.sender?.id),
+    senderType: String(item.sender?.sender_type || '').trim(),
+    deleted: Boolean(item.deleted),
     message: {
       message_id: String(item.message_id || messageId).trim(),
       message_type: String(item.msg_type || '').trim(),
@@ -1575,6 +1614,85 @@ async function deleteMessage(bot: FeishuBot, messageId: string) {
   });
 }
 
+function isBotMessage(bot: FeishuBot, message: FeishuMessageDetails) {
+  return Boolean(message.senderId && (message.senderId === bot.app_id || message.senderId === bot.bot_open_id));
+}
+
+function isBotAdmin(botId: number, senderId: string) {
+  if (!senderId || senderId === 'unknown') return false;
+  return getDefaultCommandRecord(botId)?.adminUserId === senderId;
+}
+
+async function revokeBotMessageById(
+  bot: FeishuBot,
+  requesterChatId: string,
+  requesterId: string,
+  targetMessageId: string
+) {
+  const messageId = targetMessageId.trim();
+  if (!messageId) {
+    return { ok: false, reason: 'message_id 不能为空' } as const;
+  }
+
+  const target = await fetchMessageById(bot, messageId).catch(() => undefined);
+  if (!target) {
+    return { ok: false, reason: `未找到 message_id=${messageId} 对应的消息，或当前 bot 无权限读取` } as const;
+  }
+  if (target.deleted) {
+    return { ok: false, reason: `message_id=${messageId} 已经被撤回` } as const;
+  }
+  if (!isBotMessage(bot, target)) {
+    return { ok: false, reason: `message_id=${messageId} 不是当前 bot 自己发出的消息` } as const;
+  }
+  if (!target.chatId) {
+    return { ok: false, reason: `message_id=${messageId} 无法判断所属会话，暂不支持撤回` } as const;
+  }
+  if (!isBotAdmin(bot.id, requesterId) && requesterChatId && target.chatId !== requesterChatId) {
+    return { ok: false, reason: `message_id=${messageId} 不属于当前会话；只有 /set-default 管理员可以跨会话撤回` } as const;
+  }
+
+  await deleteMessage(bot, target.messageId);
+  return {
+    ok: true,
+    target
+  } as const;
+}
+
+function referencedMessageIds(message: any) {
+  return [...new Set([
+    String(message?.parent_id || '').trim(),
+    String(message?.root_id || '').trim()
+  ].filter(Boolean))];
+}
+
+async function handleRevertCommand(bot: FeishuBot, event: any, messageId: string, command: RevertCommand) {
+  if (command.hasUnknownArgs) {
+    await replyText(bot, messageId, `用法：${command.command}（必须引用一条消息，或在 bot 发起的话题里使用）`);
+    return true;
+  }
+
+  const requesterChatId = messageChatId(event?.message);
+  const requesterId = senderIdentity(event).id;
+  const candidateIds = referencedMessageIds(event?.message);
+  if (candidateIds.length === 0) {
+    await replyText(bot, messageId, `${command.command} 必须引用一条消息，或在 bot 发起的话题里使用。`);
+    return true;
+  }
+
+  const failures: string[] = [];
+  for (const targetMessageId of candidateIds) {
+    const result = await revokeBotMessageById(bot, requesterChatId, requesterId, targetMessageId);
+    if (result.ok) {
+      await replyText(bot, messageId, `已撤回消息：${result.target.messageId}`);
+      return true;
+    }
+    failures.push(result.reason);
+  }
+
+  await replyText(bot, messageId, failures[0] || '未找到可撤回的 bot 消息');
+  return true;
+}
+
 function debugFeishu(label: string, payload: unknown) {
   if (process.env.DOGEBOT_FEISHU_DEBUG !== '1') return;
   try {
@@ -1669,6 +1787,10 @@ function parseCardActionContext(payload: any) {
     eventId: String(payload?.header?.event_id || event?.event_id || '').trim(),
     messageId,
     chatId,
+    operatorId:
+      idFromFeishuObject(event?.operator?.operator_id) ||
+      idFromFeishuObject(event?.operator_id) ||
+      String(payload?.open_id || payload?.user_id || '').trim(),
     formValue: isRecord(event?.action?.form_value) ? event.action.form_value : {}
   };
 }
@@ -1700,6 +1822,7 @@ function parseHelpCardActionPayload(payload: any) {
     eventId: context.eventId,
     messageId: context.messageId,
     chatId: context.chatId,
+    operatorId: context.operatorId,
     action: actionValue.action,
     formValue: context.formValue
   };
@@ -2906,6 +3029,21 @@ function parseSetDefaultCommand(text: string): SetDefaultCommand {
   };
 }
 
+function parseRevertCommand(text: string): RevertCommand {
+  const matches = ['/revert', '/撤回']
+    .map((command) => ({ command, index: text.indexOf(command) }))
+    .filter((item) => item.index >= 0)
+    .sort((left, right) => left.index - right.index);
+  const match = matches[0];
+  if (!match) return { isRevert: false, command: '', hasUnknownArgs: false };
+  const rest = text.slice(match.index + match.command.length).trim();
+  return {
+    isRevert: true,
+    command: match.command,
+    hasUnknownArgs: Boolean(rest)
+  };
+}
+
 function isHelpCommand(text: string) {
   return /(?:^|\s)\/help(?:\s|$)/.test(text);
 }
@@ -3780,6 +3918,10 @@ async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string
       );
       return true;
     }
+  }
+  const revertCommand = parseRevertCommand(text);
+  if (revertCommand.isRevert) {
+    return handleRevertCommand(bot, event, messageId, revertCommand);
   }
   if (isManualReverseCommand(text)) {
     return handleManualReverseCommand(bot, event, messageId, parsedMessage);
