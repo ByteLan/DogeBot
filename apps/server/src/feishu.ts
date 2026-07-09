@@ -2385,10 +2385,25 @@ function restoreMentionTags(text: string, placeholders: string[]) {
   return restored;
 }
 
+function hasCjkCharacters(value: string) {
+  return /[\u3400-\u9fff\uf900-\ufaff]/.test(value);
+}
+
+function shouldNormalizeBareName(name: string, id: string) {
+  const normalizedName = String(name || '').trim();
+  const normalizedId = String(id || '').trim();
+  if (!normalizedName || normalizedName === normalizedId) return false;
+  if (normalizedName.length < 2) return false;
+  if (/^(user|unknown)$/i.test(normalizedName)) return false;
+  return true;
+}
+
 function normalizeImitationReplyMentions(text: string, candidates: Array<{ id: string; name: string }>) {
   if (!text) return '';
   const replacementEntries = new Map<string, string>();
   const duplicateTokens = new Set<string>();
+  const bareNameEntries = new Map<string, string>();
+  const duplicateBareNames = new Set<string>();
   for (const candidate of candidates) {
     const mention = mentionTagTextByIdentity(candidate.id, candidate.name);
     if (!mention) continue;
@@ -2410,6 +2425,16 @@ function normalizeImitationReplyMentions(text: string, candidates: Array<{ id: s
       }
       replacementEntries.set(token, mention);
     }
+    if (shouldNormalizeBareName(candidate.name, candidate.id)) {
+      const bareName = candidate.name.trim();
+      if (duplicateBareNames.has(bareName)) continue;
+      if (bareNameEntries.has(bareName) && bareNameEntries.get(bareName) !== mention) {
+        bareNameEntries.delete(bareName);
+        duplicateBareNames.add(bareName);
+      } else {
+        bareNameEntries.set(bareName, mention);
+      }
+    }
   }
 
   const { protectedText, placeholders } = protectMentionTags(text);
@@ -2418,6 +2443,20 @@ function normalizeImitationReplyMentions(text: string, candidates: Array<{ id: s
   for (const [token, mention] of replacements) {
     normalized = normalized.replace(new RegExp(escapeRegExp(token), 'g'), mention);
   }
+  const bareProtected = protectMentionTags(normalized);
+  normalized = bareProtected.protectedText;
+  const bareNameReplacements = [...bareNameEntries.entries()].sort((left, right) => right[0].length - left[0].length);
+  for (const [name, mention] of bareNameReplacements) {
+    if (hasCjkCharacters(name)) {
+      normalized = normalized.split(name).join(mention);
+      continue;
+    }
+    normalized = normalized.replace(
+      new RegExp(`(^|[^\\p{L}\\p{N}_])(${escapeRegExp(name)})(?=$|[^\\p{L}\\p{N}_])`, 'gu'),
+      (_, prefix: string) => `${prefix}${mention}`
+    );
+  }
+  normalized = restoreMentionTags(normalized, bareProtected.placeholders);
   return restoreMentionTags(normalized, placeholders);
 }
 
