@@ -242,7 +242,7 @@ type PassiveChatSetting = {
 };
 
 type StyleStickerCardAction = 'preview' | 'send' | 'withdraw';
-type HelpCardAction = 'submit' | 'cancel';
+type HelpCardAction = 'submit' | 'cancel' | 'withdraw';
 
 type StyleStickerCardState = {
   feature: StyleStickerFeature;
@@ -1349,10 +1349,10 @@ function helpCardButton(action: HelpCardAction) {
   return {
     tag: 'button',
     name: `help_probability_${action}`,
-    text: plainText(action === 'submit' ? '提交' : '取消'),
-    type: action === 'submit' ? 'primary_filled' : 'default',
+    text: plainText(action === 'submit' ? '提交' : action === 'withdraw' ? '撤回' : '取消'),
+    type: action === 'submit' ? 'primary_filled' : action === 'withdraw' ? 'danger_filled' : 'default',
     width: 'fill',
-    form_action_type: 'submit',
+    ...(action === 'withdraw' ? {} : { form_action_type: 'submit' }),
     behaviors: [
       {
         type: 'callback',
@@ -1450,9 +1450,15 @@ function buildHelpCard(
             helpCronDeleteMultiSelect(currentCronTasks),
         {
           tag: 'column_set',
-          flex_mode: 'bisect',
+          flex_mode: 'none',
           horizontal_spacing: '8px',
           columns: [
+            {
+              tag: 'column',
+              width: 'weighted',
+              weight: 1,
+              elements: [helpCardButton('withdraw')]
+            },
             {
               tag: 'column',
               width: 'weighted',
@@ -1473,6 +1479,19 @@ function buildHelpCard(
     elements.push({
       tag: 'markdown',
         content: helpReadonlySummaryMarkdown(bot, chatId)
+    });
+    elements.push({ tag: 'hr' });
+    elements.push({
+      tag: 'column_set',
+      flex_mode: 'none',
+      horizontal_spacing: '8px',
+      columns: [
+        {
+          tag: 'column',
+          width: 'stretch',
+          elements: [helpCardButton('withdraw')]
+        }
+      ]
     });
   }
 
@@ -1573,7 +1592,7 @@ function isStyleStickerCardAction(value: unknown): value is StyleStickerCardActi
 }
 
 function isHelpCardAction(value: unknown): value is HelpCardAction {
-  return value === 'submit' || value === 'cancel';
+  return value === 'submit' || value === 'cancel' || value === 'withdraw';
 }
 
 function firstStringValue(value: unknown) {
@@ -1737,6 +1756,19 @@ export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
   const helpParsed = parseHelpCardActionPayload(payload);
   if (!helpParsed) return;
   if (helpParsed.eventId && !rememberFeishuEventKey(`card:${helpParsed.eventId}`)) return;
+
+  if (helpParsed.action === 'withdraw') {
+    try {
+      await deleteMessage(bot, helpParsed.messageId);
+    } catch (error) {
+      console.error('[feishu] help card delete failed', {
+        botId: bot.id,
+        messageId: helpParsed.messageId,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+    return;
+  }
 
   if (helpParsed.action === 'cancel') {
       await updateInteractiveMessage(bot, helpParsed.messageId, buildHelpCard(bot, helpParsed.chatId, {
