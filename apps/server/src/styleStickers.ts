@@ -504,6 +504,60 @@ function computeSquaredDistanceTransform(mask: BinaryMask) {
   return distances;
 }
 
+type MaskBBox = { minX: number; minY: number; maxX: number; maxY: number };
+
+function computeMaskBBox(mask: BinaryMask): MaskBBox {
+  let minX = mask.width;
+  let minY = mask.height;
+  let maxX = -1;
+  let maxY = -1;
+  for (let y = 0; y < mask.height; y += 1) {
+    const rowOffset = y * mask.width;
+    for (let x = 0; x < mask.width; x += 1) {
+      if (mask.data[rowOffset + x] > 0) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < 0) return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+  return { minX, minY, maxX, maxY };
+}
+
+function extractMaskROI(mask: BinaryMask, left: number, top: number, roiWidth: number, roiHeight: number): BinaryMask {
+  const data = new Uint8ClampedArray(roiWidth * roiHeight);
+  for (let y = 0; y < roiHeight; y += 1) {
+    const srcY = top + y;
+    if (srcY < 0 || srcY >= mask.height) continue;
+    const srcRowOffset = srcY * mask.width;
+    const dstRowOffset = y * roiWidth;
+    for (let x = 0; x < roiWidth; x += 1) {
+      const srcX = left + x;
+      if (srcX < 0 || srcX >= mask.width) continue;
+      data[dstRowOffset + x] = mask.data[srcRowOffset + srcX];
+    }
+  }
+  return { width: roiWidth, height: roiHeight, data };
+}
+
+function embedROIIntoFullMask(roi: Uint8ClampedArray, roiWidth: number, roiHeight: number, left: number, top: number, fullWidth: number, fullHeight: number): BinaryMask {
+  const data = new Uint8ClampedArray(fullWidth * fullHeight);
+  for (let y = 0; y < roiHeight; y += 1) {
+    const dstY = top + y;
+    if (dstY < 0 || dstY >= fullHeight) continue;
+    const srcRowOffset = y * roiWidth;
+    const dstRowOffset = dstY * fullWidth;
+    for (let x = 0; x < roiWidth; x += 1) {
+      const dstX = left + x;
+      if (dstX < 0 || dstX >= fullWidth) continue;
+      data[dstRowOffset + dstX] = roi[srcRowOffset + x];
+    }
+  }
+  return { width: fullWidth, height: fullHeight, data };
+}
+
 function dilateMaskRound(mask: BinaryMask, radius: number): BinaryMask {
   if (radius <= 0) return cloneMask(mask);
   const squaredDistances = computeSquaredDistanceTransform(mask);
@@ -513,6 +567,35 @@ function dilateMaskRound(mask: BinaryMask, radius: number): BinaryMask {
     data[index] = squaredDistances[index] <= radiusSquared ? 255 : 0;
   }
   return { width: mask.width, height: mask.height, data };
+}
+
+function dilateMaskRoundROI(mask: BinaryMask, radius: number): BinaryMask {
+  if (radius <= 0) return cloneMask(mask);
+  const bbox = computeMaskBBox(mask);
+  if (bbox.maxX < 0) return cloneMask(mask);
+
+  const expand = Math.ceil(radius) + 1;
+  const roiLeft = Math.max(0, bbox.minX - expand);
+  const roiTop = Math.max(0, bbox.minY - expand);
+  const roiRight = Math.min(mask.width - 1, bbox.maxX + expand);
+  const roiBottom = Math.min(mask.height - 1, bbox.maxY + expand);
+  const roiWidth = roiRight - roiLeft + 1;
+  const roiHeight = roiBottom - roiTop + 1;
+
+  const roiPixels = roiWidth * roiHeight;
+  const fullPixels = mask.width * mask.height;
+  if (roiPixels >= fullPixels * 0.7) {
+    return dilateMaskRound(mask, radius);
+  }
+
+  const roiMask = extractMaskROI(mask, roiLeft, roiTop, roiWidth, roiHeight);
+  const squaredDistances = computeSquaredDistanceTransform(roiMask);
+  const roiData = new Uint8ClampedArray(roiPixels);
+  const radiusSquared = radius * radius;
+  for (let i = 0; i < roiPixels; i += 1) {
+    roiData[i] = squaredDistances[i] <= radiusSquared ? 255 : 0;
+  }
+  return embedROIIntoFullMask(roiData, roiWidth, roiHeight, roiLeft, roiTop, mask.width, mask.height);
 }
 
 function erodeMaskRound(mask: BinaryMask, radius: number): BinaryMask {
@@ -586,11 +669,48 @@ function createAntialiasedAlpha(mask: BinaryMask, featherRadius: number) {
   return alpha;
 }
 
+function createAntialiasedAlphaROI(mask: BinaryMask, featherRadius: number) {
+  const bbox = computeMaskBBox(mask);
+  if (bbox.maxX < 0) return new Uint8ClampedArray(mask.data.length);
+
+  const expand = Math.ceil(featherRadius) + 2;
+  const roiLeft = Math.max(0, bbox.minX - expand);
+  const roiTop = Math.max(0, bbox.minY - expand);
+  const roiRight = Math.min(mask.width - 1, bbox.maxX + expand);
+  const roiBottom = Math.min(mask.height - 1, bbox.maxY + expand);
+  const roiWidth = roiRight - roiLeft + 1;
+  const roiHeight = roiBottom - roiTop + 1;
+
+  const roiPixels = roiWidth * roiHeight;
+  const fullPixels = mask.width * mask.height;
+  if (roiPixels >= fullPixels * 0.7) {
+    return createAntialiasedAlpha(mask, featherRadius);
+  }
+
+  const roiMask = extractMaskROI(mask, roiLeft, roiTop, roiWidth, roiHeight);
+  const outsideDistances = computeSquaredDistanceTransform(roiMask);
+  const insideDistances = computeSquaredDistanceTransform(invertMask(roiMask));
+  const feather = Math.max(0.01, featherRadius);
+
+  const alpha = new Uint8ClampedArray(fullPixels);
+  for (let y = 0; y < roiHeight; y += 1) {
+    const roiRowOffset = y * roiWidth;
+    const fullRowOffset = (roiTop + y) * mask.width;
+    for (let x = 0; x < roiWidth; x += 1) {
+      const roiIdx = roiRowOffset + x;
+      const signedDistance = Math.sqrt(outsideDistances[roiIdx]) - Math.sqrt(insideDistances[roiIdx]);
+      const normalized = clampUnitInterval(0.5 - signedDistance / (2 * feather));
+      alpha[fullRowOffset + roiLeft + x] = Math.round(normalized * 255);
+    }
+  }
+  return alpha;
+}
+
 function maskToCanvas(mask: BinaryMask, softenRadius = 0) {
   const canvas: Canvas = createCanvas(mask.width, mask.height);
   const context = canvas.getContext('2d');
   const imageData = context.createImageData(mask.width, mask.height);
-  const alpha = softenRadius > 0 ? createAntialiasedAlpha(mask, softenRadius) : mask.data;
+  const alpha = softenRadius > 0 ? createAntialiasedAlphaROI(mask, softenRadius) : mask.data;
 
   for (let index = 0; index < mask.data.length; index += 1) {
     const rgbaIndex = index * 4;
@@ -641,7 +761,7 @@ function paintMask(
 
 function calculateWorkingPadding(controls: StickerControls) {
   return Math.ceil(
-    controls.fontSize * 0.7 +
+    controls.fontSize * 0.15 +
       controls.envelope.outlineStrokeWidth * 2.5 +
       controls.envelope.edgeWidth * 2 +
       Math.abs(controls.alternatingOffset) +
@@ -649,7 +769,8 @@ function calculateWorkingPadding(controls: StickerControls) {
       Math.max(
         Math.abs(controls.shadow.offsetX),
         Math.abs(controls.shadow.offsetY),
-      ),
+      ) +
+      4,
   );
 }
 
@@ -804,7 +925,7 @@ async function renderStickerBuffer(
 
   if (controls.flavor === 'snh') {
     const bandWidth = controls.envelope.outlineStrokeWidth;
-    const envelopeMask = fillEnclosedRegions(dilateMaskRound(sourceMask, bandWidth));
+    const envelopeMask = fillEnclosedRegions(dilateMaskRoundROI(sourceMask, bandWidth));
     const edgeMask = subtractMask(
       envelopeMask,
       erodeMaskRound(envelopeMask, controls.envelope.edgeWidth),
@@ -856,7 +977,7 @@ async function renderStickerBuffer(
     });
   } else {
     const rimWidth = controls.envelope.outlineStrokeWidth + controls.envelope.edgeWidth;
-    const deepMask = fillEnclosedRegions(dilateMaskRound(sourceMask, rimWidth));
+    const deepMask = fillEnclosedRegions(dilateMaskRoundROI(sourceMask, rimWidth));
     const deepMaskCanvas = maskToCanvas(deepMask, ENVELOPE_ANTIALIAS);
     const glyphMaskCanvas = maskToCanvas(sourceMask, OUTLINE_ANTIALIAS);
 
