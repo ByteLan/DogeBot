@@ -5,7 +5,43 @@ import { readRecentChatMessages, rememberRecentChatMessage } from './chat-memory
 import { rememberFeishuEventKey } from './event-dedup.js';
 import { replyText } from './api.js';
 import { runPassiveInteractions } from './passive/index.js';
+import { handleFeishuCommand } from './commands/index.js';
+import { getDefaultCommand } from './commands/douyin.js';
 
-// Forward declaration - will be implemented when commands module is ready
-// For now this re-exports from the old feishu.ts
-export { handleFeishuMessage } from '../feishu.js';
+export async function handleFeishuMessage(bot: FeishuBot, event: any) {
+  const message = event?.message;
+  const messageId = message?.message_id;
+  const parsedMessage = parseFeishuMessage(message);
+  const text = parsedMessage.text;
+  if (!messageId) return;
+  const dedupKey = `message:${messageId}`;
+  if (!rememberFeishuEventKey(dedupKey)) return;
+  if (isFromCurrentBot(bot, event)) return;
+
+  const chatId = messageChatId(message);
+  const chatType = String(message?.chat_type || '').trim();
+  const isPrivateChat = chatType === 'p2p';
+  const mentionsBot = messageMentionsBot(bot, message);
+  const shouldHandleCommand = isPrivateChat || mentionsBot;
+
+  const history = chatId ? readRecentChatMessages(bot.id, chatId, passiveInteractionConfig().contextSize) : [];
+  const sender = senderIdentity(event);
+  if (text) rememberRecentChatMessage(bot.id, chatId, sender.id, sender.name, parsedMessage.textForRepeat || text);
+
+  if (shouldHandleCommand && text) {
+    if (await handleFeishuCommand(bot, event, messageId, text, { allowSetDefault: true })) {
+      return;
+    }
+
+    const defaultCommand = getDefaultCommand(bot.id);
+    if (defaultCommand) {
+      if (await handleFeishuCommand(bot, event, messageId, defaultCommand, { allowSetDefault: false })) {
+        return;
+      }
+      await replyText(bot, messageId, defaultCommand);
+      return;
+    }
+  }
+
+  await runPassiveInteractions(bot, event, messageId, parsedMessage, history);
+}
