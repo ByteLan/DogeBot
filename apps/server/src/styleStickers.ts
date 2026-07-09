@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type Canvas, type SKRSContext2D, GlobalFonts, createCanvas } from '@napi-rs/canvas';
 import type { Request, Response } from 'express';
+import { createConcurrencyLimiter } from './concurrency.js';
 import {
   STICKER_FONT_REGISTRY as SHARED_FONT_REGISTRY,
   createStickerLayout,
@@ -45,6 +46,15 @@ const DISTANCE_INF = 1e15;
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 const appDir = dirname(moduleDir);
 const appRootDir = appDir.endsWith('/dist') ? dirname(appDir) : appDir;
+const STYLE_STICKER_RENDER_CONCURRENCY = parsePositiveIntEnv(process.env.DOGEBOT_STYLE_STICKER_RENDER_CONCURRENCY, 2);
+const STYLE_STICKER_RENDER_QUEUE_MAX = parsePositiveIntEnv(process.env.DOGEBOT_STYLE_STICKER_RENDER_QUEUE_MAX, 20);
+const STYLE_STICKER_RENDER_TIMEOUT_MS = parsePositiveIntEnv(process.env.DOGEBOT_STYLE_STICKER_RENDER_TIMEOUT_MS, 20_000);
+const runStyleStickerRenderTask = createConcurrencyLimiter({
+  name: 'style-sticker-render',
+  limit: STYLE_STICKER_RENDER_CONCURRENCY,
+  maxQueue: STYLE_STICKER_RENDER_QUEUE_MAX,
+  taskTimeoutMs: STYLE_STICKER_RENDER_TIMEOUT_MS
+});
 const HIGH_CONTRAST_COLORS = [
   '#9af665',
   '#44b305',
@@ -97,6 +107,11 @@ const FALLBACK_FONT_DESCRIPTORS = [
   { family: 'Noto Color Emoji', file: 'NotoColorEmoji.ttf', optional: false },
   { family: 'Noto Sans Symbols 2', file: 'NotoSansSymbols2-Regular.ttf', optional: false },
 ] as const;
+
+function parsePositiveIntEnv(value: string | undefined, fallback: number) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 function normalizeRenderScale(value: unknown) {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -868,7 +883,7 @@ export async function renderStyleStickerImage(
   const colors = resolveGradientColors(options.color1, options.color2);
   const renderScale = normalizeRenderScale(options.scale);
   const gradientAngle = normalizeGradientAngle(options.gradientAngle);
-  const image = await renderStickerBuffer(text, flavor, colors, renderScale, gradientAngle);
+  const image = await runStyleStickerRenderTask(() => renderStickerBuffer(text, flavor, colors, renderScale, gradientAngle));
   return { image, colors, renderScale, gradientAngle };
 }
 
