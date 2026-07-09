@@ -482,12 +482,12 @@ const HELP_COMMAND_ROWS: HelpCommandRow[] = [
   {
     command: '/byte-style、/字节范',
     params: '[文案]、--enable、--disable、--rate n、--max n',
-    description: '把文案生成“字节范”图片；不带参数时会优先尝试用引用消息文字生图，否则发交互卡片；开关、rate 和 --max 控制随机生图。'
+    description: '把文案生成“字节范”图片；不带参数时，普通消息会优先尝试用引用消息文字生图，话题里则直接发交互卡片；开关、rate 和 --max 控制随机生图。'
   },
   {
     command: '/scale-new-heights、/勇攀高峰',
     params: '[文案]、--enable、--disable、--rate n、--max n',
-    description: '把文案生成“勇攀高峰”图片；不带参数时会优先尝试用引用消息文字生图，否则发交互卡片；开关、rate 和 --max 控制随机生图。'
+    description: '把文案生成“勇攀高峰”图片；不带参数时，普通消息会优先尝试用引用消息文字生图，话题里则直接发交互卡片；开关、rate 和 --max 控制随机生图。'
   }
 ];
 const recentChatMessages = new Map<string, RecentChatMessage[]>();
@@ -2293,6 +2293,10 @@ function messageChatId(message: any) {
 
 function messageThreadId(message: any) {
   return String(message?.thread_id || '').trim();
+}
+
+function isThreadMessage(message: any) {
+  return Boolean(messageThreadId(message));
 }
 
 function recentChatKey(botId: number, chatId: string) {
@@ -4205,18 +4209,20 @@ async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string
       }
     }
     if (!styleStickerCommand.text && !hasSettingUpdates) {
-      const referencedText = await referencedMessageText(bot, message);
-      if (referencedText) {
-        try {
-          await sendStyleStickerToChat(bot, chatId, styleStickerCommand.feature, referencedText);
-        } catch (error) {
-          await replyText(
-            bot,
-            messageId,
-            error instanceof Error ? `${styleStickerCommand.featureName}生图失败：${error.message}` : `${styleStickerCommand.featureName}生图失败`
-          );
+      if (!isThreadMessage(message)) {
+        const referencedText = await referencedMessageText(bot, message);
+        if (referencedText) {
+          try {
+            await sendStyleStickerToChat(bot, chatId, styleStickerCommand.feature, referencedText);
+          } catch (error) {
+            await replyText(
+              bot,
+              messageId,
+              error instanceof Error ? `${styleStickerCommand.featureName}生图失败：${error.message}` : `${styleStickerCommand.featureName}生图失败`
+            );
+          }
+          return true;
         }
-        return true;
       }
       try {
         await replyStyleStickerGeneratorCard(bot, messageId, styleStickerCommand.feature);
