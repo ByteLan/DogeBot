@@ -1672,7 +1672,19 @@ async function handleRevertCommand(bot: FeishuBot, event: any, messageId: string
   }
 
   const requesterChatId = messageChatId(event?.message);
-  const requesterId = senderIdentity(event).id;
+  const requester = senderIdentity(event);
+  const requesterId = requester.id;
+  const requesterName = String(
+    event?.sender?.sender_name ||
+      event?.sender?.name ||
+      event?.sender?.sender_id?.name ||
+      ''
+  ).trim();
+  const requesterLabel = requesterName
+    ? requesterId && requesterId !== 'unknown'
+      ? `${requesterName}（${requesterId}）`
+      : requesterName
+    : requesterId;
   const candidateIds = referencedMessageIds(event?.message);
   if (candidateIds.length === 0) {
     await replyText(bot, messageId, `${command.command} 必须引用一条消息，或在 bot 发起的话题里使用。`);
@@ -1683,7 +1695,7 @@ async function handleRevertCommand(bot: FeishuBot, event: any, messageId: string
   for (const targetMessageId of candidateIds) {
     const result = await revokeBotMessageById(bot, requesterChatId, requesterId, targetMessageId);
     if (result.ok) {
-      await replyText(bot, messageId, `已撤回消息：${result.target.messageId}`);
+      await replyText(bot, messageId, `已撤回消息：这条消息（触发人：${requesterLabel || 'unknown'}）`, true);
       return true;
     }
     failures.push(result.reason);
