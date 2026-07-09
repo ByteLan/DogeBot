@@ -462,7 +462,7 @@ const HELP_COMMAND_ROWS: HelpCommandRow[] = [
   {
     command: '/reverse、/反转',
     params: '也支持直接发送 reverse / 反转；优先取当前消息首图，否则取引用消息里的图片或表情包',
-    description: '将找到的图片或表情包做一次镜像反转后发送到当前会话。'
+    description: '将找到的图片或表情包做一次镜像反转；如果命中话题消息，则直接回复到话题里，否则发送到当前会话。'
   },
   {
     command: '/revert、/撤回',
@@ -482,12 +482,12 @@ const HELP_COMMAND_ROWS: HelpCommandRow[] = [
   {
     command: '/byte-style、/字节范',
     params: '[文案]、--enable、--disable、--rate n、--max n',
-    description: '把文案生成“字节范”图片；不带参数时，普通消息会优先尝试用引用消息文字生图，话题里则直接发交互卡片；开关、rate 和 --max 控制随机生图。'
+    description: '把文案生成“字节范”图片；带文案时，命中话题消息会直接回复到话题里，否则发送到当前会话；不带参数时，普通消息会优先尝试用引用消息文字生图，话题里则直接发交互卡片；开关、rate 和 --max 控制随机生图。'
   },
   {
     command: '/scale-new-heights、/勇攀高峰',
     params: '[文案]、--enable、--disable、--rate n、--max n',
-    description: '把文案生成“勇攀高峰”图片；不带参数时，普通消息会优先尝试用引用消息文字生图，话题里则直接发交互卡片；开关、rate 和 --max 控制随机生图。'
+    description: '把文案生成“勇攀高峰”图片；带文案时，命中话题消息会直接回复到话题里，否则发送到当前会话；不带参数时，普通消息会优先尝试用引用消息文字生图，话题里则直接发交互卡片；开关、rate 和 --max 控制随机生图。'
   }
 ];
 const recentChatMessages = new Map<string, RecentChatMessage[]>();
@@ -790,6 +790,35 @@ export async function replyText(bot: FeishuBot, messageId: string, text: string,
       botId: bot.id,
       messageId,
       textLength: text.length,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    throw error;
+  }
+}
+
+async function replyMedia(
+  bot: FeishuBot,
+  messageId: string,
+  media: { type: 'image'; key: string } | { type: 'sticker'; key: string },
+  replyInThread = false
+) {
+  const token = await tenantAccessToken(bot);
+  const payload = media.type === 'image'
+    ? { msgType: 'image', content: { image_key: media.key } }
+    : { msgType: 'sticker', content: { file_key: media.key } };
+  try {
+    await feishuJson(`${openBase(bot.domain)}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reply`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ msg_type: payload.msgType, content: JSON.stringify(payload.content), reply_in_thread: replyInThread })
+    });
+  } catch (error) {
+    console.error('[feishu] media reply send failed', {
+      botId: bot.id,
+      messageId,
+      mediaType: media.type,
+      mediaKey: media.key,
+      replyInThread,
       error: error instanceof Error ? error.message : String(error)
     });
     throw error;
@@ -1739,6 +1768,26 @@ function referencedMessageIds(message: any) {
   ].filter(Boolean))];
 }
 
+async function resolveReplyTargetFromCardMessage(bot: FeishuBot, cardMessageId: string) {
+  const cardMessage = await fetchMessageById(bot, cardMessageId).catch(() => undefined);
+  const fallback = {
+    messageId: cardMessageId,
+    replyInThread: Boolean(cardMessage?.threadId)
+  };
+  if (!cardMessage) return fallback;
+
+  const targetMessageId = [cardMessage.parentId, cardMessage.rootId]
+    .map((value) => String(value || '').trim())
+    .find((value) => value && value !== cardMessage.messageId);
+  if (!targetMessageId) return fallback;
+
+  const targetMessage = await fetchMessageById(bot, targetMessageId).catch(() => undefined);
+  return {
+    messageId: targetMessage?.messageId || targetMessageId,
+    replyInThread: targetMessage ? Boolean(targetMessage.threadId) : Boolean(cardMessage.threadId)
+  };
+}
+
 async function referencedMessageText(bot: FeishuBot, message: any) {
   const candidateIds = referencedMessageIds(message);
   for (const referencedMessageId of candidateIds) {
@@ -1960,6 +2009,8 @@ export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
         return;
       }
 
+      const replyTarget = await resolveReplyTargetFromCardMessage(bot, parsed.messageId);
+
       try {
         await deleteMessage(bot, parsed.messageId);
       } catch (error) {
@@ -1969,7 +2020,7 @@ export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
           error: error instanceof Error ? error.message : String(error)
         });
       }
-      await sendImageToChat(bot, parsed.chatId, state.imageKey);
+      await replyMedia(bot, replyTarget.messageId, { type: 'image', key: state.imageKey }, replyTarget.replyInThread);
     } catch (error) {
       console.error('[feishu] style sticker card action failed', {
         botId: bot.id,
@@ -3030,7 +3081,8 @@ async function resolveManualReverseMedia(bot: FeishuBot, event: any, messageId: 
 }
 
 async function handleManualReverseCommand(bot: FeishuBot, event: any, messageId: string, parsedMessage: ParsedFeishuMessage) {
-  const chatId = messageChatId(event?.message);
+  const message = event?.message;
+  const chatId = messageChatId(message);
   if (!chatId) {
     await replyText(bot, messageId, '当前消息缺少 chat_id，无法反转图片或表情包');
     return true;
@@ -3043,7 +3095,17 @@ async function handleManualReverseCommand(bot: FeishuBot, event: any, messageId:
       return true;
     }
 
-    await sendMirroredMediaResource(bot, chatId, media);
+    if (isThreadMessage(message)) {
+      const transformed = await buildMirroredImage(media, chatId);
+      try {
+        const uploadedImageKey = await uploadImage(bot, transformed.data, transformed.fileName);
+        await replyMedia(bot, messageId, { type: 'image', key: uploadedImageKey }, true);
+      } finally {
+        await fs.unlink(transformed.filePath).catch(() => undefined);
+      }
+    } else {
+      await sendMirroredMediaResource(bot, chatId, media);
+    }
   } catch (error) {
     await replyText(bot, messageId, error instanceof Error ? `反转失败：${error.message}` : '反转失败');
   }
@@ -4246,7 +4308,13 @@ async function handleFeishuCommand(bot: FeishuBot, event: any, messageId: string
 
     if (styleStickerCommand.text) {
       try {
-        await sendStyleStickerToChat(bot, chatId, styleStickerCommand.feature, styleStickerCommand.text);
+        if (isThreadMessage(message)) {
+          const { image } = await renderStyleStickerImage(styleStickerCommand.text, styleStickerFlavor(styleStickerCommand.feature));
+          const imageKey = await uploadImage(bot, image, `${styleStickerCommandName(styleStickerCommand.feature).slice(1)}.png`);
+          await replyMedia(bot, messageId, { type: 'image', key: imageKey }, true);
+        } else {
+          await sendStyleStickerToChat(bot, chatId, styleStickerCommand.feature, styleStickerCommand.text);
+        }
       } catch (error) {
         await replyText(
           bot,
