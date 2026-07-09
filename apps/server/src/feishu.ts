@@ -2640,6 +2640,40 @@ async function sendPassiveText(bot: FeishuBot, event: any, messageId: string, te
   await replyText(bot, messageId, text);
 }
 
+async function sendPassiveMedia(
+  bot: FeishuBot,
+  event: any,
+  messageId: string,
+  media: { type: 'image'; key: string } | { type: 'sticker'; key: string }
+) {
+  if (messageThreadId(event?.message)) {
+    await replyMedia(bot, messageId, media, true);
+    return;
+  }
+  const chatId = messageChatId(event?.message);
+  if (chatId) {
+    if (media.type === 'image') {
+      await sendImageToChat(bot, chatId, media.key);
+    } else {
+      await sendStickerToChat(bot, chatId, media.key);
+    }
+    return;
+  }
+  await replyMedia(bot, messageId, media);
+}
+
+async function sendPassiveStyleSticker(
+  bot: FeishuBot,
+  event: any,
+  messageId: string,
+  feature: StyleStickerFeature,
+  text: string
+) {
+  const { image } = await renderStyleStickerImage(text, styleStickerFlavor(feature));
+  const imageKey = await uploadImage(bot, image, `${styleStickerCommandName(feature).slice(1)}.png`);
+  await sendPassiveMedia(bot, event, messageId, { type: 'image', key: imageKey });
+}
+
 function guessExtensionFromContentType(contentType: string, fallback = '.bin') {
   const normalized = contentType.split(';')[0].trim().toLowerCase();
   if (normalized === 'image/png') return '.png';
@@ -3024,27 +3058,33 @@ async function sendMirroredMediaResource(bot: FeishuBot, chatId: string, media: 
 
 async function sendPassiveMediaRepeat(bot: FeishuBot, event: any, messageId: string, parsedMessage: ParsedFeishuMessage) {
   const chatId = messageChatId(event?.message);
-  if (!chatId) return;
+  if (!chatId && !messageId) return;
 
-  const media = await resolvePassiveMediaResource(bot, messageId, chatId, parsedMessage);
+  const media = await resolvePassiveMediaResource(bot, messageId, chatId || 'unknown_chat', parsedMessage);
   if (!media) return;
 
   if (media.sourceType === 'image') {
     const uploadedImageKey = await uploadImage(bot, media.resource.data, media.resource.fileName);
-    await sendImageToChat(bot, chatId, uploadedImageKey);
+    await sendPassiveMedia(bot, event, messageId, { type: 'image', key: uploadedImageKey });
     return;
   }
 
-  await sendStickerToChat(bot, chatId, media.fileKey);
+  await sendPassiveMedia(bot, event, messageId, { type: 'sticker', key: media.fileKey });
 }
 
 async function sendPassiveMediaReverse(bot: FeishuBot, event: any, messageId: string, parsedMessage: ParsedFeishuMessage) {
   const chatId = messageChatId(event?.message);
-  if (!chatId) return;
+  if (!chatId && !messageId) return;
 
-  const media = await resolvePassiveMediaResource(bot, messageId, chatId, parsedMessage);
+  const media = await resolvePassiveMediaResource(bot, messageId, chatId || 'unknown_chat', parsedMessage);
   if (!media) return;
-  await sendMirroredMediaResource(bot, chatId, media);
+  const transformed = await buildMirroredImage(media, chatId || 'unknown_chat');
+  try {
+    const uploadedImageKey = await uploadImage(bot, transformed.data, transformed.fileName);
+    await sendPassiveMedia(bot, event, messageId, { type: 'image', key: uploadedImageKey });
+  } finally {
+    await fs.unlink(transformed.filePath).catch(() => undefined);
+  }
 }
 
 async function resolveManualReverseMedia(bot: FeishuBot, event: any, messageId: string, parsedMessage: ParsedFeishuMessage) {
@@ -3178,14 +3218,14 @@ async function runPassiveInteractions(bot: FeishuBot, event: any, messageId: str
   const exclusiveTextCandidates: Array<'repeat' | StyleStickerFeature> = [];
   if (repeatCandidate) exclusiveTextCandidates.push('repeat');
   exclusiveTextCandidates.push(...styleStickerCandidates);
-  if (chatId && text && exclusiveTextCandidates.length > 0) {
+  if (text && exclusiveTextCandidates.length > 0) {
     const selectedFeature = exclusiveTextCandidates.length === 1
       ? exclusiveTextCandidates[0]
       : randomItem(exclusiveTextCandidates);
     if (selectedFeature === 'repeat') {
       tasks.push(sendPassiveText(bot, event, messageId, repeatText));
     } else {
-      tasks.push(sendStyleStickerToChat(bot, chatId, selectedFeature, text));
+      tasks.push(sendPassiveStyleSticker(bot, event, messageId, selectedFeature, text));
     }
   }
 
