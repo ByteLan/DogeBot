@@ -200,7 +200,7 @@ pm2 restart dogebot-server --update-env
 
 服务端默认使用飞书长连接接收事件。收到 `im.message.receive_v1` 后：
 
-- 如果是 `/help`、`/users`、`/douyin`、`/set-default`、`/add-cron` 等命令，优先按命令逻辑处理。
+- 如果是 `/help`、`/users`、`/douyin`、`/set-default`、`/add-cron`、`/reverse`、`/反转`，或消息文本里包含 `reverse` / `反转` 关键词等命令，优先按命令逻辑处理。
 - 如果配置了 bot 默认兜底指令，继续执行默认指令。
 - 普通文本消息不会要求 @ 机器人；服务端会按概率自动触发消息 reaction、复读、以及大模型模仿接话。
 - 大模型模仿接话需要配置 OpenAI 兼容接口的 URL、Key 和 model；未配置时只会跳过该项，不影响 reaction 和复读。
@@ -244,6 +244,12 @@ pm2 restart dogebot-server --update-env
 - `/add-cron "*/5 * * * *"`：如果当前 bot 已设置 `/set-default`，可以省略第二个参数，定时执行默认兜底指令。
 - `/add-cron --list`：列出当前会话已有的定时任务，并按序号展示。
 - `/add-cron --delete 2`：删除当前会话序号为 2 的定时任务；序号以 `/add-cron --list` 的结果为准。
+
+## `/reverse` / `/反转` 命令
+
+- `/reverse`、`/反转`，或直接发送包含 `reverse` / `反转` 关键词的消息：优先读取当前消息里的第一张图片；如果当前消息没有图片，则继续尝试读取该消息引用的上一条消息里的图片或表情包。
+- 找到图片或表情包后，服务端会复用现有镜像脚本做一次随机轴向、随机方向的镜像反转，并把结果作为新图片发送到当前会话。
+- 如果当前消息和引用消息里都没有可处理的图片或表情包，会回复提示文本，不会触发现有的会话级概率开关。
 
 ## 被动能力开关命令
 
