@@ -1,4 +1,4 @@
-import type { FeishuBot, ChatCronTask, CronField, ParsedFeishuMessage, RevertCommand, StyleStickerFeature } from '../../types.js';
+import type { FeishuBot, ParsedFeishuMessage, RevertCommand, StyleStickerFeature } from '../../types.js';
 import type { StickerFlavor } from '../../styleStickerCore.js';
 import { passiveInteractionConfig } from '../../config.js';
 import { replyText, replyMedia, fetchMessageById, sendImageToChat, uploadImage, deleteMessage } from '../api.js';
@@ -7,7 +7,6 @@ import { parseUsersCommand, parseDouyinCommand, parseSetDefaultCommand, parseRev
 import { sendDouyinMessages, getDefaultCommandRecord, getDefaultCommand, setDefaultCommand, addDouyinSubscription, removeDouyinSubscription } from './douyin.js';
 import { replyUsersCard, softDeleteMentions, upsertMentions, topMentions, listMentions } from './users.js';
 import { getPassiveFeatureSetting, setPassiveFeatureSetting, getStyleStickerSetting, setStyleStickerSetting, passiveFeatureUsage, styleStickerUsage, describePassiveFeatureSetting, describeStyleStickerSetting, formatRatePercent, maxRateForDefault, defaultRateForFeature } from '../passive/settings.js';
-import { db } from '../../db.js';
 import { softDeleteDouyinAwemeRecords } from '../../douyin.js';
 import { renderStyleStickerImage } from '../../styleStickers.js';
 import { resolvePassiveMediaResource } from '../media/resource-cache.js';
@@ -15,98 +14,7 @@ import { buildMirroredImage, sendMirroredMediaResource } from '../media/mirror.j
 import { promises as fs } from 'node:fs';
 import { replyHelpCard as _replyHelpCard } from '../cards/help-card.js';
 import { replyStyleStickerGeneratorCard as _replyStyleStickerGeneratorCard } from '../cards/style-sticker-card.js';
-
-// --- Cron helpers (command-specific) ---
-
-function parseCronField(raw: string, min: number, max: number): CronField {
-  const values = new Set<number>();
-  const parts = raw.split(',').map((part) => part.trim()).filter(Boolean);
-  const unrestricted = parts.length === 1 && parts[0] === '*';
-  for (const part of parts) {
-    const [rangePart, stepPart] = part.split('/');
-    const step = stepPart === undefined ? 1 : Number(stepPart);
-    if (!Number.isInteger(step) || step <= 0) throw new Error(`invalid cron step: ${part}`);
-    let start = min;
-    let end = max;
-    if (rangePart.includes('-')) {
-      const [from, to] = rangePart.split('-').map(Number);
-      if (!Number.isInteger(from) || !Number.isInteger(to)) throw new Error(`invalid cron range: ${part}`);
-      start = from;
-      end = to;
-    } else if (rangePart !== '*') {
-      const value = Number(rangePart);
-      if (!Number.isInteger(value)) throw new Error(`invalid cron value: ${part}`);
-      start = value;
-      end = value;
-    }
-    if (start < min || end > max || start > end) throw new Error(`cron value out of range: ${part}`);
-    for (let value = start; value <= end; value += step) values.add(value);
-  }
-  if (values.size === 0) throw new Error(`empty cron field: ${raw}`);
-  return { values, unrestricted };
-}
-
-function nextCronRunAt(cronExpr: string, from = new Date()) {
-  const parts = cronExpr.trim().split(/\s+/);
-  if (parts.length !== 5) throw new Error('cron 需要 5 段：分 时 日 月 周');
-  const [minute, hour, dayOfMonth, month, dayOfWeek] = [
-    parseCronField(parts[0], 0, 59),
-    parseCronField(parts[1], 0, 23),
-    parseCronField(parts[2], 1, 31),
-    parseCronField(parts[3], 1, 12),
-    parseCronField(parts[4], 0, 7)
-  ];
-  const cursor = new Date(from);
-  cursor.setSeconds(0, 0);
-  cursor.setMinutes(cursor.getMinutes() + 1);
-  const deadline = new Date(cursor.getTime() + 366 * 24 * 60 * 60 * 1000);
-  while (cursor <= deadline) {
-    const dow = cursor.getDay();
-    const dowMatches = dayOfWeek.values.has(dow) || (dow === 0 && dayOfWeek.values.has(7));
-    const domMatches = dayOfMonth.values.has(cursor.getDate());
-    const dayMatches = dayOfMonth.unrestricted || dayOfWeek.unrestricted ? domMatches && dowMatches : domMatches || dowMatches;
-    if (
-      minute.values.has(cursor.getMinutes()) &&
-      hour.values.has(cursor.getHours()) &&
-      month.values.has(cursor.getMonth() + 1) &&
-      dayMatches
-    ) {
-      return cursor;
-    }
-    cursor.setMinutes(cursor.getMinutes() + 1);
-  }
-  throw new Error('无法计算下一次执行时间');
-}
-
-function addCronTask(botId: number, chatId: string, cronExpr: string, commandText: string) {
-  const nextRunAt = nextCronRunAt(cronExpr).toISOString();
-  const result = db.prepare(`
-    INSERT INTO feishu_chat_cron_tasks (bot_id, chat_id, cron_expr, command_text, next_run_at)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(botId, chatId, cronExpr, commandText, nextRunAt);
-  return { id: Number(result.lastInsertRowid), nextRunAt };
-}
-
-function listChatCronTasks(botId: number, chatId: string) {
-  return db.prepare(`
-    SELECT id, bot_id, chat_id, cron_expr, command_text, next_run_at
-    FROM feishu_chat_cron_tasks
-    WHERE bot_id = ? AND chat_id = ? AND enabled = 1
-    ORDER BY next_run_at ASC, id ASC
-  `).all(botId, chatId) as ChatCronTask[];
-}
-
-function deleteCronTaskById(botId: number, chatId: string, taskId: number) {
-  const result = db.prepare(`
-    DELETE FROM feishu_chat_cron_tasks
-    WHERE bot_id = ? AND chat_id = ? AND id = ?
-  `).run(botId, chatId, taskId);
-  return result.changes > 0;
-}
-
-function cronTaskSummary(task: ChatCronTask, index: number) {
-  return `${index + 1}. ${task.cron_expr} -> ${task.command_text}\n   下次执行：${task.next_run_at}`;
-}
+import { addCronTask, listChatCronTasks, deleteCronTaskById, cronTaskSummary } from '../cron.js';
 
 // --- Style sticker command helpers ---
 
