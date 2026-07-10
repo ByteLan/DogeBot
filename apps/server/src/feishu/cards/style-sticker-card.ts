@@ -219,13 +219,39 @@ export function buildStyleStickerCard(state: StyleStickerCardState) {
               ]
             },
             {
-              tag: 'input',
-              element_id: 'style_sticker_gradient_angle',
-              name: STYLE_STICKER_FORM_FIELDS.gradientAngle,
-              label: plainText('渐变角度（0-360）'),
-              placeholder: plainText('例如 90'),
-              default_value: String(state.gradientAngle),
-              max_length: 3
+              tag: 'column_set',
+              flex_mode: 'bisect',
+              horizontal_spacing: '8px',
+              columns: [
+                {
+                  tag: 'column',
+                  width: 'weighted',
+                  weight: 1,
+                  elements: [{
+                    tag: 'input',
+                    element_id: 'style_sticker_gradient_angle',
+                    name: STYLE_STICKER_FORM_FIELDS.gradientAngle,
+                    label: plainText('渐变角度（0-360）'),
+                    placeholder: plainText('例如 90'),
+                    default_value: String(state.gradientAngle),
+                    max_length: 3
+                  }]
+                },
+                {
+                  tag: 'column',
+                  width: 'weighted',
+                  weight: 1,
+                  elements: [{
+                    tag: 'input',
+                    element_id: 'style_sticker_hdr_ev',
+                    name: STYLE_STICKER_FORM_FIELDS.hdrEv,
+                    label: plainText('HDR 高亮 EV（1-100）'),
+                    placeholder: plainText('例如 4'),
+                    default_value: state.hdrEv || '4',
+                    max_length: 3
+                  }]
+                }
+              ]
             },
             {
               tag: 'column_set',
@@ -253,43 +279,15 @@ export function buildStyleStickerCard(state: StyleStickerCardState) {
               ]
             },
             {
-              tag: 'column_set',
-              flex_mode: 'none',
-              horizontal_spacing: '8px',
-              columns: [
-                {
-                  tag: 'column',
-                  width: 'weighted',
-                  weight: 2,
-                  elements: [{
-                    tag: 'input',
-                    element_id: 'style_sticker_hdr_ev',
-                    name: STYLE_STICKER_FORM_FIELDS.hdrEv,
-                    label: plainText('HDR 高亮 EV'),
-                    placeholder: plainText('1~100，如 2'),
-                    default_value: state.hdrEv || '4',
-                    max_length: 3
-                  }]
-                },
-                {
-                  tag: 'column',
-                  width: 'weighted',
-                  weight: 1,
-                  vertical_align: 'bottom',
-                  elements: [styleStickerCardButton('hdr', state.feature)]
-                }
-              ]
-            },
-            ...(state.hdrLink ? [{
               tag: 'button',
               text: plainText('🔆 打开 HDR 高亮图'),
               type: 'primary_filled',
               width: 'fill',
               behaviors: [{
                 type: 'open_url',
-                default_url: state.hdrLink
+                default_url: state.hdrLink || buildStyleStickerHdrLink(state, Number(state.hdrEv) || 4)
               }]
-            }] : [])
+            }
           ]
         }
       ]

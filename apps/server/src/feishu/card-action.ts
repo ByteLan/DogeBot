@@ -194,19 +194,14 @@ export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
         gradientAngle,
         hdrEv: hdrEvRaw
       });
-      if (parsed.action === 'hdr') {
-        const ev = parseHdrEvValue(hdrEvRaw);
-        const hdrLink = ev !== null
-          ? buildStyleStickerHdrLink(state, ev)
-          : undefined;
+      const ev = parseHdrEvValue(hdrEvRaw) ?? 4;
+      const hdrLink = buildStyleStickerHdrLink(state, ev);
+
+      if (parsed.action === 'preview' || parsed.action === 'hdr') {
         await updateInteractiveMessage(bot, parsed.messageId, buildStyleStickerCard({
           ...state,
-          hdrLink: hdrLink || undefined
+          hdrLink
         }));
-        return;
-      }
-      if (parsed.action === 'preview') {
-        await updateInteractiveMessage(bot, parsed.messageId, buildStyleStickerCard(state));
         return;
       }
 
