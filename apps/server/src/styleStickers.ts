@@ -626,11 +626,16 @@ async function renderStickerBuffer(
       edgeCtx.strokeStyle = '#ffffff';
       drawStrokeAndFill(edgeCtx, bandWidth * 2);
       fillEnclosedRegions(edgeCanvas);
-      // Subtract inner boundary to leave only the edge ring
+      // Build inner boundary on a separate canvas (also needs fillEnclosedRegions)
+      const innerCanvas: Canvas = createCanvas(workingWidth, workingHeight);
+      const innerCtx = innerCanvas.getContext('2d');
+      innerCtx.fillStyle = '#ffffff';
+      innerCtx.strokeStyle = '#ffffff';
+      drawStrokeAndFill(innerCtx, Math.max(0, (bandWidth - edgeWidth) * 2));
+      fillEnclosedRegions(innerCanvas);
+      // Subtract inner from outer to leave only the edge ring
       edgeCtx.globalCompositeOperation = 'destination-out';
-      edgeCtx.fillStyle = '#ffffff';
-      edgeCtx.strokeStyle = '#ffffff';
-      drawStrokeAndFill(edgeCtx, Math.max(0, (bandWidth - edgeWidth) * 2));
+      edgeCtx.drawImage(innerCanvas, 0, 0);
       // Color the edge ring with darkened gradient
       edgeCtx.globalCompositeOperation = 'source-in';
       edgeCtx.fillStyle = createGradient(
