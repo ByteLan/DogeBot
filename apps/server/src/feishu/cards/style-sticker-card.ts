@@ -4,6 +4,7 @@ import { renderStyleStickerImage } from '../../styleStickers.js';
 import { uploadImage, sendImageToChat, replyCard } from '../api.js';
 import { hexToRgba } from '../../utils/color.js';
 import { styleStickerFeatureName } from '../passive/settings.js';
+import { openApiBaseUrl } from '../../config.js';
 
 const STYLE_STICKER_CARD_KIND = 'style_sticker_generator';
 const STYLE_STICKER_FORM_NAME = 'style_sticker_form';
@@ -13,7 +14,8 @@ const STYLE_STICKER_FORM_FIELDS = {
   color2: 'color2',
   customColor1: 'customColor1',
   customColor2: 'customColor2',
-  gradientAngle: 'gradientAngle'
+  gradientAngle: 'gradientAngle',
+  hdrEv: 'hdrEv'
 } as const;
 const STYLE_STICKER_CARD_COLOR_OPTIONS = [
   '#9af665',
@@ -53,11 +55,23 @@ function styleStickerCardHeaderTemplate(feature: StyleStickerFeature) {
 }
 
 function styleStickerCardButton(action: StyleStickerCardAction, feature: StyleStickerFeature) {
+  const labels: Record<StyleStickerCardAction, string> = {
+    preview: '预览',
+    send: '发送',
+    withdraw: '撤回',
+    hdr: '获取 HDR'
+  };
+  const types: Record<StyleStickerCardAction, string> = {
+    preview: 'default',
+    send: 'primary_filled',
+    withdraw: 'danger_filled',
+    hdr: 'default'
+  };
   return {
     tag: 'button',
     name: `style_sticker_${action}`,
-    text: plainText(action === 'preview' ? '预览' : action === 'send' ? '发送' : '撤回'),
-    type: action === 'send' ? 'primary_filled' : action === 'withdraw' ? 'danger_filled' : 'default',
+    text: plainText(labels[action]),
+    type: types[action],
     width: 'fill',
     form_action_type: 'submit',
     behaviors: [
@@ -237,7 +251,44 @@ export function buildStyleStickerCard(state: StyleStickerCardState) {
                   elements: [styleStickerCardButton('send', state.feature)]
                 }
               ]
-            }
+            },
+            {
+              tag: 'column_set',
+              flex_mode: 'none',
+              horizontal_spacing: '8px',
+              columns: [
+                {
+                  tag: 'column',
+                  width: 'weighted',
+                  weight: 2,
+                  elements: [{
+                    tag: 'input',
+                    element_id: 'style_sticker_hdr_ev',
+                    name: STYLE_STICKER_FORM_FIELDS.hdrEv,
+                    label: plainText('HDR 高亮 EV'),
+                    placeholder: plainText('1~100，如 2'),
+                    max_length: 3
+                  }]
+                },
+                {
+                  tag: 'column',
+                  width: 'weighted',
+                  weight: 1,
+                  vertical_align: 'bottom',
+                  elements: [styleStickerCardButton('hdr', state.feature)]
+                }
+              ]
+            },
+            ...(state.hdrLink ? [{
+              tag: 'button',
+              text: plainText('🔆 打开 HDR 高亮图'),
+              type: 'primary_filled',
+              width: 'fill',
+              behaviors: [{
+                type: 'open_url',
+                default_url: state.hdrLink
+              }]
+            }] : [])
           ]
         }
       ]
@@ -280,6 +331,18 @@ export async function sendStyleStickerToChat(
   const { image } = await renderStyleStickerImage(text, styleStickerFlavor(feature), options);
   const imageKey = await uploadImage(bot, image, `${styleStickerCommandName(feature).slice(1)}.png`);
   await sendImageToChat(bot, chatId, imageKey);
+}
+
+export function buildStyleStickerHdrLink(state: StyleStickerCardState, ev: number): string {
+  const endpoint = state.feature === 'byte_style' ? 'byte-style' : 'scale-new-heights';
+  const params = new URLSearchParams({
+    text: state.text,
+    color1: state.color1,
+    color2: state.color2,
+    ga: String(state.gradientAngle),
+    ev: String(ev)
+  });
+  return `${openApiBaseUrl()}/open-api/v1/${endpoint}?${params.toString()}`;
 }
 
 export { STYLE_STICKER_CARD_KIND, STYLE_STICKER_FORM_NAME, STYLE_STICKER_FORM_FIELDS, STYLE_STICKER_CARD_COLOR_OPTIONS };

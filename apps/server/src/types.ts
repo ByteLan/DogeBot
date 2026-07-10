@@ -247,7 +247,7 @@ export type PassiveChatSetting = {
   isRateCapped: boolean;
 };
 
-export type StyleStickerCardAction = 'preview' | 'send' | 'withdraw';
+export type StyleStickerCardAction = 'preview' | 'send' | 'withdraw' | 'hdr';
 export type HelpCardAction = 'submit' | 'cancel' | 'withdraw';
 
 export type StyleStickerCardState = {
@@ -257,6 +257,7 @@ export type StyleStickerCardState = {
   color2: string;
   gradientAngle: number;
   imageKey: string;
+  hdrLink?: string;
 };
 
 export type HelpRateDescriptor =
