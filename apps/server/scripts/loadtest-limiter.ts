@@ -13,7 +13,7 @@
  * Run:
  *   ./node_modules/.bin/tsx apps/server/scripts/loadtest-limiter.ts
  */
-import { createConcurrencyLimiter, ConcurrencyLimiterError } from '../src/concurrency.js';
+import { createConcurrencyLimiter, ConcurrencyLimiterError } from '../src/utils/concurrency.js';
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
