@@ -15,7 +15,8 @@
     "better-sqlite3": "^11.8.1",
     "colord": "^2.9.3",
     "cors": "^2.8.5",
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "hdrify": "^0.12.1"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

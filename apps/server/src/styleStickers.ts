@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { type Canvas, type SKRSContext2D, GlobalFonts, createCanvas } from '@napi-rs/canvas';
 import type { Request, Response } from 'express';
 import { createConcurrencyLimiter } from './utils/concurrency.js';
+import { encodeUltraHdrJpeg, parseEvParam } from './utils/ultraHdr.js';
 import {
   STICKER_FONT_REGISTRY as SHARED_FONT_REGISTRY,
   createStickerLayout,
@@ -799,13 +800,28 @@ async function handleStyleSticker(req: Request, res: Response, flavor: StickerFl
       scale: req.query.scale,
       gradientAngle: req.query.gradientAngle ?? req.query.ga,
     });
-    res.setHeader('Content-Type', 'image/png');
-    res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('X-Gradient-Color-1', colors[0]);
-    res.setHeader('X-Gradient-Color-2', colors[1]);
-    res.setHeader('X-Gradient-Angle', String(gradientAngle));
-    res.setHeader('X-Render-Scale', String(renderScale));
-    res.send(image);
+
+    const ev = parseEvParam(req.query.ev);
+    if (ev !== null) {
+      // HDR mode: encode as Ultra HDR JPEG with gain map
+      const hdrImage = await encodeUltraHdrJpeg(image, { flashStops: ev });
+      res.setHeader('Content-Type', 'image/jpeg');
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-Gradient-Color-1', colors[0]);
+      res.setHeader('X-Gradient-Color-2', colors[1]);
+      res.setHeader('X-Gradient-Angle', String(gradientAngle));
+      res.setHeader('X-Render-Scale', String(renderScale));
+      res.setHeader('X-HDR-EV', String(ev));
+      res.send(hdrImage);
+    } else {
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-Gradient-Color-1', colors[0]);
+      res.setHeader('X-Gradient-Color-2', colors[1]);
+      res.setHeader('X-Gradient-Angle', String(gradientAngle));
+      res.setHeader('X-Render-Scale', String(renderScale));
+      res.send(image);
+    }
   } catch (error) {
     res.status(502).json({ error: error instanceof Error ? error.message : 'failed to render sticker' });
   }
