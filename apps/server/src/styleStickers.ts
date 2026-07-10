@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type Canvas, type SKRSContext2D, GlobalFonts, createCanvas } from '@napi-rs/canvas';
 import type { Request, Response } from 'express';
-import { createConcurrencyLimiter } from './concurrency.js';
+import { createConcurrencyLimiter } from './utils/concurrency.js';
 import {
   STICKER_FONT_REGISTRY as SHARED_FONT_REGISTRY,
   createStickerLayout,

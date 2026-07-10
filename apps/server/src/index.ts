@@ -2,10 +2,14 @@ import cors from 'cors';
 import express from 'express';
 import { authenticate, createToken, requireAuth, type AuthenticatedRequest } from './auth.js';
 import { getRandomMmVideo, redirectRandomMmVideo, uploadDouyinAwemeRecords } from './douyin.js';
-import { createFeishuBotForUser, deleteOwnedFeishuBot, feishuWebhook, listFeishuBots, probeFeishuBot, publicBot, startFeishuCronScheduler, stopFeishuCronScheduler } from './feishu.js';
-import { feishuConnectionManager } from './feishuConnection.js';
-import { beginFeishuQrRegistration, pollFeishuQrRegistration } from './feishuOnboard.js';
+import { createFeishuBotForUser, deleteOwnedFeishuBot, listFeishuBots, probeFeishuBot, publicBot } from './feishu/bot-management.js';
+import { feishuWebhook } from './feishu/webhook.js';
+import { startFeishuCronScheduler, stopFeishuCronScheduler } from './feishu/cron.js';
+import { feishuConnectionManager } from './feishu/connection.js';
+import { beginFeishuQrRegistration, pollFeishuQrRegistration } from './feishu/onboard.js';
 import { closeStyleStickerRenderer, renderByteStyle, renderScaleNewHeights } from './styleStickers.js';
+import { setDouyinAwemeNotifier } from './douyin.js';
+import { notifyDouyinSubscriptions } from './feishu/commands/douyin.js';
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -81,6 +85,8 @@ app.delete('/api/feishu/bots/:id', requireAuth, (req: AuthenticatedRequest, res)
   res.status(204).end();
 });
 app.post('/feishu/webhook/:id', feishuWebhook);
+
+setDouyinAwemeNotifier(notifyDouyinSubscriptions);
 
 app.listen(port, () => {
   console.log(`DogeBot server listening on http://127.0.0.1:${port}`);
