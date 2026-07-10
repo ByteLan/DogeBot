@@ -13,6 +13,8 @@ import { renderStyleStickerImage } from '../../styleStickers.js';
 import { resolvePassiveMediaResource } from '../media/resource-cache.js';
 import { buildMirroredImage, sendMirroredMediaResource } from '../media/mirror.js';
 import { promises as fs } from 'node:fs';
+import { replyHelpCard as _replyHelpCard } from '../cards/help-card.js';
+import { replyStyleStickerGeneratorCard as _replyStyleStickerGeneratorCard } from '../cards/style-sticker-card.js';
 
 // --- Cron helpers (command-specific) ---
 
@@ -248,27 +250,12 @@ async function handleManualReverseCommand(bot: FeishuBot, event: any, messageId:
 }
 
 // --- Help card and style sticker card ---
-// These functions will be extracted to ../cards/ in a later refactoring step.
-// For now they are defined here to avoid circular dependencies.
-
-let _replyHelpCard: ((bot: FeishuBot, messageId: string, chatId: string) => Promise<void>) | undefined;
-let _replyStyleStickerGeneratorCard: ((bot: FeishuBot, messageId: string, feature: StyleStickerFeature) => Promise<void>) | undefined;
-
-export function registerReplyHelpCard(fn: (bot: FeishuBot, messageId: string, chatId: string) => Promise<void>) {
-  _replyHelpCard = fn;
-}
-
-export function registerReplyStyleStickerGeneratorCard(fn: (bot: FeishuBot, messageId: string, feature: StyleStickerFeature) => Promise<void>) {
-  _replyStyleStickerGeneratorCard = fn;
-}
 
 async function replyHelpCard(bot: FeishuBot, messageId: string, chatId: string) {
-  if (!_replyHelpCard) throw new Error('replyHelpCard not registered');
   await _replyHelpCard(bot, messageId, chatId);
 }
 
 async function replyStyleStickerGeneratorCard(bot: FeishuBot, messageId: string, feature: StyleStickerFeature) {
-  if (!_replyStyleStickerGeneratorCard) throw new Error('replyStyleStickerGeneratorCard not registered');
   await _replyStyleStickerGeneratorCard(bot, messageId, feature);
 }
 
