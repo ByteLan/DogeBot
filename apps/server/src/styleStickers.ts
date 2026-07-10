@@ -30,19 +30,8 @@ type FontDescriptor = {
   skewYDeg: number;
 };
 
-type TextLineMetrics = {
-  text: string;
-  width: number;
-  ascent: number;
-  descent: number;
-};
-
 const BASE_FONT_SIZE = 220;
 const MAX_OUTPUT_EDGE = 4096;
-const ENVELOPE_ANTIALIAS = 1.1;
-const OUTLINE_ANTIALIAS = 0.9;
-const ALPHA_THRESHOLD = 16;
-const DISTANCE_INF = 1e15;
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 const appDir = dirname(moduleDir);
 const appRootDir = appDir.endsWith('/dist') ? dirname(appDir) : appDir;
@@ -223,20 +212,6 @@ function resolveOptionalFontPath(fileName: string) {
   return candidates.find((candidate) => existsSync(candidate)) || '';
 }
 
-function darkenHexColor(hexColor: string, factor: number) {
-  const red = Math.max(0, Math.min(255, Math.round(Number.parseInt(hexColor.slice(1, 3), 16) * factor)));
-  const green = Math.max(0, Math.min(255, Math.round(Number.parseInt(hexColor.slice(3, 5), 16) * factor)));
-  const blue = Math.max(0, Math.min(255, Math.round(Number.parseInt(hexColor.slice(5, 7), 16) * factor)));
-  return `#${red.toString(16).padStart(2, '0')}${green.toString(16).padStart(2, '0')}${blue.toString(16).padStart(2, '0')}`;
-}
-
-function splitLines(text: string) {
-  return text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-}
-
 function fontSpec(flavor: StickerFlavor, fontSize: number) {
   const descriptor = FONT_DESCRIPTORS[flavor];
   return [
@@ -282,22 +257,6 @@ async function ensureFontLoaded(flavor: StickerFlavor) {
 
   fontLoadPromises.set(flavor, promise);
   return promise;
-}
-
-function measureLines(lines: string[], flavor: StickerFlavor, fontSize: number): TextLineMetrics[] {
-  const canvas: Canvas = createCanvas(1, 1);
-  const context = canvas.getContext('2d');
-  context.font = fontSpec(flavor, fontSize);
-  context.textBaseline = 'alphabetic';
-  return lines.map((line) => {
-    const metrics = context.measureText(line || ' ');
-    return {
-      text: line || ' ',
-      width: Math.max(metrics.width, metrics.actualBoundingBoxLeft + metrics.actualBoundingBoxRight),
-      ascent: metrics.actualBoundingBoxAscent || fontSize * 0.82,
-      descent: metrics.actualBoundingBoxDescent || fontSize * 0.18,
-    };
-  });
 }
 
 function createGradient(
@@ -356,21 +315,6 @@ function cropCanvasAlpha(sourceCanvas: Canvas) {
   return output;
 }
 
-function resizeIfNeeded(sourceCanvas: Canvas) {
-  const longestEdge = Math.max(sourceCanvas.width, sourceCanvas.height);
-  if (longestEdge <= MAX_OUTPUT_EDGE) return sourceCanvas;
-
-  const scale = MAX_OUTPUT_EDGE / longestEdge;
-  const width = Math.max(1, Math.round(sourceCanvas.width * scale));
-  const height = Math.max(1, Math.round(sourceCanvas.height * scale));
-  const output: Canvas = createCanvas(width, height);
-  const context = output.getContext('2d');
-  context.imageSmoothingEnabled = true;
-  context.imageSmoothingQuality = 'high';
-  context.drawImage(sourceCanvas, 0, 0, width, height);
-  return output;
-}
-
 function resizeCanvasByScale(sourceCanvas: Canvas, scale: number, maxEdge: number) {
   const scaledWidth = Math.max(1, Math.round(sourceCanvas.width * scale));
   const scaledHeight = Math.max(1, Math.round(sourceCanvas.height * scale));
@@ -398,365 +342,96 @@ function padCanvas(sourceCanvas: Canvas, paddingX: number, paddingY: number) {
   return canvas;
 }
 
-type BinaryMask = {
-  width: number;
-  height: number;
-  data: Uint8ClampedArray;
-};
+/**
+ * Fill enclosed interior regions on a canvas (e.g. inside 口、国、回).
+ * Uses edge-seeded flood fill: any transparent pixel NOT reachable from the
+ * canvas border is interior and filled white.
+ *
+ * Also propagates opacity through the inner antialiased band (partial-alpha
+ * pixels between the filled interior and the opaque stroke body) to prevent
+ * a visible "white seam" after gradient compositing. The propagation starts
+ * from filled pixels and stops at fully opaque pixels — so it never reaches
+ * the OUTER antialiased edge.
+ */
+function fillEnclosedRegions(canvas: Canvas): void {
+  const { width, height } = canvas;
+  const ctx = canvas.getContext('2d');
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const { data } = imageData;
+  const total = width * height;
 
-function extractAlphaChannel(rgba: Uint8ClampedArray) {
-  const alpha = new Uint8ClampedArray(rgba.length / 4);
-  for (let index = 0; index < alpha.length; index += 1) {
-    alpha[index] = rgba[index * 4 + 3];
-  }
-  return alpha;
-}
+  // BFS from all 4 canvas edges to mark exterior-reachable background pixels.
+  const exterior = new Uint8Array(total);
+  const stack = new Int32Array(total);
+  let stackTop = -1;
 
-function thresholdAlphaMask(alpha: Uint8ClampedArray, width: number, height: number, threshold: number): BinaryMask {
-  const data = new Uint8ClampedArray(width * height);
-  for (let index = 0; index < data.length; index += 1) {
-    data[index] = alpha[index] >= threshold ? 255 : 0;
-  }
-  return { width, height, data };
-}
-
-function cloneMask(mask: BinaryMask): BinaryMask {
-  return {
-    width: mask.width,
-    height: mask.height,
-    data: new Uint8ClampedArray(mask.data),
+  const enqueue = (i: number) => {
+    if (data[i * 4 + 3] <= 16 && exterior[i] === 0) {
+      exterior[i] = 1;
+      stack[++stackTop] = i;
+    }
   };
-}
-
-function invertMask(mask: BinaryMask): BinaryMask {
-  const data = new Uint8ClampedArray(mask.data.length);
-  for (let index = 0; index < data.length; index += 1) {
-    data[index] = mask.data[index] === 0 ? 255 : 0;
-  }
-  return { width: mask.width, height: mask.height, data };
-}
-
-function calculateSeparation(source: Float64Array, current: number, previous: number) {
-  return (
-    (source[current] + current * current - (source[previous] + previous * previous)) /
-    (2 * current - 2 * previous)
-  );
-}
-
-function transformDistanceAxis(source: Float64Array, length: number, target: Float64Array) {
-  const vertices = new Int32Array(length);
-  const boundaries = new Float64Array(length + 1);
-  let hullSize = 0;
-
-  vertices[0] = 0;
-  boundaries[0] = Number.NEGATIVE_INFINITY;
-  boundaries[1] = Number.POSITIVE_INFINITY;
-
-  for (let position = 1; position < length; position += 1) {
-    let intersection = calculateSeparation(source, position, vertices[hullSize]);
-    while (intersection <= boundaries[hullSize]) {
-      hullSize -= 1;
-      intersection = calculateSeparation(source, position, vertices[hullSize]);
-    }
-    hullSize += 1;
-    vertices[hullSize] = position;
-    boundaries[hullSize] = intersection;
-    boundaries[hullSize + 1] = Number.POSITIVE_INFINITY;
-  }
-
-  hullSize = 0;
-  for (let position = 0; position < length; position += 1) {
-    while (boundaries[hullSize + 1] < position) {
-      hullSize += 1;
-    }
-    const distance = position - vertices[hullSize];
-    target[position] = distance * distance + source[vertices[hullSize]];
-  }
-}
-
-function computeSquaredDistanceTransform(mask: BinaryMask) {
-  const { width, height } = mask;
-  const temporary = new Float64Array(width * height);
-  const distances = new Float64Array(width * height);
-  const column = new Float64Array(Math.max(width, height));
-  const columnDistances = new Float64Array(Math.max(width, height));
 
   for (let x = 0; x < width; x += 1) {
-    for (let y = 0; y < height; y += 1) {
-      column[y] = mask.data[y * width + x] > 0 ? 0 : DISTANCE_INF;
-    }
-    transformDistanceAxis(column, height, columnDistances);
-    for (let y = 0; y < height; y += 1) {
-      temporary[y * width + x] = columnDistances[y];
+    enqueue(x);
+    enqueue((height - 1) * width + x);
+  }
+  for (let y = 1; y < height - 1; y += 1) {
+    enqueue(y * width);
+    enqueue(y * width + width - 1);
+  }
+
+  while (stackTop >= 0) {
+    const i = stack[stackTop--];
+    const x = i % width;
+    const y = (i - x) / width;
+    if (x > 0) enqueue(i - 1);
+    if (x < width - 1) enqueue(i + 1);
+    if (y > 0) enqueue(i - width);
+    if (y < height - 1) enqueue(i + width);
+  }
+
+  // Fill enclosed transparent pixels with opaque white.
+  let modified = false;
+  const filled = new Uint8Array(total);
+  for (let i = 0; i < total; i += 1) {
+    if (data[i * 4 + 3] <= 16 && exterior[i] === 0) {
+      const off = i * 4;
+      data[off] = 255;
+      data[off + 1] = 255;
+      data[off + 2] = 255;
+      data[off + 3] = 255;
+      filled[i] = 1;
+      modified = true;
     }
   }
 
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      column[x] = temporary[y * width + x];
+  if (modified) {
+    // Propagate from filled pixels through the inner AA band (partial alpha,
+    // non-exterior) until hitting fully opaque stroke body (α=255).
+    stackTop = -1;
+    for (let i = 0; i < total; i += 1) {
+      if (filled[i]) stack[++stackTop] = i;
     }
-    transformDistanceAxis(column, width, columnDistances);
-    for (let x = 0; x < width; x += 1) {
-      distances[y * width + x] = columnDistances[x];
-    }
-  }
-
-  return distances;
-}
-
-type MaskBBox = { minX: number; minY: number; maxX: number; maxY: number };
-
-function computeMaskBBox(mask: BinaryMask): MaskBBox {
-  let minX = mask.width;
-  let minY = mask.height;
-  let maxX = -1;
-  let maxY = -1;
-  for (let y = 0; y < mask.height; y += 1) {
-    const rowOffset = y * mask.width;
-    for (let x = 0; x < mask.width; x += 1) {
-      if (mask.data[rowOffset + x] > 0) {
-        if (x < minX) minX = x;
-        if (x > maxX) maxX = x;
-        if (y < minY) minY = y;
-        if (y > maxY) maxY = y;
+    const promote = (j: number) => {
+      const a = data[j * 4 + 3];
+      if (a > 16 && a < 255 && filled[j] === 0) {
+        data[j * 4 + 3] = 255;
+        filled[j] = 1;
+        stack[++stackTop] = j;
       }
+    };
+    while (stackTop >= 0) {
+      const i = stack[stackTop--];
+      const x = i % width;
+      const y = (i - x) / width;
+      if (x > 0) promote(i - 1);
+      if (x < width - 1) promote(i + 1);
+      if (y > 0) promote(i - width);
+      if (y < height - 1) promote(i + width);
     }
+    ctx.putImageData(imageData, 0, 0);
   }
-  if (maxX < 0) return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
-  return { minX, minY, maxX, maxY };
-}
-
-function extractMaskROI(mask: BinaryMask, left: number, top: number, roiWidth: number, roiHeight: number): BinaryMask {
-  const data = new Uint8ClampedArray(roiWidth * roiHeight);
-  for (let y = 0; y < roiHeight; y += 1) {
-    const srcY = top + y;
-    if (srcY < 0 || srcY >= mask.height) continue;
-    const srcRowOffset = srcY * mask.width;
-    const dstRowOffset = y * roiWidth;
-    for (let x = 0; x < roiWidth; x += 1) {
-      const srcX = left + x;
-      if (srcX < 0 || srcX >= mask.width) continue;
-      data[dstRowOffset + x] = mask.data[srcRowOffset + srcX];
-    }
-  }
-  return { width: roiWidth, height: roiHeight, data };
-}
-
-function embedROIIntoFullMask(roi: Uint8ClampedArray, roiWidth: number, roiHeight: number, left: number, top: number, fullWidth: number, fullHeight: number): BinaryMask {
-  const data = new Uint8ClampedArray(fullWidth * fullHeight);
-  for (let y = 0; y < roiHeight; y += 1) {
-    const dstY = top + y;
-    if (dstY < 0 || dstY >= fullHeight) continue;
-    const srcRowOffset = y * roiWidth;
-    const dstRowOffset = dstY * fullWidth;
-    for (let x = 0; x < roiWidth; x += 1) {
-      const dstX = left + x;
-      if (dstX < 0 || dstX >= fullWidth) continue;
-      data[dstRowOffset + dstX] = roi[srcRowOffset + x];
-    }
-  }
-  return { width: fullWidth, height: fullHeight, data };
-}
-
-function dilateMaskRound(mask: BinaryMask, radius: number): BinaryMask {
-  if (radius <= 0) return cloneMask(mask);
-  const squaredDistances = computeSquaredDistanceTransform(mask);
-  const data = new Uint8ClampedArray(mask.data.length);
-  const radiusSquared = radius * radius;
-  for (let index = 0; index < data.length; index += 1) {
-    data[index] = squaredDistances[index] <= radiusSquared ? 255 : 0;
-  }
-  return { width: mask.width, height: mask.height, data };
-}
-
-function dilateMaskRoundROI(mask: BinaryMask, radius: number): BinaryMask {
-  if (radius <= 0) return cloneMask(mask);
-  const bbox = computeMaskBBox(mask);
-  if (bbox.maxX < 0) return cloneMask(mask);
-
-  const expand = Math.ceil(radius) + 1;
-  const roiLeft = Math.max(0, bbox.minX - expand);
-  const roiTop = Math.max(0, bbox.minY - expand);
-  const roiRight = Math.min(mask.width - 1, bbox.maxX + expand);
-  const roiBottom = Math.min(mask.height - 1, bbox.maxY + expand);
-  const roiWidth = roiRight - roiLeft + 1;
-  const roiHeight = roiBottom - roiTop + 1;
-
-  const roiPixels = roiWidth * roiHeight;
-  const fullPixels = mask.width * mask.height;
-  if (roiPixels >= fullPixels * 0.7) {
-    return dilateMaskRound(mask, radius);
-  }
-
-  const roiMask = extractMaskROI(mask, roiLeft, roiTop, roiWidth, roiHeight);
-  const squaredDistances = computeSquaredDistanceTransform(roiMask);
-  const roiData = new Uint8ClampedArray(roiPixels);
-  const radiusSquared = radius * radius;
-  for (let i = 0; i < roiPixels; i += 1) {
-    roiData[i] = squaredDistances[i] <= radiusSquared ? 255 : 0;
-  }
-  return embedROIIntoFullMask(roiData, roiWidth, roiHeight, roiLeft, roiTop, mask.width, mask.height);
-}
-
-function erodeMaskRound(mask: BinaryMask, radius: number): BinaryMask {
-  if (radius <= 0) return cloneMask(mask);
-  return invertMask(dilateMaskRound(invertMask(mask), radius));
-}
-
-function subtractMask(source: BinaryMask, subtractor: BinaryMask): BinaryMask {
-  const data = new Uint8ClampedArray(source.data.length);
-  for (let index = 0; index < data.length; index += 1) {
-    data[index] = source.data[index] > 0 && subtractor.data[index] === 0 ? 255 : 0;
-  }
-  return { width: source.width, height: source.height, data };
-}
-
-function fillEnclosedRegions(mask: BinaryMask): BinaryMask {
-  const { width, height, data } = mask;
-  const exterior = new Uint8Array(data.length);
-  const stack: number[] = [];
-
-  const pushIfBackground = (index: number) => {
-    if (data[index] === 0 && exterior[index] === 0) {
-      exterior[index] = 1;
-      stack.push(index);
-    }
-  };
-
-  for (let x = 0; x < width; x += 1) {
-    pushIfBackground(x);
-    pushIfBackground((height - 1) * width + x);
-  }
-  for (let y = 0; y < height; y += 1) {
-    pushIfBackground(y * width);
-    pushIfBackground(y * width + width - 1);
-  }
-
-  while (stack.length > 0) {
-    const index = stack.pop() as number;
-    const x = index % width;
-    const y = (index - x) / width;
-    if (x > 0) pushIfBackground(index - 1);
-    if (x < width - 1) pushIfBackground(index + 1);
-    if (y > 0) pushIfBackground(index - width);
-    if (y < height - 1) pushIfBackground(index + width);
-  }
-
-  const result = new Uint8ClampedArray(data.length);
-  for (let index = 0; index < data.length; index += 1) {
-    result[index] = data[index] > 0 || exterior[index] === 0 ? 255 : 0;
-  }
-
-  return { width, height, data: result };
-}
-
-function clampUnitInterval(value: number) {
-  return Math.min(1, Math.max(0, value));
-}
-
-function createAntialiasedAlpha(mask: BinaryMask, featherRadius: number) {
-  const outsideDistances = computeSquaredDistanceTransform(mask);
-  const insideDistances = computeSquaredDistanceTransform(invertMask(mask));
-  const alpha = new Uint8ClampedArray(mask.data.length);
-  const feather = Math.max(0.01, featherRadius);
-
-  for (let index = 0; index < alpha.length; index += 1) {
-    const signedDistance = Math.sqrt(outsideDistances[index]) - Math.sqrt(insideDistances[index]);
-    const normalized = clampUnitInterval(0.5 - signedDistance / (2 * feather));
-    alpha[index] = Math.round(normalized * 255);
-  }
-
-  return alpha;
-}
-
-function createAntialiasedAlphaROI(mask: BinaryMask, featherRadius: number) {
-  const bbox = computeMaskBBox(mask);
-  if (bbox.maxX < 0) return new Uint8ClampedArray(mask.data.length);
-
-  const expand = Math.ceil(featherRadius) + 2;
-  const roiLeft = Math.max(0, bbox.minX - expand);
-  const roiTop = Math.max(0, bbox.minY - expand);
-  const roiRight = Math.min(mask.width - 1, bbox.maxX + expand);
-  const roiBottom = Math.min(mask.height - 1, bbox.maxY + expand);
-  const roiWidth = roiRight - roiLeft + 1;
-  const roiHeight = roiBottom - roiTop + 1;
-
-  const roiPixels = roiWidth * roiHeight;
-  const fullPixels = mask.width * mask.height;
-  if (roiPixels >= fullPixels * 0.7) {
-    return createAntialiasedAlpha(mask, featherRadius);
-  }
-
-  const roiMask = extractMaskROI(mask, roiLeft, roiTop, roiWidth, roiHeight);
-  const outsideDistances = computeSquaredDistanceTransform(roiMask);
-  const insideDistances = computeSquaredDistanceTransform(invertMask(roiMask));
-  const feather = Math.max(0.01, featherRadius);
-
-  const alpha = new Uint8ClampedArray(fullPixels);
-  for (let y = 0; y < roiHeight; y += 1) {
-    const roiRowOffset = y * roiWidth;
-    const fullRowOffset = (roiTop + y) * mask.width;
-    for (let x = 0; x < roiWidth; x += 1) {
-      const roiIdx = roiRowOffset + x;
-      const signedDistance = Math.sqrt(outsideDistances[roiIdx]) - Math.sqrt(insideDistances[roiIdx]);
-      const normalized = clampUnitInterval(0.5 - signedDistance / (2 * feather));
-      alpha[fullRowOffset + roiLeft + x] = Math.round(normalized * 255);
-    }
-  }
-  return alpha;
-}
-
-function maskToCanvas(mask: BinaryMask, softenRadius = 0) {
-  const canvas: Canvas = createCanvas(mask.width, mask.height);
-  const context = canvas.getContext('2d');
-  const imageData = context.createImageData(mask.width, mask.height);
-  const alpha = softenRadius > 0 ? createAntialiasedAlphaROI(mask, softenRadius) : mask.data;
-
-  for (let index = 0; index < mask.data.length; index += 1) {
-    const rgbaIndex = index * 4;
-    imageData.data[rgbaIndex] = 255;
-    imageData.data[rgbaIndex + 1] = 255;
-    imageData.data[rgbaIndex + 2] = 255;
-    imageData.data[rgbaIndex + 3] = alpha[index];
-  }
-
-  context.putImageData(imageData, 0, 0);
-  return canvas;
-}
-
-let reusableTempCanvas: Canvas | null = null;
-
-function paintMask(
-  targetContext: SKRSContext2D,
-  maskCanvas: Canvas,
-  painter: (context: SKRSContext2D) => void,
-  opacity = 1,
-  compositeOperation: GlobalCompositeOperation = 'source-over',
-) {
-  const width = maskCanvas.width;
-  const height = maskCanvas.height;
-  let temporaryCanvas: Canvas;
-  if (reusableTempCanvas && reusableTempCanvas.width === width && reusableTempCanvas.height === height) {
-    temporaryCanvas = reusableTempCanvas;
-  } else {
-    temporaryCanvas = createCanvas(width, height);
-    reusableTempCanvas = temporaryCanvas;
-  }
-  const temporaryContext = temporaryCanvas.getContext('2d');
-  temporaryContext.clearRect(0, 0, width, height);
-  temporaryContext.globalCompositeOperation = 'source-over';
-  temporaryContext.globalAlpha = 1;
-  temporaryContext.filter = 'none';
-
-  painter(temporaryContext);
-  temporaryContext.globalCompositeOperation = 'destination-in';
-  temporaryContext.drawImage(maskCanvas, 0, 0);
-
-  targetContext.save();
-  targetContext.globalAlpha = opacity;
-  targetContext.globalCompositeOperation = compositeOperation;
-  targetContext.drawImage(temporaryCanvas, 0, 0);
-  targetContext.restore();
 }
 
 function calculateWorkingPadding(controls: StickerControls) {
@@ -887,111 +562,162 @@ async function renderStickerBuffer(
   const originX = padding - layout.bounds.minX;
   const originY = padding - layout.bounds.minY;
 
-  const sourceMaskCanvas: Canvas = createCanvas(workingWidth, workingHeight);
-  const sourceMaskContext = sourceMaskCanvas.getContext('2d', { alpha: true });
-  sourceMaskContext.clearRect(0, 0, workingWidth, workingHeight);
-  sourceMaskContext.fillStyle = '#ffffff';
-  drawPlacedGlyphs(sourceMaskContext, controls, layout, originX, originY, (current, grapheme) => {
-    if (isEmojiGrapheme(grapheme)) return;
-    current.fillText(grapheme, 0, 0);
-  });
-
-  const sourceMask = thresholdAlphaMask(
-    extractAlphaChannel(sourceMaskContext.getImageData(0, 0, workingWidth, workingHeight).data),
-    workingWidth,
-    workingHeight,
-    ALPHA_THRESHOLD,
-  );
-
   const outputCanvas: Canvas = createCanvas(workingWidth, workingHeight);
   const outputContext = outputCanvas.getContext('2d', { alpha: true });
   const gradientStops = resolveGradientStops(controls.envelope.colors);
 
-  const paintFamilyGradient = (context: SKRSContext2D, stops: string[]) => {
-    context.fillStyle = createGradient(
-      context,
-      workingWidth,
-      workingHeight,
-      controls.envelope.gradientAngle,
-      [stops[0], stops[stops.length - 1]]
-    );
-    context.fillRect(0, 0, workingWidth, workingHeight);
+  /** Draw non-emoji glyphs with stroke + fill (produces dilated outline shape). */
+  const drawStrokeAndFill = (
+    context: SKRSContext2D,
+    lineWidth: number,
+    ox = originX,
+    oy = originY,
+  ) => {
+    context.lineWidth = lineWidth;
+    context.lineJoin = 'round';
+    context.lineCap = 'round';
+    context.miterLimit = 2;
+    drawPlacedGlyphs(context, controls, layout, ox, oy, (current, grapheme) => {
+      if (isEmojiGrapheme(grapheme)) return;
+      current.strokeText(grapheme, 0, 0);
+      current.fillText(grapheme, 0, 0);
+    });
   };
 
-  const paintSolid = (context: SKRSContext2D, color: string) => {
-    context.fillStyle = color;
-    context.fillRect(0, 0, workingWidth, workingHeight);
+  /** Draw non-emoji glyphs with fill only. */
+  const drawFillOnly = (
+    context: SKRSContext2D,
+    ox = originX,
+    oy = originY,
+  ) => {
+    drawPlacedGlyphs(context, controls, layout, ox, oy, (current, grapheme) => {
+      if (isEmojiGrapheme(grapheme)) return;
+      current.fillText(grapheme, 0, 0);
+    });
   };
 
   if (controls.flavor === 'snh') {
     const bandWidth = controls.envelope.outlineStrokeWidth;
-    const envelopeMask = fillEnclosedRegions(dilateMaskRoundROI(sourceMask, bandWidth));
-    const edgeMask = subtractMask(
-      envelopeMask,
-      erodeMaskRound(envelopeMask, controls.envelope.edgeWidth),
-    );
-    const envelopeMaskCanvas = maskToCanvas(envelopeMask, ENVELOPE_ANTIALIAS);
-    const edgeMaskCanvas = maskToCanvas(edgeMask, OUTLINE_ANTIALIAS);
-    const glyphMaskCanvas = maskToCanvas(sourceMask, OUTLINE_ANTIALIAS);
+    const edgeWidth = controls.envelope.edgeWidth;
 
-    paintMask(outputContext, envelopeMaskCanvas, (context) => {
-      paintFamilyGradient(context, gradientStops);
-    });
-    paintMask(
-      outputContext,
-      edgeMaskCanvas,
-      (context) => {
-        paintFamilyGradient(
-          context,
-          gradientStops.map((color) => darken(color, 0.45)),
-        );
-      },
-      controls.envelope.edgeOpacity,
-      'multiply',
+    // Layer 1: Envelope — dilated outline filled with gradient
+    const envelopeCanvas: Canvas = createCanvas(workingWidth, workingHeight);
+    const envelopeCtx = envelopeCanvas.getContext('2d');
+    envelopeCtx.fillStyle = '#ffffff';
+    envelopeCtx.strokeStyle = '#ffffff';
+    drawStrokeAndFill(envelopeCtx, bandWidth * 2);
+    fillEnclosedRegions(envelopeCanvas);
+    // Color with gradient via source-in compositing
+    envelopeCtx.globalCompositeOperation = 'source-in';
+    envelopeCtx.fillStyle = createGradient(
+      envelopeCtx, workingWidth, workingHeight,
+      controls.envelope.gradientAngle,
+      [gradientStops[0], gradientStops[gradientStops.length - 1]]
     );
-    if (controls.shadow.opacity > 0) {
-      paintMask(
-        outputContext,
-        envelopeMaskCanvas,
-        (context) => {
-          context.fillStyle = controls.shadow.color;
-          context.filter = `blur(${controls.shadow.blur}px)`;
-          drawPlacedGlyphs(
-            context,
-            controls,
-            layout,
-            originX + controls.shadow.offsetX,
-            originY + controls.shadow.offsetY,
-            (current, grapheme) => {
-              if (isEmojiGrapheme(grapheme)) return;
-              current.fillText(grapheme, 0, 0);
-            }
-          );
-        },
-        controls.shadow.opacity,
-        'multiply',
+    envelopeCtx.fillRect(0, 0, workingWidth, workingHeight);
+    outputContext.drawImage(envelopeCanvas, 0, 0);
+
+    // Layer 2: Edge band — darkened ring between outer and inner boundary
+    if (edgeWidth > 0 && controls.envelope.edgeOpacity > 0) {
+      const edgeCanvas: Canvas = createCanvas(workingWidth, workingHeight);
+      const edgeCtx = edgeCanvas.getContext('2d');
+      // Draw outer boundary (same as envelope)
+      edgeCtx.fillStyle = '#ffffff';
+      edgeCtx.strokeStyle = '#ffffff';
+      drawStrokeAndFill(edgeCtx, bandWidth * 2);
+      fillEnclosedRegions(edgeCanvas);
+      // Subtract inner boundary to leave only the edge ring
+      edgeCtx.globalCompositeOperation = 'destination-out';
+      edgeCtx.fillStyle = '#ffffff';
+      edgeCtx.strokeStyle = '#ffffff';
+      drawStrokeAndFill(edgeCtx, Math.max(0, (bandWidth - edgeWidth) * 2));
+      // Color the edge ring with darkened gradient
+      edgeCtx.globalCompositeOperation = 'source-in';
+      edgeCtx.fillStyle = createGradient(
+        edgeCtx, workingWidth, workingHeight,
+        controls.envelope.gradientAngle,
+        [darken(gradientStops[0], 0.45), darken(gradientStops[gradientStops.length - 1], 0.45)]
       );
+      edgeCtx.fillRect(0, 0, workingWidth, workingHeight);
+      // Composite edge onto output with multiply blend
+      outputContext.save();
+      outputContext.globalAlpha = controls.envelope.edgeOpacity;
+      outputContext.globalCompositeOperation = 'multiply';
+      outputContext.drawImage(edgeCanvas, 0, 0);
+      outputContext.restore();
     }
-    paintMask(outputContext, glyphMaskCanvas, (context) => {
-      paintSolid(context, '#ffffff');
-    });
-  } else {
-    const rimWidth = controls.envelope.outlineStrokeWidth + controls.envelope.edgeWidth;
-    const deepMask = fillEnclosedRegions(dilateMaskRoundROI(sourceMask, rimWidth));
-    const deepMaskCanvas = maskToCanvas(deepMask, ENVELOPE_ANTIALIAS);
-    const glyphMaskCanvas = maskToCanvas(sourceMask, OUTLINE_ANTIALIAS);
 
-    paintMask(outputContext, deepMaskCanvas, (context) => {
-      paintFamilyGradient(
-        context,
-        gradientStops.map((color) => darken(color, 0.42)),
+    // Layer 3: Inner shadow (uses canvas blur filter)
+    if (controls.shadow.opacity > 0) {
+      const shadowCanvas: Canvas = createCanvas(workingWidth, workingHeight);
+      const shadowCtx = shadowCanvas.getContext('2d');
+      // Draw the envelope shape as clip
+      shadowCtx.fillStyle = '#ffffff';
+      shadowCtx.strokeStyle = '#ffffff';
+      drawStrokeAndFill(shadowCtx, bandWidth * 2);
+      fillEnclosedRegions(shadowCanvas);
+      // Draw blurred shadow inside the envelope
+      shadowCtx.globalCompositeOperation = 'source-atop';
+      shadowCtx.fillStyle = controls.shadow.color;
+      shadowCtx.filter = `blur(${controls.shadow.blur}px)`;
+      drawPlacedGlyphs(
+        shadowCtx, controls, layout,
+        originX + controls.shadow.offsetX,
+        originY + controls.shadow.offsetY,
+        (current, grapheme) => {
+          if (isEmojiGrapheme(grapheme)) return;
+          current.fillText(grapheme, 0, 0);
+        }
       );
-    });
-    paintMask(outputContext, glyphMaskCanvas, (context) => {
-      paintFamilyGradient(context, gradientStops);
-    });
+      shadowCtx.filter = 'none';
+      // Composite shadow onto output with multiply blend
+      outputContext.save();
+      outputContext.globalAlpha = controls.shadow.opacity;
+      outputContext.globalCompositeOperation = 'multiply';
+      outputContext.drawImage(shadowCanvas, 0, 0);
+      outputContext.restore();
+    }
+
+    // Layer 4: White glyph fill on top
+    outputContext.fillStyle = '#ffffff';
+    drawFillOnly(outputContext);
+
+  } else {
+    // bs (字节范) flavor
+    const rimWidth = controls.envelope.outlineStrokeWidth + controls.envelope.edgeWidth;
+
+    // Layer 1: Deep outline — darkened gradient fill
+    const deepCanvas: Canvas = createCanvas(workingWidth, workingHeight);
+    const deepCtx = deepCanvas.getContext('2d');
+    deepCtx.fillStyle = '#ffffff';
+    deepCtx.strokeStyle = '#ffffff';
+    drawStrokeAndFill(deepCtx, rimWidth * 2);
+    fillEnclosedRegions(deepCanvas);
+    deepCtx.globalCompositeOperation = 'source-in';
+    deepCtx.fillStyle = createGradient(
+      deepCtx, workingWidth, workingHeight,
+      controls.envelope.gradientAngle,
+      [darken(gradientStops[0], 0.42), darken(gradientStops[gradientStops.length - 1], 0.42)]
+    );
+    deepCtx.fillRect(0, 0, workingWidth, workingHeight);
+    outputContext.drawImage(deepCanvas, 0, 0);
+
+    // Layer 2: Glyph fill — main gradient
+    const glyphCanvas: Canvas = createCanvas(workingWidth, workingHeight);
+    const glyphCtx = glyphCanvas.getContext('2d');
+    glyphCtx.fillStyle = '#ffffff';
+    drawFillOnly(glyphCtx);
+    glyphCtx.globalCompositeOperation = 'source-in';
+    glyphCtx.fillStyle = createGradient(
+      glyphCtx, workingWidth, workingHeight,
+      controls.envelope.gradientAngle,
+      [gradientStops[0], gradientStops[gradientStops.length - 1]]
+    );
+    glyphCtx.fillRect(0, 0, workingWidth, workingHeight);
+    outputContext.drawImage(glyphCanvas, 0, 0);
   }
 
+  // Emoji overlay (drawn directly, no mask processing)
   drawPlacedGlyphs(outputContext, controls, layout, originX, originY, (current, grapheme) => {
     if (!isEmojiGrapheme(grapheme)) return;
     current.fillText(grapheme, 0, 0);
