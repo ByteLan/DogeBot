@@ -257,6 +257,7 @@ export type StyleStickerCardState = {
   color2: string;
   gradientAngle: number;
   imageKey: string;
+  hdrEv: string;
   hdrLink?: string;
 };
 

@@ -267,6 +267,7 @@ export function buildStyleStickerCard(state: StyleStickerCardState) {
                     name: STYLE_STICKER_FORM_FIELDS.hdrEv,
                     label: plainText('HDR 高亮 EV'),
                     placeholder: plainText('1~100，如 2'),
+                    default_value: state.hdrEv || '4',
                     max_length: 3
                   }]
                 },
@@ -300,7 +301,7 @@ export async function renderStyleStickerCardState(
   bot: FeishuBot,
   feature: StyleStickerFeature,
   text: string,
-  options: { color1?: unknown; color2?: unknown; gradientAngle?: unknown } = {}
+  options: { color1?: unknown; color2?: unknown; gradientAngle?: unknown; hdrEv?: string } = {}
 ) {
   const fallbackText = styleStickerFeatureName(feature);
   const renderText = text.trim() || fallbackText;
@@ -312,7 +313,8 @@ export async function renderStyleStickerCardState(
     color1: colors[0],
     color2: colors[1],
     gradientAngle,
-    imageKey
+    imageKey,
+    hdrEv: options.hdrEv || '4'
   };
 }
 
