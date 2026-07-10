@@ -185,7 +185,7 @@ export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
       formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.color2);
     const gradientAngle = normalizeCardGradientAngle(formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.gradientAngle));
 
-    const hdrEvRaw = formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.hdrEv) || '4';
+    const hdrEvRaw = formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.hdrEv) || '';
 
     try {
       const state = await renderStyleStickerCardState(bot, parsed.feature, text, {

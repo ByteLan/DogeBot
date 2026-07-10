@@ -138,6 +138,38 @@ function fillEnclosedRegions(canvas: Canvas): void {
   }
 }
 
+function erodeCanvasInward(canvas: Canvas, radius: number): void {
+  if (radius <= 0) return;
+  const { width, height } = canvas;
+  const ctx = canvas.getContext('2d');
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const { data } = imageData;
+  const total = width * height;
+  const dist = new Uint16Array(total);
+  dist.fill(65535);
+  const queue = new Int32Array(total);
+  let qHead = 0, qTail = 0;
+  for (let i = 0; i < total; i++) {
+    if (data[i * 4 + 3] <= 16) { dist[i] = 0; queue[qTail++] = i; }
+  }
+  const intRadius = Math.ceil(radius);
+  while (qHead < qTail) {
+    const i = queue[qHead++];
+    const d = dist[i] + 1;
+    if (d > intRadius) continue;
+    const x = i % width, y = (i - x) / width;
+    if (x > 0 && dist[i-1] > d) { dist[i-1] = d; queue[qTail++] = i-1; }
+    if (x < width-1 && dist[i+1] > d) { dist[i+1] = d; queue[qTail++] = i+1; }
+    if (y > 0 && dist[i-width] > d) { dist[i-width] = d; queue[qTail++] = i-width; }
+    if (y < height-1 && dist[i+width] > d) { dist[i+width] = d; queue[qTail++] = i+width; }
+  }
+  let modified = false;
+  for (let i = 0; i < total; i++) {
+    if (dist[i] <= intRadius && data[i * 4 + 3] > 16) { data[i*4+3] = 0; modified = true; }
+  }
+  if (modified) ctx.putImageData(imageData, 0, 0);
+}
+
 function save(canvas: Canvas, name: string) {
   const buf = canvas.toBuffer('image/png');
   const path = join(outDir, `${name}.png`);
@@ -146,7 +178,7 @@ function save(canvas: Canvas, name: string) {
 }
 
 // ===== Main =====
-const text = '勇攀高峰';
+const text = '勇攀高峰，我可以找你的+1';
 const flavor: StickerFlavor = 'snh';
 const colors = ['#0989b2', '#73e8d7'] as const;
 const gradientAngle = 135;
@@ -267,24 +299,20 @@ step3Ctx.fillStyle = createGradient(step3Ctx, workingWidth, workingHeight, gradi
 step3Ctx.fillRect(0, 0, workingWidth, workingHeight);
 save(step3Canvas, '03-envelope-gradient');
 
-console.log('\n=== Step 4: Edge ring (outer - inner) white mask ===');
+console.log('\n=== Step 4: Edge ring (envelope - eroded envelope) ===');
 const step4Canvas: Canvas = createCanvas(workingWidth, workingHeight);
 const step4Ctx = step4Canvas.getContext('2d');
-// Outer boundary (with enclosed regions filled)
-step4Ctx.fillStyle = '#ffffff';
-step4Ctx.strokeStyle = '#ffffff';
-drawStrokeAndFill(step4Ctx, bandWidth * 2);
-fillEnclosedRegions(step4Canvas);
-// Build inner boundary on a SEPARATE canvas (also with enclosed regions filled)
-const innerCanvas: Canvas = createCanvas(workingWidth, workingHeight);
-const innerCtx = innerCanvas.getContext('2d');
-innerCtx.fillStyle = '#ffffff';
-innerCtx.strokeStyle = '#ffffff';
-drawStrokeAndFill(innerCtx, Math.max(0, (bandWidth - edgeWidth) * 2));
-fillEnclosedRegions(innerCanvas);
-// Subtract inner from outer using the image
+// Copy envelope (already filled with enclosed regions from step 2)
+step4Ctx.drawImage(step1Canvas, 0, 0);
+// Create eroded version of envelope
+const erodeCanvas: Canvas = createCanvas(workingWidth, workingHeight);
+const erodeCtxDbg = erodeCanvas.getContext('2d');
+erodeCtxDbg.drawImage(step1Canvas, 0, 0);
+erodeCanvasInward(erodeCanvas, edgeWidth);
+save(erodeCanvas, '04a-eroded-envelope');
+// Subtract eroded from envelope -> edge ring
 step4Ctx.globalCompositeOperation = 'destination-out';
-step4Ctx.drawImage(innerCanvas, 0, 0);
+step4Ctx.drawImage(erodeCanvas, 0, 0);
 save(step4Canvas, '04-edge-ring-mask');
 
 console.log('\n=== Step 5: Edge ring colored ===');
