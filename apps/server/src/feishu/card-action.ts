@@ -3,7 +3,7 @@ import { passiveInteractionConfig, parseConfigurableRate } from '../config.js';
 import { deleteMessage, updateInteractiveMessage, replyMedia, fetchMessageById } from './api.js';
 import { rememberFeishuEventKey } from './event-dedup.js';
 import { idFromFeishuObject } from './message-parser.js';
-import { buildStyleStickerCard, renderStyleStickerCardState, STYLE_STICKER_FORM_FIELDS } from './cards/style-sticker-card.js';
+import { buildStyleStickerCard, buildStyleStickerHdrLink, renderStyleStickerCardState, STYLE_STICKER_FORM_FIELDS } from './cards/style-sticker-card.js';
 import { buildHelpCard, HELP_CARD_KIND, HELP_RATE_FORM_FIELDS, HELP_MAX_FORM_FIELDS, HELP_DOUYIN_FORM_FIELDS, HELP_CRON_FORM_FIELDS, HELP_RATE_DESCRIPTORS, HELP_MAX_DESCRIPTORS, helpRateSettingSummary, helpRateEnabledField, recentUnsubscribedDouyinClickTexts, currentChatDouyinSubscriptionsWithRecentUpdates } from './cards/help-card.js';
 import { styleStickerFeatureName, formatRatePercent, defaultRateForFeature, getPassiveFeatureSetting, setPassiveFeatureSetting, getStyleStickerSetting, setStyleStickerSetting } from './passive/settings.js';
 import { addDouyinSubscription, removeDouyinSubscription, getDefaultCommand } from './commands/douyin.js';
@@ -20,7 +20,7 @@ function isStyleStickerFeature(value: unknown): value is StyleStickerFeature {
 }
 
 function isStyleStickerCardAction(value: unknown): value is StyleStickerCardAction {
-  return value === 'preview' || value === 'send' || value === 'withdraw';
+  return value === 'preview' || value === 'send' || value === 'withdraw' || value === 'hdr';
 }
 
 function isHelpCardAction(value: unknown): value is HelpCardAction {
@@ -58,6 +58,14 @@ function normalizeCardGradientAngle(value: unknown) {
   const parsed = Number(firstStringValue(value));
   if (!Number.isFinite(parsed)) return undefined;
   return Math.min(360, Math.max(0, Math.round(parsed)));
+}
+
+function parseHdrEvValue(value: unknown): number | null {
+  const text = firstStringValue(value);
+  if (!text) return null;
+  const parsed = Number(text);
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 100) return null;
+  return parsed;
 }
 
 function parseHelpEnabledValue(value: unknown) {
@@ -183,6 +191,18 @@ export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
         color2,
         gradientAngle
       });
+      if (parsed.action === 'hdr') {
+        const evRaw = formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.hdrEv);
+        const ev = parseHdrEvValue(evRaw);
+        const hdrLink = ev !== null
+          ? buildStyleStickerHdrLink(state, ev)
+          : undefined;
+        await updateInteractiveMessage(bot, parsed.messageId, buildStyleStickerCard({
+          ...state,
+          hdrLink: hdrLink || undefined
+        }));
+        return;
+      }
       if (parsed.action === 'preview') {
         await updateInteractiveMessage(bot, parsed.messageId, buildStyleStickerCard(state));
         return;
