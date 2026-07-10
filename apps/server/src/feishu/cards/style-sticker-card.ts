@@ -247,7 +247,7 @@ export function buildStyleStickerCard(state: StyleStickerCardState) {
                     name: STYLE_STICKER_FORM_FIELDS.hdrEv,
                     label: plainText('HDR 高亮 EV（1-100）'),
                     placeholder: plainText('例如 4'),
-                    default_value: state.hdrEv || '4',
+                    default_value: state.hdrEv,
                     max_length: 3
                   }]
                 }
@@ -312,7 +312,7 @@ export async function renderStyleStickerCardState(
     color2: colors[1],
     gradientAngle,
     imageKey,
-    hdrEv: options.hdrEv || '4'
+    hdrEv: options.hdrEv ?? '4'
   };
 }
 

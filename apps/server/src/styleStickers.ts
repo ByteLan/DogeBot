@@ -344,6 +344,71 @@ function padCanvas(sourceCanvas: Canvas, paddingX: number, paddingY: number) {
 }
 
 /**
+ * Erode (shrink) an opaque shape inward by `radius` pixels.
+ * Uses BFS from boundary pixels (foreground pixels adjacent to transparent).
+ * Only pixels within `radius` distance from the boundary are cleared.
+ * Complexity: O(W×H) — no EDT needed.
+ */
+function erodeCanvasInward(canvas: Canvas, radius: number): void {
+  if (radius <= 0) return;
+  const { width, height } = canvas;
+  const ctx = canvas.getContext('2d');
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const { data } = imageData;
+  const total = width * height;
+
+  // Distance from the nearest transparent pixel (boundary distance).
+  // We use a BFS-based approach: seed from all transparent pixels,
+  // expand layer by layer up to `radius` depth.
+  const dist = new Uint16Array(total);
+  dist.fill(65535);
+  const queue = new Int32Array(total);
+  let qHead = 0, qTail = 0;
+
+  // Seed: all transparent pixels get distance 0
+  for (let i = 0; i < total; i++) {
+    if (data[i * 4 + 3] <= 16) {
+      dist[i] = 0;
+      queue[qTail++] = i;
+    }
+  }
+
+  // BFS layer by layer
+  const intRadius = Math.ceil(radius);
+  while (qHead < qTail) {
+    const i = queue[qHead++];
+    const d = dist[i] + 1;
+    if (d > intRadius) continue;
+    const x = i % width, y = (i - x) / width;
+    const neighbors = [
+      x > 0 ? i - 1 : -1,
+      x < width - 1 ? i + 1 : -1,
+      y > 0 ? i - width : -1,
+      y < height - 1 ? i + width : -1,
+    ];
+    for (const n of neighbors) {
+      if (n >= 0 && dist[n] > d) {
+        dist[n] = d;
+        queue[qTail++] = n;
+      }
+    }
+  }
+
+  // Clear pixels within radius of the boundary
+  let modified = false;
+  for (let i = 0; i < total; i++) {
+    if (dist[i] <= intRadius && data[i * 4 + 3] > 16) {
+      const off = i * 4;
+      data[off + 3] = 0;
+      modified = true;
+    }
+  }
+  if (modified) {
+    ctx.putImageData(imageData, 0, 0);
+  }
+}
+
+/**
  * Fill enclosed interior regions on a canvas (e.g. inside 口、国、回).
  * Uses edge-seeded flood fill: any transparent pixel NOT reachable from the
  * canvas border is interior and filled white.
@@ -620,23 +685,19 @@ async function renderStickerBuffer(
 
     // Layer 2: Edge band — darkened ring between outer and inner boundary
     if (edgeWidth > 0 && controls.envelope.edgeOpacity > 0) {
+      // Start from the filled envelope shape
       const edgeCanvas: Canvas = createCanvas(workingWidth, workingHeight);
       const edgeCtx = edgeCanvas.getContext('2d');
-      // Draw outer boundary (same as envelope)
-      edgeCtx.fillStyle = '#ffffff';
-      edgeCtx.strokeStyle = '#ffffff';
-      drawStrokeAndFill(edgeCtx, bandWidth * 2);
-      fillEnclosedRegions(edgeCanvas);
-      // Build inner boundary on a separate canvas (also needs fillEnclosedRegions)
-      const innerCanvas: Canvas = createCanvas(workingWidth, workingHeight);
-      const innerCtx = innerCanvas.getContext('2d');
-      innerCtx.fillStyle = '#ffffff';
-      innerCtx.strokeStyle = '#ffffff';
-      drawStrokeAndFill(innerCtx, Math.max(0, (bandWidth - edgeWidth) * 2));
-      fillEnclosedRegions(innerCanvas);
-      // Subtract inner from outer to leave only the edge ring
+      edgeCtx.drawImage(envelopeCanvas, 0, 0);
+      // Erode the envelope inward by edgeWidth using BFS from boundary pixels,
+      // then subtract the eroded result to leave only the edge ring.
+      const erodeCanvas: Canvas = createCanvas(workingWidth, workingHeight);
+      const erodeCtx = erodeCanvas.getContext('2d');
+      erodeCtx.drawImage(envelopeCanvas, 0, 0);
+      erodeCanvasInward(erodeCanvas, edgeWidth);
+      // edge = envelope - eroded
       edgeCtx.globalCompositeOperation = 'destination-out';
-      edgeCtx.drawImage(innerCanvas, 0, 0);
+      edgeCtx.drawImage(erodeCanvas, 0, 0);
       // Color the edge ring with darkened gradient
       edgeCtx.globalCompositeOperation = 'source-in';
       edgeCtx.fillStyle = createGradient(
