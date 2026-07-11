@@ -8,6 +8,9 @@ import { buildHelpCard, HELP_CARD_KIND, HELP_RATE_FORM_FIELDS, HELP_MAX_FORM_FIE
 import { styleStickerFeatureName, formatRatePercent, defaultRateForFeature, getPassiveFeatureSetting, setPassiveFeatureSetting, getStyleStickerSetting, setStyleStickerSetting } from './passive/settings.js';
 import { addDouyinSubscription, removeDouyinSubscription, getDefaultCommand } from './commands/douyin.js';
 import { addCronTask, listChatCronTasks, deleteCronTaskById } from './cron.js';
+import { fallbackMentionCandidates } from './fallback-mentions.js';
+import { FALLBACK_MENTION_CARD_KIND, FALLBACK_MENTION_FORM_FIELD, isFallbackMentionCardAction } from './cards/fallback-mention-card.js';
+import { listMentions, replyUsersCard, upsertMentions } from './commands/users.js';
 
 const STYLE_STICKER_CARD_KIND = 'style_sticker_generator';
 
@@ -140,6 +143,28 @@ function parseHelpCardActionPayload(payload: any) {
   };
 }
 
+function parseFallbackMentionCardActionPayload(payload: any) {
+  const context = parseCardActionContext(payload);
+  if (!context) return null;
+  const actionValue = context.event?.action?.value;
+  if (!isRecord(actionValue) || actionValue.kind !== FALLBACK_MENTION_CARD_KIND || !isFallbackMentionCardAction(actionValue.action)) return null;
+
+  const sourceMessageId = firstStringValue(actionValue.sourceMessageId);
+  const atById = firstStringValue(actionValue.atById);
+  const atByName = firstStringValue(actionValue.atByName);
+  if (!sourceMessageId || !atById) return null;
+  return {
+    eventId: context.eventId,
+    messageId: context.messageId,
+    chatId: context.chatId,
+    action: actionValue.action,
+    sourceMessageId,
+    atById,
+    atByName: atByName || atById,
+    formValue: context.formValue
+  };
+}
+
 async function resolveReplyTargetFromCardMessage(bot: FeishuBot, cardMessageId: string) {
   const cardMessage = await fetchMessageById(bot, cardMessageId).catch(() => undefined);
   const fallback = {
@@ -161,6 +186,72 @@ async function resolveReplyTargetFromCardMessage(bot: FeishuBot, cardMessageId: 
 }
 
 export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
+  const fallbackMentionParsed = parseFallbackMentionCardActionPayload(payload);
+  if (fallbackMentionParsed) {
+    if (fallbackMentionParsed.eventId && !rememberFeishuEventKey(`card:${fallbackMentionParsed.eventId}`)) return;
+
+    if (fallbackMentionParsed.action === 'withdraw') {
+      try {
+        await deleteMessage(bot, fallbackMentionParsed.messageId);
+      } catch (error) {
+        console.error('[feishu] fallback mention card delete failed', {
+          botId: bot.id,
+          messageId: fallbackMentionParsed.messageId,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+      return;
+    }
+
+    try {
+      const replyTarget = await resolveReplyTargetFromCardMessage(bot, fallbackMentionParsed.messageId);
+      if (replyTarget.messageId !== fallbackMentionParsed.sourceMessageId) {
+        throw new Error('fallback mention card source message does not match reply target');
+      }
+      const sourceMessage = await fetchMessageById(bot, fallbackMentionParsed.sourceMessageId);
+      if (!sourceMessage) throw new Error('failed to fetch fallback mention source message');
+
+      const candidates = await fallbackMentionCandidates(bot, sourceMessage.message);
+      const candidatesById = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+      const selectedIds = formStringValues(fallbackMentionParsed.formValue, FALLBACK_MENTION_FORM_FIELD);
+      const selected = selectedIds
+        .flatMap((id) => {
+          const candidate = candidatesById.get(id);
+          return candidate ? [candidate] : [];
+        });
+      if (selected.length === 0) {
+        throw new Error('fallback mention card requires at least one valid selected user');
+      }
+      const newCount = fallbackMentionParsed.action === 'add' ? selected.length : undefined;
+
+      try {
+        await deleteMessage(bot, fallbackMentionParsed.messageId);
+      } catch (error) {
+        console.error('[feishu] fallback mention card delete failed', {
+          botId: bot.id,
+          messageId: fallbackMentionParsed.messageId,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+
+      upsertMentions(bot.id, fallbackMentionParsed.atById, fallbackMentionParsed.atByName, selected);
+      await replyUsersCard(
+        bot,
+        fallbackMentionParsed.sourceMessageId,
+        listMentions(bot.id, fallbackMentionParsed.atById, newCount),
+        true
+      );
+    } catch (error) {
+      console.error('[feishu] fallback mention card action failed', {
+        botId: bot.id,
+        messageId: fallbackMentionParsed.messageId,
+        action: fallbackMentionParsed.action,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+    return;
+  }
+
   const parsed = parseStyleStickerCardActionPayload(payload);
   if (parsed) {
     if (parsed.eventId && !rememberFeishuEventKey(`card:${parsed.eventId}`)) return;

@@ -202,6 +202,8 @@ export type FeishuMessageDetails = {
   deleted: boolean;
   message: {
     message_id: string;
+    parent_id?: string;
+    root_id?: string;
     message_type: string;
     content: string;
     mentions?: FeishuMention[];

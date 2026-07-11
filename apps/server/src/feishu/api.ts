@@ -122,6 +122,8 @@ export async function fetchMessageById(bot: FeishuBot, messageId: string): Promi
     deleted: Boolean(item.deleted),
     message: {
       message_id: String(item.message_id || messageId).trim(),
+      parent_id: String(item.parent_id || '').trim(),
+      root_id: String(item.root_id || '').trim(),
       message_type: String(item.msg_type || '').trim(),
       content: typeof item.body?.content === 'string' ? item.body.content : '',
       mentions: Array.isArray(item.mentions) ? item.mentions : []
@@ -149,12 +151,12 @@ export async function addReaction(bot: FeishuBot, messageId: string, reactionTyp
   }
 }
 
-export async function replyCard(bot: FeishuBot, messageId: string, card: object) {
+export async function replyCard(bot: FeishuBot, messageId: string, card: object, replyInThread = false) {
   const token = await tenantAccessToken(bot);
   await feishuJson(`${openBase(bot.domain)}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reply`, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ msg_type: 'interactive', content: JSON.stringify(card) })
+    body: JSON.stringify({ msg_type: 'interactive', content: JSON.stringify(card), reply_in_thread: replyInThread })
   });
 }
 

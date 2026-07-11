@@ -164,12 +164,12 @@ async function appendUsersCardElements(client: Awaited<ReturnType<typeof feishuS
   }
 }
 
-export async function replyUsersCard(bot: FeishuBot, messageId: string, records: AtRecord[]) {
+export async function replyUsersCard(bot: FeishuBot, messageId: string, records: AtRecord[], replyInThread = false) {
   const client = await feishuSdkClient(bot);
   const chunks = chunkUsersRecords(records);
 
   const personListCardId = await createCardEntity(client, usersPersonListCard(records));
-  const personListReply = await replyCardReference(client, messageId, personListCardId);
+  const personListReply = await replyCardReference(client, messageId, personListCardId, replyInThread);
   await appendUsersCardElements(client, personListCardId, chunks, (chunk, index) => [
     usersDividerElement(index),
     usersPersonListElement(chunk, index)
