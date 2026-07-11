@@ -9,11 +9,14 @@ function idFromFeishuObject(value: any): string {
 export async function createChatMessage(bot: FeishuBot, chatId: string, msgType: string, content: Record<string, unknown>) {
   const token = await tenantAccessToken(bot);
   try {
-    await feishuJson(`${openBase(bot.domain)}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
+    const result = await feishuJson<{ data?: { message_id?: string } }>(`${openBase(bot.domain)}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ receive_id: chatId, msg_type: msgType, content: JSON.stringify(content) })
     });
+    const messageId = String(result.data?.message_id || '').trim();
+    if (!messageId) throw new Error('chat message send failed: missing message_id');
+    return messageId;
   } catch (error) {
     console.error('[feishu] chat message send failed', {
       botId: bot.id,
@@ -83,6 +86,18 @@ export async function sendImageToChat(bot: FeishuBot, chatId: string, imageKey: 
 
 export async function sendStickerToChat(bot: FeishuBot, chatId: string, fileKey: string) {
   await createChatMessage(bot, chatId, 'sticker', { file_key: fileKey });
+}
+
+export async function isTopicChat(bot: FeishuBot, chatId: string) {
+  const token = await tenantAccessToken(bot);
+  const response = await feishuJson<{ data?: { chat?: { chat_mode?: string } } }>(
+    `${openBase(bot.domain)}/open-apis/im/v1/chats/${encodeURIComponent(chatId)}`,
+    {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` }
+    }
+  );
+  return response.data?.chat?.chat_mode === 'topic';
 }
 
 export async function fetchMessageById(bot: FeishuBot, messageId: string): Promise<FeishuMessageDetails | undefined> {

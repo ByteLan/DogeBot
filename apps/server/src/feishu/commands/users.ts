@@ -1,6 +1,7 @@
 import type { FeishuBot, AtRecord } from '../../types.js';
 import { db } from '../../db.js';
 import { feishuSdkClient } from '../client.js';
+import { createChatMessage } from '../api.js';
 
 const USERS_CARD_PERSON_LIST_CHUNK_SIZE = 100;
 const CARD_REFERENCE_READY_DELAY_MS = 1000;
@@ -148,6 +149,10 @@ async function replyCardReference(client: Awaited<ReturnType<typeof feishuSdkCli
   });
 }
 
+async function sendCardReferenceToChat(bot: FeishuBot, chatId: string, cardId: string) {
+  return createChatMessage(bot, chatId, 'interactive', { type: 'card', data: { card_id: cardId } });
+}
+
 async function appendUsersCardElements(client: Awaited<ReturnType<typeof feishuSdkClient>>, cardId: string, chunks: AtRecord[][], buildElements: (chunk: AtRecord[], index: number) => object[]) {
   let sequence = 1;
   for (let index = 1; index < chunks.length; index += 1) {
@@ -164,7 +169,13 @@ async function appendUsersCardElements(client: Awaited<ReturnType<typeof feishuS
   }
 }
 
-export async function replyUsersCard(bot: FeishuBot, messageId: string, records: AtRecord[], replyInThread = false) {
+export async function replyUsersCard(
+  bot: FeishuBot,
+  messageId: string,
+  records: AtRecord[],
+  replyInThread = false,
+  replyMarkdownInThread = true
+) {
   const client = await feishuSdkClient(bot);
   const chunks = chunkUsersRecords(records);
 
@@ -178,6 +189,30 @@ export async function replyUsersCard(bot: FeishuBot, messageId: string, records:
   const personListMessageId = personListReply.data?.message_id;
   if (!personListMessageId) throw new Error('failed to get person list message id');
   const markdownCardId = await createCardEntity(client, usersMarkdownCard(records));
-  await replyCardReference(client, personListMessageId, markdownCardId, true);
+  await replyCardReference(
+    client,
+    replyMarkdownInThread ? personListMessageId : messageId,
+    markdownCardId,
+    replyMarkdownInThread
+  );
   await appendUsersCardElements(client, markdownCardId, chunks, (chunk, index) => [usersMarkdownElement(chunk, index)]);
+}
+
+export async function sendUsersCardToChat(bot: FeishuBot, chatId: string, records: AtRecord[]) {
+  const client = await feishuSdkClient(bot);
+  const chunks = chunkUsersRecords(records);
+
+  const personListCardId = await createCardEntity(client, usersPersonListCard(records));
+  const personListMessageId = await sendCardReferenceToChat(bot, chatId, personListCardId);
+  await appendUsersCardElements(client, personListCardId, chunks, (chunk, index) => [
+    usersDividerElement(index),
+    usersPersonListElement(chunk, index)
+  ]);
+
+  const markdownCardId = await createCardEntity(client, usersMarkdownCard(records));
+  const markdownReply = await replyCardReference(client, personListMessageId, markdownCardId, true);
+  await appendUsersCardElements(client, markdownCardId, chunks, (chunk, index) => [usersMarkdownElement(chunk, index)]);
+  const markdownMessageId = String(markdownReply.data?.message_id || '').trim();
+  if (!markdownMessageId) throw new Error('failed to get users markdown card message id');
+  return { personListMessageId, markdownMessageId };
 }

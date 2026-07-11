@@ -3,6 +3,7 @@ import { replyCard } from '../api.js';
 
 export const FALLBACK_MENTION_CARD_KIND = 'fallback_mention_candidates';
 export const FALLBACK_MENTION_FORM_FIELD = 'fallback_mention_user_ids';
+export const FALLBACK_MENTION_SEND_TO_GROUP_FORM_FIELD = 'fallback_mention_send_to_group';
 
 export type FallbackMentionCardAction = 'withdraw' | 'add_all' | 'add';
 
@@ -15,6 +16,7 @@ type FallbackMentionCardContext = {
   sourceMessageId: string;
   atById: string;
   atByName: string;
+  showSendToGroup: boolean;
 };
 
 function plainText(content: string) {
@@ -46,8 +48,46 @@ function actionButton(action: FallbackMentionCardAction, context: FallbackMentio
         value: {
           kind: FALLBACK_MENTION_CARD_KIND,
           action,
-          ...context
+          sourceMessageId: context.sourceMessageId,
+          atById: context.atById,
+          atByName: context.atByName
         }
+      }
+    ]
+  };
+}
+
+function sendToGroupSelect() {
+  return {
+    tag: 'column_set',
+    flex_mode: 'none',
+    horizontal_spacing: '8px',
+    columns: [
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 3,
+        elements: [{ tag: 'markdown', content: '**是否发送到群聊**' }]
+      },
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 7,
+        elements: [
+          {
+            tag: 'select_static',
+            element_id: FALLBACK_MENTION_SEND_TO_GROUP_FORM_FIELD,
+            name: FALLBACK_MENTION_SEND_TO_GROUP_FORM_FIELD,
+            initial_option: 'yes',
+            type: 'default',
+            width: 'fill',
+            required: true,
+            options: [
+              { text: plainText('是'), value: 'yes' },
+              { text: plainText('否'), value: 'no' }
+            ]
+          }
+        ]
       }
     ]
   };
@@ -96,6 +136,7 @@ export function buildFallbackMentionCard(candidates: FallbackMentionCandidate[],
                 value: candidate.id
               }))
             },
+            ...(context.showSendToGroup ? [sendToGroupSelect()] : []),
             {
               tag: 'column_set',
               flex_mode: 'none',
@@ -135,4 +176,23 @@ export async function replyFallbackMentionCard(
   context: FallbackMentionCardContext
 ) {
   await replyCard(bot, messageId, buildFallbackMentionCard(candidates, context), true);
+}
+
+export async function replyFallbackMentionOperatorCard(bot: FeishuBot, messageId: string, operatorId: string) {
+  await replyCard(bot, messageId, {
+    schema: '2.0',
+    body: {
+      elements: [
+        { tag: 'markdown', content: '触发人：' },
+        {
+          tag: 'person_list',
+          element_id: 'fallback_mention_operator',
+          drop_invalid_user_id: true,
+          show_avatar: true,
+          size: 'large',
+          persons: [{ id: operatorId }]
+        }
+      ]
+    }
+  }, true);
 }
