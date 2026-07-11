@@ -7,7 +7,7 @@ import { isTopicChat, replyText } from './api.js';
 import { runPassiveInteractions } from './passive/index.js';
 import { handleFeishuCommand } from './commands/index.js';
 import { getDefaultCommand } from './commands/douyin.js';
-import { fallbackMentionCandidates } from './fallback-mentions.js';
+import { fallbackMentionCandidates, fallbackMentionCardEnabled } from './fallback-mentions.js';
 import { replyFallbackMentionCard } from './cards/fallback-mention-card.js';
 
 export async function handleFeishuMessage(bot: FeishuBot, event: any) {
@@ -41,7 +41,9 @@ export async function handleFeishuMessage(bot: FeishuBot, event: any) {
       if (!fallbackHandled) {
         await replyText(bot, messageId, defaultCommand);
       }
-      const candidates = await fallbackMentionCandidates(bot, message);
+      const candidates = fallbackMentionCardEnabled(bot.id, chatId)
+        ? await fallbackMentionCandidates(bot, message)
+        : [];
       if (candidates.length > 0) {
         const showSendToGroup = Boolean(chatId) && !isThreadMessage(message) && (
           chatType === 'p2p' ||

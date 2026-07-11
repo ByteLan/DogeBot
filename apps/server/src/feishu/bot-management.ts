@@ -97,6 +97,7 @@ export function deleteOwnedFeishuBot(botId: number, userId: number) {
   db.prepare('DELETE FROM feishu_bot_default_commands WHERE bot_id = ?').run(botId);
   db.prepare('DELETE FROM feishu_chat_cron_tasks WHERE bot_id = ?').run(botId);
   db.prepare('DELETE FROM feishu_douyin_subscriptions WHERE bot_id = ?').run(botId);
+  db.prepare('DELETE FROM feishu_chat_fallback_mention_settings WHERE bot_id = ?').run(botId);
   db.prepare('DELETE FROM feishu_chat_passive_settings WHERE bot_id = ?').run(botId);
   db.prepare('DELETE FROM feishu_chat_style_sticker_settings WHERE bot_id = ?').run(botId);
   db.prepare('DELETE FROM feishu_bots WHERE id = ? AND user_id = ?').run(botId, userId);
