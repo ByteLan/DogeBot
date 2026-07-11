@@ -2,9 +2,10 @@ import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, extname, join } from 'node:path';
 import type { FeishuBot, DownloadedMessageResource, ParsedFeishuMessage, PassiveMediaResource } from '../../types.js';
+import { parsePositiveInt } from '../../config.js';
 import { tenantAccessToken, openBase } from '../client.js';
 
-export const MESSAGE_RESOURCE_MAX_BYTES = 4 * 1024 * 1024;
+export const MESSAGE_RESOURCE_MAX_BYTES = parsePositiveInt(process.env.DOGEBOT_FEISHU_MESSAGE_RESOURCE_MAX_BYTES, 4 * 1024 * 1024);
 export const MESSAGE_RESOURCE_CACHE_DIR = join(tmpdir(), 'dogebot-feishu-image-cache');
 export const MESSAGE_RESOURCE_PROCESSED_DIR = join(tmpdir(), 'dogebot-feishu-image-processed');
 export const MESSAGE_RESOURCE_CACHE_TTL_MS = 3 * 24 * 60 * 60 * 1000;
