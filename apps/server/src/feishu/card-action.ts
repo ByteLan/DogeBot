@@ -191,6 +191,7 @@ export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
   const fallbackMentionParsed = parseFallbackMentionCardActionPayload(payload);
   if (fallbackMentionParsed) {
     if (fallbackMentionParsed.eventId && !rememberFeishuEventKey(`card:${fallbackMentionParsed.eventId}`)) return;
+    if (!fallbackMentionParsed.operatorId || fallbackMentionParsed.operatorId !== fallbackMentionParsed.atById) return;
 
     if (fallbackMentionParsed.action === 'withdraw') {
       try {
