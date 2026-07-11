@@ -7,6 +7,8 @@ import { replyText } from './api.js';
 import { runPassiveInteractions } from './passive/index.js';
 import { handleFeishuCommand } from './commands/index.js';
 import { getDefaultCommand } from './commands/douyin.js';
+import { fallbackMentionCandidates } from './fallback-mentions.js';
+import { replyFallbackMentionCard } from './cards/fallback-mention-card.js';
 
 export async function handleFeishuMessage(bot: FeishuBot, event: any) {
   const message = event?.message;
@@ -35,10 +37,18 @@ export async function handleFeishuMessage(bot: FeishuBot, event: any) {
 
     const defaultCommand = getDefaultCommand(bot.id);
     if (defaultCommand) {
-      if (await handleFeishuCommand(bot, event, messageId, defaultCommand, { allowSetDefault: false })) {
-        return;
+      const fallbackHandled = await handleFeishuCommand(bot, event, messageId, defaultCommand, { allowSetDefault: false });
+      if (!fallbackHandled) {
+        await replyText(bot, messageId, defaultCommand);
       }
-      await replyText(bot, messageId, defaultCommand);
+      const candidates = await fallbackMentionCandidates(bot, message);
+      if (candidates.length > 0) {
+        await replyFallbackMentionCard(bot, messageId, candidates, {
+          sourceMessageId: messageId,
+          atById: sender.id,
+          atByName: sender.name
+        });
+      }
       return;
     }
   }
