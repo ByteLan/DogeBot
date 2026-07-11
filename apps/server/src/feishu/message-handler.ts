@@ -1,9 +1,9 @@
 import type { FeishuBot } from '../types.js';
 import { passiveInteractionConfig } from '../config.js';
-import { parseFeishuMessage, messageChatId, senderIdentity, messageMentionsBot, isFromCurrentBot } from './message-parser.js';
+import { parseFeishuMessage, messageChatId, senderIdentity, messageMentionsBot, isFromCurrentBot, isThreadMessage } from './message-parser.js';
 import { readRecentChatMessages, rememberRecentChatMessage } from './chat-memory.js';
 import { rememberFeishuEventKey } from './event-dedup.js';
-import { replyText } from './api.js';
+import { isTopicChat, replyText } from './api.js';
 import { runPassiveInteractions } from './passive/index.js';
 import { handleFeishuCommand } from './commands/index.js';
 import { getDefaultCommand } from './commands/douyin.js';
@@ -43,10 +43,15 @@ export async function handleFeishuMessage(bot: FeishuBot, event: any) {
       }
       const candidates = await fallbackMentionCandidates(bot, message);
       if (candidates.length > 0) {
+        const showSendToGroup = Boolean(chatId) && !isThreadMessage(message) && (
+          chatType === 'p2p' ||
+          (chatType === 'group' && await isTopicChat(bot, chatId).then((topic) => !topic).catch(() => false))
+        );
         await replyFallbackMentionCard(bot, messageId, candidates, {
           sourceMessageId: messageId,
           atById: sender.id,
-          atByName: sender.name
+          atByName: sender.name,
+          showSendToGroup
         });
       }
       return;

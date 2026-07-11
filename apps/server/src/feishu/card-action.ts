@@ -9,8 +9,8 @@ import { styleStickerFeatureName, formatRatePercent, defaultRateForFeature, getP
 import { addDouyinSubscription, removeDouyinSubscription, getDefaultCommand } from './commands/douyin.js';
 import { addCronTask, listChatCronTasks, deleteCronTaskById } from './cron.js';
 import { fallbackMentionCandidates } from './fallback-mentions.js';
-import { FALLBACK_MENTION_CARD_KIND, FALLBACK_MENTION_FORM_FIELD, isFallbackMentionCardAction } from './cards/fallback-mention-card.js';
-import { listMentions, replyUsersCard, upsertMentions } from './commands/users.js';
+import { FALLBACK_MENTION_CARD_KIND, FALLBACK_MENTION_FORM_FIELD, FALLBACK_MENTION_SEND_TO_GROUP_FORM_FIELD, isFallbackMentionCardAction, replyFallbackMentionOperatorCard } from './cards/fallback-mention-card.js';
+import { listMentions, replyUsersCard, sendUsersCardToChat, upsertMentions } from './commands/users.js';
 
 const STYLE_STICKER_CARD_KIND = 'style_sticker_generator';
 
@@ -104,6 +104,7 @@ function parseCardActionContext(payload: any) {
     chatId,
     operatorId:
       idFromFeishuObject(event?.operator?.operator_id) ||
+      idFromFeishuObject(event?.operator) ||
       idFromFeishuObject(event?.operator_id) ||
       String(payload?.open_id || payload?.user_id || '').trim(),
     formValue: isRecord(event?.action?.form_value) ? event.action.form_value : {}
@@ -157,6 +158,7 @@ function parseFallbackMentionCardActionPayload(payload: any) {
     eventId: context.eventId,
     messageId: context.messageId,
     chatId: context.chatId,
+    operatorId: context.operatorId,
     action: actionValue.action,
     sourceMessageId,
     atById,
@@ -223,6 +225,12 @@ export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
         throw new Error('fallback mention card requires at least one valid selected user');
       }
       const newCount = fallbackMentionParsed.action === 'add' ? selected.length : undefined;
+      const sendToGroupFormValue = formStringValue(
+        fallbackMentionParsed.formValue,
+        FALLBACK_MENTION_SEND_TO_GROUP_FORM_FIELD
+      );
+      const sendToGroup = sendToGroupFormValue === 'yes';
+      const replyInThread = !sendToGroup;
 
       try {
         await deleteMessage(bot, fallbackMentionParsed.messageId);
@@ -235,11 +243,41 @@ export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
       }
 
       upsertMentions(bot.id, fallbackMentionParsed.atById, fallbackMentionParsed.atByName, selected);
+      const records = listMentions(bot.id, fallbackMentionParsed.atById, newCount);
+      if (sendToGroup) {
+        const { personListMessageId } = await sendUsersCardToChat(bot, fallbackMentionParsed.chatId, records);
+        console.log('[feishu] fallback mention operator card preparing', {
+          botId: bot.id,
+          chatId: fallbackMentionParsed.chatId,
+          personListMessageId,
+          operatorId: fallbackMentionParsed.operatorId || ''
+        });
+        if (fallbackMentionParsed.operatorId) {
+          try {
+            await replyFallbackMentionOperatorCard(bot, personListMessageId, fallbackMentionParsed.operatorId);
+            console.log('[feishu] fallback mention operator card sent', {
+              botId: bot.id,
+              personListMessageId,
+              operatorId: fallbackMentionParsed.operatorId
+            });
+          } catch (error) {
+            console.error('[feishu] fallback mention operator card send failed', {
+              botId: bot.id,
+              personListMessageId,
+              operatorId: fallbackMentionParsed.operatorId,
+              error: error instanceof Error ? error.message : String(error)
+            });
+            throw error;
+          }
+        }
+        return;
+      }
       await replyUsersCard(
         bot,
         fallbackMentionParsed.sourceMessageId,
-        listMentions(bot.id, fallbackMentionParsed.atById, newCount),
-        true
+        records,
+        replyInThread,
+        replyInThread
       );
     } catch (error) {
       console.error('[feishu] fallback mention card action failed', {
