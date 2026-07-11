@@ -243,5 +243,6 @@ export function identityLabel(name: string, id: string) {
 
 export function isManualReverseCommand(text: string) {
   if (!text.trim()) return false;
-  return /(?:^|[\s,.;!?，。！？、])\/?reverse(?=$|[\s,.;!?，。！？、])/i.test(text) || text.includes('反转');
+  return /(?:^|[\s,.;!?，。！？、])\/?reverse(?=$|[\s,.;!?，。！？、])/i.test(text)
+    || ['反转', '翻转', '镜像', '对称'].some((keyword) => text.includes(keyword));
 }

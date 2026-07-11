@@ -85,7 +85,7 @@ const HELP_COMMAND_ROWS: HelpCommandRow[] = [
   },
   {
     command: '/reverse、/反转',
-    params: '也支持直接发送 reverse / 反转；优先取当前消息首图，否则取引用消息里的图片或表情包',
+    params: '也支持直接发送 reverse / 反转 / 翻转 / 镜像 / 对称；优先取当前消息首图，否则取引用消息里的图片或表情包',
     description: '将找到的图片或表情包做一次镜像反转；如果命中话题消息，则直接回复到话题里，否则发送到当前会话。'
   },
   {
