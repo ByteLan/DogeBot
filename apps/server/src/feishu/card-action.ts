@@ -4,11 +4,11 @@ import { deleteMessage, updateInteractiveMessage, replyMedia, fetchMessageById }
 import { rememberFeishuEventKey } from './event-dedup.js';
 import { idFromFeishuObject } from './message-parser.js';
 import { buildStyleStickerCard, buildStyleStickerHdrLink, renderStyleStickerCardState, STYLE_STICKER_FORM_FIELDS } from './cards/style-sticker-card.js';
-import { buildHelpCard, HELP_CARD_KIND, HELP_RATE_FORM_FIELDS, HELP_MAX_FORM_FIELDS, HELP_DOUYIN_FORM_FIELDS, HELP_CRON_FORM_FIELDS, HELP_RATE_DESCRIPTORS, HELP_MAX_DESCRIPTORS, helpRateSettingSummary, helpRateEnabledField, recentUnsubscribedDouyinClickTexts, currentChatDouyinSubscriptionsWithRecentUpdates } from './cards/help-card.js';
+import { buildHelpCard, HELP_CARD_KIND, HELP_RATE_FORM_FIELDS, HELP_MAX_FORM_FIELDS, HELP_DOUYIN_FORM_FIELDS, HELP_CRON_FORM_FIELDS, HELP_FALLBACK_MENTION_FORM_FIELDS, HELP_RATE_DESCRIPTORS, HELP_MAX_DESCRIPTORS, helpRateSettingSummary, helpRateEnabledField, recentUnsubscribedDouyinClickTexts, currentChatDouyinSubscriptionsWithRecentUpdates } from './cards/help-card.js';
 import { styleStickerFeatureName, formatRatePercent, defaultRateForFeature, getPassiveFeatureSetting, setPassiveFeatureSetting, getStyleStickerSetting, setStyleStickerSetting } from './passive/settings.js';
 import { addDouyinSubscription, removeDouyinSubscription, getDefaultCommand } from './commands/douyin.js';
 import { addCronTask, listChatCronTasks, deleteCronTaskById } from './cron.js';
-import { fallbackMentionCandidates } from './fallback-mentions.js';
+import { fallbackMentionCandidates, fallbackMentionCardEnabled, setFallbackMentionCardEnabled } from './fallback-mentions.js';
 import { FALLBACK_MENTION_CARD_KIND, FALLBACK_MENTION_FORM_FIELD, FALLBACK_MENTION_SEND_TO_GROUP_FORM_FIELD, isFallbackMentionCardAction, replyFallbackMentionOperatorCard } from './cards/fallback-mention-card.js';
 import { listMentions, replyUsersCard, sendUsersCardToChat, upsertMentions } from './commands/users.js';
 
@@ -506,6 +506,15 @@ export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
     }
     if (deletedSummaries.length > 0) {
       diffs.push(`- \`/add-cron --delete\`：删除任务 \`${deletedSummaries.join('`、`')}\``);
+    }
+  }
+
+  const fallbackMentionEnabled = parseHelpEnabledValue(helpParsed.formValue[HELP_FALLBACK_MENTION_FORM_FIELDS.enabled]);
+  if (fallbackMentionEnabled !== undefined) {
+    const currentFallbackMentionEnabled = fallbackMentionCardEnabled(bot.id, helpParsed.chatId);
+    if (fallbackMentionEnabled !== currentFallbackMentionEnabled) {
+      setFallbackMentionCardEnabled(bot.id, helpParsed.chatId, fallbackMentionEnabled);
+      diffs.push(`- \`兜底 @ 人员收集\`：状态 \`${currentFallbackMentionEnabled ? '开启' : '关闭'}\` -> \`${fallbackMentionEnabled ? '开启' : '关闭'}\``);
     }
   }
 

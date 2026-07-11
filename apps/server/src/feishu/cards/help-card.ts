@@ -3,6 +3,7 @@ import { db } from '../../db.js';
 import { passiveInteractionConfig, openApiBaseUrl } from '../../config.js';
 import { replyCard } from '../api.js';
 import { getPassiveFeatureSetting, getStyleStickerSetting, defaultRateForFeature, formatRatePercent } from '../passive/settings.js';
+import { fallbackMentionCardEnabled } from '../fallback-mentions.js';
 import { plainText } from './style-sticker-card.js';
 import { listChatCronTasks, cronTaskSummary } from '../cron.js';
 import { getDefaultCommand } from '../commands/douyin.js';
@@ -31,6 +32,9 @@ const HELP_CRON_FORM_FIELDS = {
   cronExpr: 'cronExpr',
   commandText: 'cronCommandText',
   deleteTaskIds: 'cronDeleteTaskIds'
+} as const;
+const HELP_FALLBACK_MENTION_FORM_FIELDS = {
+  enabled: 'fallbackMentionCardEnabled'
 } as const;
 
 const HELP_RATE_DESCRIPTORS: HelpRateDescriptor[] = [
@@ -139,7 +143,8 @@ function helpOverviewMarkdown() {
     '',
     '**补充说明**',
     '- 下方表单还支持设置 `/byte-style` 与 `/scale-new-heights` 的 `--max`。',
-    '- 也支持通过多选下拉，批量新增或取消 `/douyin` 订阅。'
+    '- 也支持通过多选下拉，批量新增或取消 `/douyin` 订阅。',
+    '- 可设置未命中 `/users` 时，兜底指令是否弹出 @ 人员选择卡片。'
   ].join('\n');
 }
 
@@ -217,6 +222,22 @@ function helpRateEnabledSelect(descriptor: HelpRateDescriptor, setting: PassiveC
     initial_option: setting.enabled ? 'enabled' : 'disabled',
     type: 'default',
     width: 'fill',
+    options: [
+      { text: plainText('开启'), value: 'enabled' },
+      { text: plainText('关闭'), value: 'disabled' }
+    ]
+  };
+}
+
+function helpFallbackMentionEnabledSelect(enabled: boolean) {
+  return {
+    tag: 'select_static',
+    element_id: `help_fallback_mention_${HELP_FALLBACK_MENTION_FORM_FIELDS.enabled}`,
+    name: HELP_FALLBACK_MENTION_FORM_FIELDS.enabled,
+    initial_option: enabled ? 'enabled' : 'disabled',
+    type: 'default',
+    width: 'fill',
+    required: true,
     options: [
       { text: plainText('开启'), value: 'enabled' },
       { text: plainText('关闭'), value: 'disabled' }
@@ -418,6 +439,10 @@ function helpCronSummaryMarkdown(botId: number, chatId: string) {
   ].join('\n');
 }
 
+function helpFallbackMentionSummaryMarkdown(botId: number, chatId: string) {
+  return `**兜底 @ 人员收集**\n- 未命中 \`/users\` 且执行兜底指令时，弹出 @ 人员选择卡片：\`${fallbackMentionCardEnabled(botId, chatId) ? '开启' : '关闭'}\``;
+}
+
 export function helpReadonlySummaryMarkdown(bot: FeishuBot, chatId: string) {
   return [
     helpRateSummaryMarkdown(bot.id, chatId),
@@ -427,6 +452,8 @@ export function helpReadonlySummaryMarkdown(bot: FeishuBot, chatId: string) {
     helpDouyinSummaryMarkdown(bot, chatId),
     '',
     helpCronSummaryMarkdown(bot.id, chatId),
+    '',
+    helpFallbackMentionSummaryMarkdown(bot.id, chatId),
     '',
     '如需再次编辑，请重新发送 `/help`。'
   ].join('\n');
@@ -499,6 +526,7 @@ export function buildHelpCard(
   const config = passiveInteractionConfig();
     const currentCronTasks = listChatCronTasks(bot.id, chatId);
     const defaultCommand = getDefaultCommand(bot.id);
+  const fallbackMentionEnabled = fallbackMentionCardEnabled(bot.id, chatId);
   const elements: object[] = [
     {
       tag: 'markdown',
@@ -573,6 +601,12 @@ export function buildHelpCard(
             helpCronExprInput(),
             helpCronCommandTextInput(defaultCommand),
             helpCronDeleteMultiSelect(currentCronTasks),
+            { tag: 'hr' },
+            {
+              tag: 'markdown',
+              content: '**兜底 @ 人员收集**\n未命中 `/users` 且执行兜底指令时，是否弹出 @ 人员选择卡片。'
+            },
+            helpFallbackMentionEnabledSelect(fallbackMentionEnabled),
         {
           tag: 'column_set',
           flex_mode: 'none',
@@ -651,6 +685,7 @@ export {
   HELP_MAX_FORM_FIELDS,
   HELP_DOUYIN_FORM_FIELDS,
   HELP_CRON_FORM_FIELDS,
+  HELP_FALLBACK_MENTION_FORM_FIELDS,
   HELP_RATE_DESCRIPTORS,
   HELP_MAX_DESCRIPTORS,
   HELP_COMMAND_ROWS

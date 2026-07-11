@@ -102,6 +102,15 @@ db.exec(`
     UNIQUE(bot_id, chat_id, click_text)
   );
 
+  CREATE TABLE IF NOT EXISTS feishu_chat_fallback_mention_settings (
+    bot_id INTEGER NOT NULL,
+    chat_id TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (bot_id, chat_id)
+  );
+
   CREATE TABLE IF NOT EXISTS feishu_chat_passive_settings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     bot_id INTEGER NOT NULL,
@@ -203,6 +212,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_douyin_aweme_records_user_aweme_status ON douyin_aweme_records(user_id, aweme_id, status);
   CREATE INDEX IF NOT EXISTS idx_feishu_chat_cron_tasks_due ON feishu_chat_cron_tasks(enabled, next_run_at);
   CREATE INDEX IF NOT EXISTS idx_feishu_douyin_subscriptions_lookup ON feishu_douyin_subscriptions(bot_id, chat_id, click_text);
+  CREATE INDEX IF NOT EXISTS idx_feishu_chat_fallback_mention_settings_lookup ON feishu_chat_fallback_mention_settings(bot_id, chat_id);
   CREATE INDEX IF NOT EXISTS idx_feishu_chat_passive_settings_lookup ON feishu_chat_passive_settings(bot_id, chat_id, feature);
   CREATE INDEX IF NOT EXISTS idx_feishu_chat_style_sticker_settings_lookup ON feishu_chat_style_sticker_settings(bot_id, chat_id, feature);
 `);
