@@ -10,8 +10,20 @@ import { getDefaultCommand } from './commands/douyin.js';
 import { fallbackMentionCandidates, fallbackMentionCardEnabled } from './fallback-mentions.js';
 import { replyFallbackMentionCard } from './cards/fallback-mention-card.js';
 import { extractAwemeIdFromText, reportPossiblyInvalidAweme } from './douyin-guard.js';
+import type { DouyinValidity } from '../douyin-check.js';
 
 const DOUYIN_INVALID_KEYWORDS = ['视频无效', '视频失效'];
+
+/** Human-readable summary of a keyword-triggered validity check, for the reporting user. */
+function formatDouyinCheckReply(awemeId: string, validity: DouyinValidity) {
+  if (validity.errored) {
+    return `检测未完成（网络异常，暂按有效处理）\naweme_id：${awemeId}`;
+  }
+  if (validity.valid) {
+    return `检测结果：有效 ✅\naweme_id：${awemeId}\n标题：${validity.title || '（未获取到标题）'}`;
+  }
+  return `检测结果：疑似失效 ⚠️，已私聊通知管理员确认\naweme_id：${awemeId}\n标题：${validity.title || '（无法获取，疑似失效）'}`;
+}
 
 /**
  * Resolve the aweme_id a "视频无效/视频失效" report refers to: prefer the current
@@ -53,13 +65,22 @@ export async function handleFeishuMessage(bot: FeishuBot, event: any) {
   if (text && DOUYIN_INVALID_KEYWORDS.some((keyword) => text.includes(keyword))) {
     const awemeId = await resolveReportedAwemeId(bot, message, text);
     if (awemeId) {
-      const handled = await reportPossiblyInvalidAweme(bot, awemeId, {
+      const validity = await reportPossiblyInvalidAweme(bot, awemeId, {
         chatId,
         personId: sender.id,
         personName: sender.name,
         source: '群聊"视频无效/失效"上报'
       });
-      if (handled) return;
+      if (validity) {
+        await replyText(bot, messageId, formatDouyinCheckReply(awemeId, validity), true).catch((error) => {
+          console.error('[feishu] douyin keyword reply failed', {
+            botId: bot.id,
+            awemeId,
+            error: error instanceof Error ? error.message : String(error)
+          });
+        });
+        return;
+      }
     }
   }
 
