@@ -3,22 +3,31 @@ import { db } from '../../db.js';
 import { randomDouyinAwemeIds } from '../../douyin.js';
 import { sendTextToChat } from '../api.js';
 import { getBot } from '../bot-management.js';
+import { resolveValidAwemeId, type DouyinTriggerContext } from '../douyin-guard.js';
 
-export async function sendDouyinMessages(bot: FeishuBot, clickText: string, count: number, sendMessage: (text: string) => Promise<void>) {
+export async function sendDouyinMessages(
+  bot: FeishuBot,
+  clickText: string,
+  count: number,
+  sendMessage: (text: string) => Promise<void>,
+  trigger: DouyinTriggerContext
+) {
   const awemeRecords = randomDouyinAwemeIds(bot.user_id!, clickText, count);
   if (awemeRecords.length === 0) {
     await sendMessage(`暂无"${clickText}"的抖音收藏记录`);
     return;
   }
+  const attempted = new Set<string>();
   for (const [index, record] of awemeRecords.entries()) {
+    const awemeId = await resolveValidAwemeId(bot, clickText, record.aweme_id, trigger, attempted);
     try {
-      await sendMessage(`https://www.douyin.com/video/${record.aweme_id}`);
+      await sendMessage(`https://www.douyin.com/video/${awemeId}`);
     } catch (error) {
       console.error('[feishu] douyin send failed', {
         botId: bot.id,
         userId: bot.user_id,
         clickText,
-        awemeId: record.aweme_id,
+        awemeId,
         currentIndex: index + 1,
         totalCount: awemeRecords.length,
         error: error instanceof Error ? error.message : String(error)
@@ -67,17 +76,25 @@ export async function notifyDouyinSubscriptions(payload: { userId: number; click
   for (const subscription of subscriptions) {
     const bot = getBot(subscription.bot_id);
     if (!bot || !bot.enabled) continue;
+    const trigger: DouyinTriggerContext = {
+      chatId: subscription.chat_id,
+      personId: '',
+      personName: '订阅推送',
+      source: `订阅推送（clickText=${payload.clickText}）`
+    };
+    const attempted = new Set<string>();
 
     for (const [index, awemeId] of payload.awemeIds.entries()) {
+      const resolvedAwemeId = await resolveValidAwemeId(bot, payload.clickText, awemeId, trigger, attempted);
       try {
-        await sendTextToChat(bot, subscription.chat_id, `https://www.douyin.com/video/${awemeId}`);
+        await sendTextToChat(bot, subscription.chat_id, `https://www.douyin.com/video/${resolvedAwemeId}`);
       } catch (error) {
         console.error('[feishu] douyin subscription send failed', {
           botId: bot.id,
           userId: payload.userId,
           chatId: subscription.chat_id,
           clickText: payload.clickText,
-          awemeId,
+          awemeId: resolvedAwemeId,
           currentIndex: index + 1,
           totalCount: payload.awemeIds.length,
           error: error instanceof Error ? error.message : String(error)

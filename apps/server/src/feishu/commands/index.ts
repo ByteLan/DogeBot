@@ -490,7 +490,19 @@ export async function handleFeishuCommand(bot: FeishuBot, event: any, messageId:
       await replyText(bot, messageId, '当前机器人未绑定用户，无法读取抖音收藏记录');
       return true;
     }
-    await sendDouyinMessages(bot, douyinCommand.clickText, douyinCommand.count, (messageText) => replyText(bot, messageId, messageText));
+    const douyinSender = senderIdentity(event);
+    await sendDouyinMessages(
+      bot,
+      douyinCommand.clickText,
+      douyinCommand.count,
+      (messageText) => replyText(bot, messageId, messageText),
+      {
+        chatId,
+        personId: douyinSender.id,
+        personName: douyinSender.name,
+        source: '/douyin 指令'
+      }
+    );
     return true;
   }
 

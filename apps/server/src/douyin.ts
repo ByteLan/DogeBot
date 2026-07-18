@@ -111,6 +111,30 @@ export function randomDouyinAwemeIds(userId: number, clickText: string, count: n
   `).all(userId, clickText, count) as DouyinAwemeRecord[];
 }
 
+export function randomDouyinAwemeIdExcluding(userId: number, clickText: string, excludeIds: string[]) {
+  const normalizedExcludes = [...new Set(excludeIds.map((id) => String(id || '').trim()).filter(Boolean))];
+  if (normalizedExcludes.length === 0) return randomDouyinAwemeId(userId, clickText);
+  const placeholders = normalizedExcludes.map(() => '?').join(', ');
+  const row = db.prepare(`
+    SELECT aweme_id
+    FROM douyin_aweme_records
+    WHERE user_id = ? AND click_text = ? AND ${ACTIVE_DOUYIN_RECORD_FILTER}
+      AND aweme_id NOT IN (${placeholders})
+    ORDER BY RANDOM()
+    LIMIT 1
+  `).get(userId, clickText, ...normalizedExcludes) as DouyinAwemeRecord | undefined;
+  return row?.aweme_id || '';
+}
+
+export function findDouyinRecordByAwemeId(userId: number, awemeId: string) {
+  return db.prepare(`
+    SELECT click_text, status
+    FROM douyin_aweme_records
+    WHERE user_id = ? AND aweme_id = ?
+    LIMIT 1
+  `).get(userId, awemeId) as { click_text: string; status: string } | undefined;
+}
+
 export function randomDouyinAwemeIdByClickText(clickText: string) {
   const row = db.prepare(`
     SELECT aweme_id

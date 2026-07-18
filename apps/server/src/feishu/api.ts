@@ -80,6 +80,32 @@ export async function sendTextToChat(bot: FeishuBot, chatId: string, text: strin
   await createChatMessage(bot, chatId, 'text', { text });
 }
 
+export async function createUserMessage(bot: FeishuBot, openId: string, msgType: string, content: Record<string, unknown>) {
+  const token = await tenantAccessToken(bot);
+  try {
+    const result = await feishuJson<{ data?: { message_id?: string } }>(`${openBase(bot.domain)}/open-apis/im/v1/messages?receive_id_type=open_id`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ receive_id: openId, msg_type: msgType, content: JSON.stringify(content) })
+    });
+    const messageId = String(result.data?.message_id || '').trim();
+    if (!messageId) throw new Error('user message send failed: missing message_id');
+    return messageId;
+  } catch (error) {
+    console.error('[feishu] user message send failed', {
+      botId: bot.id,
+      openId,
+      msgType,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    throw error;
+  }
+}
+
+export async function sendTextToUser(bot: FeishuBot, openId: string, text: string) {
+  return createUserMessage(bot, openId, 'text', { text });
+}
+
 export async function sendImageToChat(bot: FeishuBot, chatId: string, imageKey: string) {
   await createChatMessage(bot, chatId, 'image', { image_key: imageKey });
 }

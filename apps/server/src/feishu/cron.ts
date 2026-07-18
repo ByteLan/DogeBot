@@ -3,6 +3,7 @@ import { db } from '../db.js';
 import { getBot } from './bot-management.js';
 import { sendTextToChat } from './api.js';
 import { randomDouyinAwemeIds } from '../douyin.js';
+import { resolveValidAwemeId, type DouyinTriggerContext } from './douyin-guard.js';
 
 let cronSchedulerTimer: NodeJS.Timeout | undefined;
 let cronSchedulerRunning = false;
@@ -184,21 +185,29 @@ function parseDouyinCommand(text: string): DouyinCommand {
 /**
  * Send douyin video messages. Inlined here to avoid circular dependency.
  */
-async function sendDouyinMessages(bot: FeishuBot, clickText: string, count: number, sendMessage: (text: string) => Promise<void>) {
+async function sendDouyinMessages(
+  bot: FeishuBot,
+  clickText: string,
+  count: number,
+  sendMessage: (text: string) => Promise<void>,
+  trigger: DouyinTriggerContext
+) {
   const awemeRecords = randomDouyinAwemeIds(bot.user_id!, clickText, count);
   if (awemeRecords.length === 0) {
     await sendMessage(`暂无"${clickText}"的抖音收藏记录`);
     return;
   }
+  const attempted = new Set<string>();
   for (const [index, record] of awemeRecords.entries()) {
+    const awemeId = await resolveValidAwemeId(bot, clickText, record.aweme_id, trigger, attempted);
     try {
-      await sendMessage(`https://www.douyin.com/video/${record.aweme_id}`);
+      await sendMessage(`https://www.douyin.com/video/${awemeId}`);
     } catch (error) {
       console.error('[feishu] douyin send failed', {
         botId: bot.id,
         userId: bot.user_id,
         clickText,
-        awemeId: record.aweme_id,
+        awemeId,
         currentIndex: index + 1,
         totalCount: awemeRecords.length,
         error: error instanceof Error ? error.message : String(error)
@@ -235,7 +244,18 @@ async function executeCronTask(task: ChatCronTask) {
     await sendTextToChat(bot, task.chat_id, `定时任务 #${task.id} 执行失败：当前机器人未绑定用户`);
     return;
   }
-  await sendDouyinMessages(bot, douyinCommand.clickText, douyinCommand.count, (messageText) => sendTextToChat(bot, task.chat_id, messageText));
+  await sendDouyinMessages(
+    bot,
+    douyinCommand.clickText,
+    douyinCommand.count,
+    (messageText) => sendTextToChat(bot, task.chat_id, messageText),
+    {
+      chatId: task.chat_id,
+      personId: '',
+      personName: '定时任务',
+      source: `定时任务 #${task.id}`
+    }
+  );
 }
 
 async function runCronSchedulerTick() {
