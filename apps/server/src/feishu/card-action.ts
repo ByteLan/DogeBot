@@ -11,8 +11,8 @@ import { addCronTask, listChatCronTasks, deleteCronTaskById } from './cron.js';
 import { fallbackMentionCandidates, fallbackMentionCardEnabled, setFallbackMentionCardEnabled } from './fallback-mentions.js';
 import { FALLBACK_MENTION_CARD_KIND, FALLBACK_MENTION_FORM_FIELD, FALLBACK_MENTION_SEND_TO_GROUP_FORM_FIELD, isFallbackMentionCardAction, replyFallbackMentionOperatorCard } from './cards/fallback-mention-card.js';
 import { listMentions, replyUsersCard, sendUsersCardToChat, upsertMentions } from './commands/users.js';
-import { DOUYIN_INVALID_CARD_KIND, isDouyinInvalidCardAction } from './cards/douyin-invalid-card.js';
-import { softDeleteAweme } from './douyin-guard.js';
+import { DOUYIN_INVALID_CARD_KIND, isDouyinInvalidCardAction, renderDouyinCardState, type DouyinCardContext, type DouyinCardVariant } from './cards/douyin-invalid-card.js';
+import { softDeleteAweme, softRestoreAweme } from './douyin-guard.js';
 
 const STYLE_STICKER_CARD_KIND = 'style_sticker_generator';
 
@@ -178,6 +178,20 @@ function parseDouyinInvalidCardActionPayload(payload: any) {
   const userId = Number(firstStringValue(actionValue.userId));
   const adminUserId = firstStringValue(actionValue.adminUserId);
   if (!awemeId || !Number.isInteger(userId) || userId <= 0) return null;
+  const rawVariant = firstStringValue(actionValue.variant);
+  const variant: DouyinCardVariant =
+    rawVariant === 'valid' || rawVariant === 'errored' || rawVariant === 'command' ? rawVariant : 'invalid';
+  const cardContext: DouyinCardContext = {
+    awemeId,
+    userId,
+    adminUserId,
+    variant,
+    title: firstStringValue(actionValue.title),
+    triggerChatId: firstStringValue(actionValue.triggerChatId),
+    triggerPersonId: firstStringValue(actionValue.triggerPersonId),
+    triggerPersonName: firstStringValue(actionValue.triggerPersonName),
+    source: firstStringValue(actionValue.source)
+  };
   return {
     eventId: context.eventId,
     messageId: context.messageId,
@@ -186,7 +200,8 @@ function parseDouyinInvalidCardActionPayload(payload: any) {
     action: actionValue.action,
     awemeId,
     userId,
-    adminUserId
+    adminUserId,
+    cardContext
   };
 }
 
@@ -223,25 +238,44 @@ export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
       return;
     }
 
-    if (douyinInvalidParsed.action === 'delete') {
+    if (douyinInvalidParsed.action === 'delete' || douyinInvalidParsed.action === 'restore') {
+      const isDelete = douyinInvalidParsed.action === 'delete';
       try {
-        const result = softDeleteAweme(douyinInvalidParsed.userId, douyinInvalidParsed.awemeId);
-        console.log('[feishu] douyin invalid card delete', {
+        const result = isDelete
+          ? softDeleteAweme(douyinInvalidParsed.userId, douyinInvalidParsed.awemeId)
+          : softRestoreAweme(douyinInvalidParsed.userId, douyinInvalidParsed.awemeId);
+        console.log(`[feishu] douyin card ${douyinInvalidParsed.action}`, {
           botId: bot.id,
           awemeId: douyinInvalidParsed.awemeId,
-          matched: result.matched,
-          deleted: result.deleted
+          result
         });
       } catch (error) {
-        console.error('[feishu] douyin invalid card delete failed', {
+        console.error(`[feishu] douyin card ${douyinInvalidParsed.action} failed`, {
           botId: bot.id,
           awemeId: douyinInvalidParsed.awemeId,
           error: error instanceof Error ? error.message : String(error)
         });
       }
+
+      // Re-render the card in place instead of withdrawing it.
+      try {
+        await updateInteractiveMessage(
+          bot,
+          douyinInvalidParsed.messageId,
+          renderDouyinCardState(douyinInvalidParsed.cardContext, isDelete ? 'deleted' : 'confirm')
+        );
+      } catch (error) {
+        console.error('[feishu] douyin card update failed', {
+          botId: bot.id,
+          messageId: douyinInvalidParsed.messageId,
+          action: douyinInvalidParsed.action,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+      return;
     }
 
-    // Both delete and cancel withdraw the confirmation card.
+    // Cancel (撤回) withdraws the card.
     try {
       await deleteMessage(bot, douyinInvalidParsed.messageId);
     } catch (error) {

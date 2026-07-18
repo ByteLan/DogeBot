@@ -1,8 +1,10 @@
 import type { FeishuBot } from '../types.js';
 import { db } from '../db.js';
 import { checkDouyinAwemeValidity, extractAwemeIdFromText, type DouyinValidity } from '../douyin-check.js';
-import { randomDouyinAwemeIdExcluding, findDouyinRecordByAwemeId, softDeleteDouyinAwemeRecords } from '../douyin.js';
+import { randomDouyinAwemeIdExcluding, findDouyinRecordByAwemeId, softDeleteDouyinAwemeRecords, restoreDouyinAwemeRecords } from '../douyin.js';
 import { notifyAdminDouyinInvalid, notifyAdminDouyinResult } from './cards/douyin-invalid-card.js';
+import { fetchMessageById } from './api.js';
+import { parseFeishuMessage, referencedMessageIds } from './message-parser.js';
 
 export { extractAwemeIdFromText };
 
@@ -159,4 +161,25 @@ export async function reportPossiblyInvalidAweme(
 
 export function softDeleteAweme(userId: number, awemeId: string) {
   return softDeleteDouyinAwemeRecords(userId, awemeId);
+}
+
+export function softRestoreAweme(userId: number, awemeId: string) {
+  return restoreDouyinAwemeRecords(userId, awemeId);
+}
+
+/**
+ * Resolve the aweme_id a message refers to: prefer the current message text (last
+ * run of 10+ digits), otherwise fall back to the referenced (quoted) message text.
+ */
+export async function resolveAwemeIdFromMessage(bot: FeishuBot, message: any, currentText: string) {
+  const fromCurrent = extractAwemeIdFromText(currentText);
+  if (fromCurrent) return fromCurrent;
+  for (const referencedMessageId of referencedMessageIds(message)) {
+    const referenced = await fetchMessageById(bot, referencedMessageId).catch(() => undefined);
+    if (!referenced) continue;
+    const referencedText = parseFeishuMessage(referenced.message).text;
+    const fromReferenced = extractAwemeIdFromText(referencedText);
+    if (fromReferenced) return fromReferenced;
+  }
+  return '';
 }

@@ -160,6 +160,20 @@ export function softDeleteDouyinAwemeRecords(userId: number, awemeId: string) {
   return { matched, deleted: result.changes };
 }
 
+export function restoreDouyinAwemeRecords(userId: number, awemeId: string) {
+  const matched = (db.prepare(`
+    SELECT COUNT(*) AS value
+    FROM douyin_aweme_records
+    WHERE user_id = ? AND aweme_id = ?
+  `).get(userId, awemeId) as { value: number }).value;
+  const result = db.prepare(`
+    UPDATE douyin_aweme_records
+    SET status = '', deleted_at = NULL, updated_at = CURRENT_TIMESTAMP
+    WHERE user_id = ? AND aweme_id = ? AND status = 'delete'
+  `).run(userId, awemeId);
+  return { matched, restored: result.changes };
+}
+
 export function getRandomMmVideo(_req: AuthenticatedRequest, res: Response) {
   const awemeId = randomDouyinAwemeIdByClickText('随机甜妹');
   if (!awemeId) {
