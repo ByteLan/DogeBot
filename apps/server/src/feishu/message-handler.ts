@@ -1,15 +1,15 @@
 import type { FeishuBot } from '../types.js';
 import { passiveInteractionConfig } from '../config.js';
-import { parseFeishuMessage, messageChatId, senderIdentity, messageMentionsBot, isFromCurrentBot, isThreadMessage, referencedMessageIds } from './message-parser.js';
+import { parseFeishuMessage, messageChatId, senderIdentity, messageMentionsBot, isFromCurrentBot, isThreadMessage } from './message-parser.js';
 import { readRecentChatMessages, rememberRecentChatMessage } from './chat-memory.js';
 import { rememberFeishuEventKey } from './event-dedup.js';
-import { isTopicChat, replyText, fetchMessageById } from './api.js';
+import { isTopicChat, replyText } from './api.js';
 import { runPassiveInteractions } from './passive/index.js';
 import { handleFeishuCommand } from './commands/index.js';
 import { getDefaultCommand } from './commands/douyin.js';
 import { fallbackMentionCandidates, fallbackMentionCardEnabled } from './fallback-mentions.js';
 import { replyFallbackMentionCard } from './cards/fallback-mention-card.js';
-import { extractAwemeIdFromText, reportPossiblyInvalidAweme } from './douyin-guard.js';
+import { reportPossiblyInvalidAweme, resolveAwemeIdFromMessage } from './douyin-guard.js';
 import type { DouyinValidity } from '../douyin-check.js';
 
 const DOUYIN_INVALID_KEYWORDS = ['视频无效', '视频失效'];
@@ -23,23 +23,6 @@ function formatDouyinCheckReply(awemeId: string, validity: DouyinValidity) {
     return `检测结果：有效 ✅\naweme_id：${awemeId}\n标题：${validity.title || '（未获取到标题）'}`;
   }
   return `检测结果：疑似失效 ⚠️，已私聊通知管理员确认\naweme_id：${awemeId}\n标题：${validity.title || '（无法获取，疑似失效）'}`;
-}
-
-/**
- * Resolve the aweme_id a "视频无效/视频失效" report refers to: prefer the current
- * message text, otherwise fall back to the referenced (quoted) message text.
- */
-async function resolveReportedAwemeId(bot: FeishuBot, message: any, currentText: string) {
-  const fromCurrent = extractAwemeIdFromText(currentText);
-  if (fromCurrent) return fromCurrent;
-  for (const referencedMessageId of referencedMessageIds(message)) {
-    const referenced = await fetchMessageById(bot, referencedMessageId).catch(() => undefined);
-    if (!referenced) continue;
-    const referencedText = parseFeishuMessage(referenced.message).text;
-    const fromReferenced = extractAwemeIdFromText(referencedText);
-    if (fromReferenced) return fromReferenced;
-  }
-  return '';
 }
 
 export async function handleFeishuMessage(bot: FeishuBot, event: any) {
@@ -63,7 +46,7 @@ export async function handleFeishuMessage(bot: FeishuBot, event: any) {
   if (text) rememberRecentChatMessage(bot.id, chatId, sender.id, sender.name, parsedMessage.textForRepeat || text);
 
   if (text && DOUYIN_INVALID_KEYWORDS.some((keyword) => text.includes(keyword))) {
-    const awemeId = await resolveReportedAwemeId(bot, message, text);
+    const awemeId = await resolveAwemeIdFromMessage(bot, message, text);
     if (awemeId) {
       const validity = await reportPossiblyInvalidAweme(bot, awemeId, {
         chatId,

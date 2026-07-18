@@ -1,13 +1,14 @@
 import type { FeishuBot, ParsedFeishuMessage, RevertCommand, StyleStickerFeature } from '../../types.js';
 import type { StickerFlavor } from '../../styleStickerCore.js';
 import { passiveInteractionConfig } from '../../config.js';
-import { replyText, replyMedia, fetchMessageById, sendImageToChat, uploadImage, deleteMessage } from '../api.js';
+import { replyText, replyMedia, replyCard, fetchMessageById, sendImageToChat, uploadImage, deleteMessage } from '../api.js';
 import { parseFeishuMessage, messageChatId, isThreadMessage, senderIdentity, referencedMessageIds, debugFeishu, mentionedUsers, isManualReverseCommand } from '../message-parser.js';
 import { parseUsersCommand, parseDouyinCommand, parseSetDefaultCommand, parseRevertCommand, isHelpCommand, parseAddCronCommand, parsePassiveToggleCommand, parseStyleStickerCommand } from './parsers.js';
 import { sendDouyinMessages, getDefaultCommandRecord, getDefaultCommand, setDefaultCommand, addDouyinSubscription, removeDouyinSubscription } from './douyin.js';
 import { replyUsersCard, softDeleteMentions, upsertMentions, topMentions, listMentions } from './users.js';
 import { getPassiveFeatureSetting, setPassiveFeatureSetting, getStyleStickerSetting, setStyleStickerSetting, passiveFeatureUsage, styleStickerUsage, describePassiveFeatureSetting, describeStyleStickerSetting, formatRatePercent, maxRateForDefault, defaultRateForFeature } from '../passive/settings.js';
-import { softDeleteDouyinAwemeRecords } from '../../douyin.js';
+import { resolveAwemeIdFromMessage } from '../douyin-guard.js';
+import { buildDouyinDeleteConfirmCard } from '../cards/douyin-invalid-card.js';
 import { renderStyleStickerImage } from '../../styleStickers.js';
 import { resolvePassiveMediaResource } from '../media/resource-cache.js';
 import { buildMirroredImage, sendMirroredMediaResource } from '../media/mirror.js';
@@ -416,24 +417,30 @@ export async function handleFeishuCommand(bot: FeishuBot, event: any, messageId:
         await replyText(bot, messageId, '只有该机器人的 /set-default 管理员可以执行 /douyin --delete');
         return true;
       }
-      if (douyinCommand.hasInvalidDelete) {
-        await replyText(bot, messageId, '用法：/douyin --delete {大于 5 位的数字 aweme_id}');
-        return true;
-      }
       if (bot.user_id == null) {
         await replyText(bot, messageId, '当前机器人未绑定用户，无法删除抖音收藏记录');
         return true;
       }
-      const result = softDeleteDouyinAwemeRecords(bot.user_id, douyinCommand.deleteAwemeId);
-      if (result.matched === 0) {
-        await replyText(bot, messageId, `未找到 aweme_id=${douyinCommand.deleteAwemeId} 的抖音收藏记录`);
+      const deleteAwemeId = await resolveAwemeIdFromMessage(bot, message, text);
+      if (!deleteAwemeId) {
+        await replyText(bot, messageId, '用法：/douyin --delete，需要在消息里或引用消息里包含一串大于等于 10 位的数字 aweme_id');
         return true;
       }
-      if (result.deleted === 0) {
-        await replyText(bot, messageId, `aweme_id=${douyinCommand.deleteAwemeId} 已经是删除状态`);
-        return true;
-      }
-      await replyText(bot, messageId, `已删除 aweme_id=${douyinCommand.deleteAwemeId} 的抖音收藏记录，共 ${result.deleted} 条`);
+      await replyCard(
+        bot,
+        messageId,
+        buildDouyinDeleteConfirmCard({
+          awemeId: deleteAwemeId,
+          userId: bot.user_id,
+          adminUserId,
+          title: '',
+          triggerChatId: chatId,
+          triggerPersonId: sender.id,
+          triggerPersonName: sender.name,
+          source: '/douyin --delete 指令'
+        }),
+        true
+      );
       return true;
     }
     if (douyinCommand.shouldSubscribe) {

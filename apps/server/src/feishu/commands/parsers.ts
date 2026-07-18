@@ -55,13 +55,14 @@ export function parseDouyinCommand(text: string): DouyinCommand {
   const hasSubscribeFlag = /(?:^|\s)--subscribe(?:\s|$)/.test(argsText);
   const hasUnsubscribeFlag = /(?:^|\s)--unsubscribe(?:\s|$)/.test(argsText);
   const actionCount = [hasDeleteFlag, hasSubscribeFlag, hasUnsubscribeFlag].filter(Boolean).length;
-  const deleteMatch = argsText.match(/(?:^|\s)--delete\s+(\S+)/);
-  const deleteAwemeId = deleteMatch?.[1] || '';
-  const hasInvalidDelete = hasDeleteFlag && !/^\d{6,}$/.test(deleteAwemeId);
+  // --delete is now a bare flag; the aweme_id is resolved from the message / quoted
+  // message text by the command handler, so there is no inline id to validate here.
+  const deleteAwemeId = '';
+  const hasInvalidDelete = false;
   const hasCountFlag = /(?:^|\s)--count(?:\s|$)/.test(argsText);
   const countMatch = argsText.match(/(?:^|\s)--count\s+(\S+)/);
   const clickText = argsText
-    .replace(/(?:^|\s)--delete(?:\s+\S+)?/, ' ')
+    .replace(/(?:^|\s)--delete(?:\s|$)/, ' ')
     .replace(/(?:^|\s)--subscribe(?:\s|$)/, ' ')
     .replace(/(?:^|\s)--unsubscribe(?:\s|$)/, ' ')
     .replace(/(?:^|\s)--count(?:\s+\S+)?/, ' ')
