@@ -78,6 +78,11 @@ const HELP_COMMAND_ROWS: HelpCommandRow[] = [
     description: '软删除指定抖音收藏记录；仅 /set-default 管理员可用，aweme_id 需大于 5 位。'
   },
   {
+    command: '视频无效 / 视频失效',
+    params: '关键词触发；从当前消息或引用消息取最后一串大于 10 位的数字作为 aweme_id',
+    description: '联网检测抖音视频是否失效；疑似失效时不直接删除，而是私聊 /set-default 管理员发送确认卡片（取消/删除），删除才会标记该 aweme_id 为删除。发送抖音链接的各入口也会自动校验，失效则重抽最多 5 次并私聊上报管理员。'
+  },
+  {
     command: '/set-default',
     params: '"{兜底指令}"',
     description: '设置当前 bot 的默认兜底指令；首次设置者会成为该命令管理员。'
