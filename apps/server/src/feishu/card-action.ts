@@ -11,6 +11,8 @@ import { addCronTask, listChatCronTasks, deleteCronTaskById } from './cron.js';
 import { fallbackMentionCandidates, fallbackMentionCardEnabled, setFallbackMentionCardEnabled } from './fallback-mentions.js';
 import { FALLBACK_MENTION_CARD_KIND, FALLBACK_MENTION_FORM_FIELD, FALLBACK_MENTION_SEND_TO_GROUP_FORM_FIELD, isFallbackMentionCardAction, replyFallbackMentionOperatorCard } from './cards/fallback-mention-card.js';
 import { listMentions, replyUsersCard, sendUsersCardToChat, upsertMentions } from './commands/users.js';
+import { DOUYIN_INVALID_CARD_KIND, isDouyinInvalidCardAction } from './cards/douyin-invalid-card.js';
+import { softDeleteAweme } from './douyin-guard.js';
 
 const STYLE_STICKER_CARD_KIND = 'style_sticker_generator';
 
@@ -167,6 +169,27 @@ function parseFallbackMentionCardActionPayload(payload: any) {
   };
 }
 
+function parseDouyinInvalidCardActionPayload(payload: any) {
+  const context = parseCardActionContext(payload);
+  if (!context) return null;
+  const actionValue = context.event?.action?.value;
+  if (!isRecord(actionValue) || actionValue.kind !== DOUYIN_INVALID_CARD_KIND || !isDouyinInvalidCardAction(actionValue.action)) return null;
+  const awemeId = firstStringValue(actionValue.awemeId);
+  const userId = Number(firstStringValue(actionValue.userId));
+  const adminUserId = firstStringValue(actionValue.adminUserId);
+  if (!awemeId || !Number.isInteger(userId) || userId <= 0) return null;
+  return {
+    eventId: context.eventId,
+    messageId: context.messageId,
+    chatId: context.chatId,
+    operatorId: context.operatorId,
+    action: actionValue.action,
+    awemeId,
+    userId,
+    adminUserId
+  };
+}
+
 async function resolveReplyTargetFromCardMessage(bot: FeishuBot, cardMessageId: string) {
   const cardMessage = await fetchMessageById(bot, cardMessageId).catch(() => undefined);
   const fallback = {
@@ -188,6 +211,49 @@ async function resolveReplyTargetFromCardMessage(bot: FeishuBot, cardMessageId: 
 }
 
 export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
+  const douyinInvalidParsed = parseDouyinInvalidCardActionPayload(payload);
+  if (douyinInvalidParsed) {
+    if (douyinInvalidParsed.eventId && !rememberFeishuEventKey(`card:${douyinInvalidParsed.eventId}`)) return;
+    // Only the /set-default admin the card was addressed to may operate it.
+    if (
+      douyinInvalidParsed.adminUserId &&
+      douyinInvalidParsed.operatorId &&
+      douyinInvalidParsed.operatorId !== douyinInvalidParsed.adminUserId
+    ) {
+      return;
+    }
+
+    if (douyinInvalidParsed.action === 'delete') {
+      try {
+        const result = softDeleteAweme(douyinInvalidParsed.userId, douyinInvalidParsed.awemeId);
+        console.log('[feishu] douyin invalid card delete', {
+          botId: bot.id,
+          awemeId: douyinInvalidParsed.awemeId,
+          matched: result.matched,
+          deleted: result.deleted
+        });
+      } catch (error) {
+        console.error('[feishu] douyin invalid card delete failed', {
+          botId: bot.id,
+          awemeId: douyinInvalidParsed.awemeId,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+
+    // Both delete and cancel withdraw the confirmation card.
+    try {
+      await deleteMessage(bot, douyinInvalidParsed.messageId);
+    } catch (error) {
+      console.error('[feishu] douyin invalid card withdraw failed', {
+        botId: bot.id,
+        messageId: douyinInvalidParsed.messageId,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+    return;
+  }
+
   const fallbackMentionParsed = parseFallbackMentionCardActionPayload(payload);
   if (fallbackMentionParsed) {
     if (fallbackMentionParsed.eventId && !rememberFeishuEventKey(`card:${fallbackMentionParsed.eventId}`)) return;
