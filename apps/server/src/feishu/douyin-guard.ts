@@ -1,8 +1,8 @@
 import type { FeishuBot } from '../types.js';
 import { db } from '../db.js';
-import { checkDouyinAwemeValidity, extractAwemeIdFromText } from '../douyin-check.js';
+import { checkDouyinAwemeValidity, extractAwemeIdFromText, type DouyinValidity } from '../douyin-check.js';
 import { randomDouyinAwemeIdExcluding, findDouyinRecordByAwemeId, softDeleteDouyinAwemeRecords } from '../douyin.js';
-import { notifyAdminDouyinInvalid } from './cards/douyin-invalid-card.js';
+import { notifyAdminDouyinInvalid, notifyAdminDouyinResult } from './cards/douyin-invalid-card.js';
 
 export { extractAwemeIdFromText };
 
@@ -42,6 +42,37 @@ async function notifyAdmin(bot: FeishuBot, awemeId: string, title: string, trigg
     console.error('[feishu] douyin invalid admin notify failed', {
       botId: bot.id,
       awemeId,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+}
+
+async function notifyAdminResult(
+  bot: FeishuBot,
+  awemeId: string,
+  outcome: 'valid' | 'errored',
+  title: string,
+  trigger: DouyinTriggerContext
+) {
+  const adminUserId = botAdminUserId(bot.id);
+  if (!adminUserId || bot.user_id == null) return;
+  try {
+    await notifyAdminDouyinResult(bot, {
+      awemeId,
+      outcome,
+      userId: bot.user_id,
+      adminUserId,
+      title,
+      triggerChatId: trigger.chatId,
+      triggerPersonId: trigger.personId,
+      triggerPersonName: trigger.personName,
+      source: trigger.source
+    });
+  } catch (error) {
+    console.error('[feishu] douyin result admin notify failed', {
+      botId: bot.id,
+      awemeId,
+      outcome,
       error: error instanceof Error ? error.message : String(error)
     });
   }
@@ -89,25 +120,41 @@ export async function resolveValidAwemeId(
 }
 
 /**
- * Keyword-triggered check ("视频无效" / "视频失效"): verify a single aweme_id and,
- * if it looks invalid, notify the admin with a delete-confirmation card. Never
- * deletes automatically. Returns true when a check was performed.
+ * Keyword-triggered check ("视频无效" / "视频失效"): verify a single aweme_id and
+ * always notify the /set-default admin with the result. Invalid → delete-confirm
+ * card; valid / inconclusive → button-less info card. Never deletes automatically.
+ *
+ * Returns the validity result so the caller can also reply the outcome in-thread
+ * to the reporting user, or null when the aweme_id is not a known active record.
  */
 export async function reportPossiblyInvalidAweme(
   bot: FeishuBot,
   awemeId: string,
   trigger: DouyinTriggerContext
-): Promise<boolean> {
-  if (bot.user_id == null) return false;
+): Promise<DouyinValidity | null> {
+  if (bot.user_id == null) return null;
   const normalizedId = String(awemeId || '').trim();
-  if (!/^\d{6,}$/.test(normalizedId)) return false;
+  if (!/^\d{6,}$/.test(normalizedId)) return null;
   const record = findDouyinRecordByAwemeId(bot.user_id, normalizedId);
-  if (!record || record.status === 'delete') return false;
+  if (!record || record.status === 'delete') return null;
 
   const validity = await checkDouyinAwemeValidity(normalizedId);
-  if (validity.errored || validity.valid) return true;
-  await notifyAdmin(bot, normalizedId, validity.title, trigger);
-  return true;
+  console.log('[feishu] douyin keyword check', {
+    botId: bot.id,
+    awemeId: normalizedId,
+    valid: validity.valid,
+    errored: validity.errored,
+    title: validity.title,
+    source: trigger.source
+  });
+  if (validity.valid && !validity.errored) {
+    await notifyAdminResult(bot, normalizedId, 'valid', validity.title, trigger);
+  } else if (validity.errored) {
+    await notifyAdminResult(bot, normalizedId, 'errored', validity.title, trigger);
+  } else {
+    await notifyAdmin(bot, normalizedId, validity.title, trigger);
+  }
+  return validity;
 }
 
 export function softDeleteAweme(userId: number, awemeId: string) {
