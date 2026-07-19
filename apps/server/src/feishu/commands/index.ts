@@ -295,7 +295,12 @@ export async function handleFeishuCommand(bot: FeishuBot, event: any, messageId:
         const referencedText = await referencedMessageText(bot, message);
         if (referencedText) {
           try {
-            await sendStyleStickerToChat(bot, chatId, styleStickerCommand.feature, referencedText);
+            await sendStyleStickerToChat(
+              bot,
+              chatId,
+              styleStickerCommand.feature,
+              referencedText.slice(0, config.styleStickerMaxCharsLimit)
+            );
           } catch (error) {
             await replyText(
               bot,
@@ -327,13 +332,15 @@ export async function handleFeishuCommand(bot: FeishuBot, event: any, messageId:
     }
 
     if (styleStickerCommand.text) {
+      // Cap the manual command text at the absolute limit before rendering.
+      const stickerText = styleStickerCommand.text.slice(0, config.styleStickerMaxCharsLimit);
       try {
         if (isThreadMessage(message)) {
-          const { image } = await renderStyleStickerImage(styleStickerCommand.text, styleStickerFlavor(styleStickerCommand.feature));
+          const { image } = await renderStyleStickerImage(stickerText, styleStickerFlavor(styleStickerCommand.feature));
           const imageKey = await uploadImage(bot, image, `${styleStickerCommandName(styleStickerCommand.feature).slice(1)}.png`);
           await replyMedia(bot, messageId, { type: 'image', key: imageKey }, true);
         } else {
-          await sendStyleStickerToChat(bot, chatId, styleStickerCommand.feature, styleStickerCommand.text);
+          await sendStyleStickerToChat(bot, chatId, styleStickerCommand.feature, stickerText);
         }
       } catch (error) {
         await replyText(
