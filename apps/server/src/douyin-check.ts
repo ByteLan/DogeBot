@@ -48,7 +48,7 @@ export async function checkDouyinAwemeValidity(awemeId: string): Promise<DouyinV
     });
     const html = await response.text();
     const title = extractTitle(html);
-    const invalid = html.includes(INVALID_TITLE_MARKER);
+    const invalid = title.startsWith(INVALID_TITLE_MARKER);
     return { awemeId: normalizedId, valid: !invalid, title, errored: false };
   } catch (error) {
     console.error('[douyin] validity check failed', {
