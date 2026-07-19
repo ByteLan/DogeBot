@@ -178,6 +178,16 @@ function getCheckCache(awemeId: string) {
   return { title: row.last_checked_title, checkedAt };
 }
 
+function getStaleCachedTitle(awemeId: string): string {
+  const row = db.prepare(`
+    SELECT last_checked_title
+    FROM douyin_aweme_records
+    WHERE aweme_id = ? AND last_checked_title != '' AND ${ACTIVE_DOUYIN_RECORD_FILTER}
+    LIMIT 1
+  `).get(awemeId) as { last_checked_title: string } | undefined;
+  return row?.last_checked_title || '';
+}
+
 function saveCheckCache(awemeId: string, title: string) {
   db.prepare(`
     UPDATE douyin_aweme_records
@@ -197,6 +207,8 @@ export async function checkDouyinAwemeValidityCached(awemeId: string, skipCache 
   const result = await checkDouyinAwemeValidity(awemeId);
   if (!result.errored) {
     saveCheckCache(awemeId, result.title);
+  } else if (!result.title) {
+    result.title = getStaleCachedTitle(awemeId);
   }
   return result;
 }
