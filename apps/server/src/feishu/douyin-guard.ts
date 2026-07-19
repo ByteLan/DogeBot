@@ -1,7 +1,7 @@
 import type { FeishuBot } from '../types.js';
 import { db } from '../db.js';
-import { checkDouyinAwemeValidity, extractAwemeIdFromText, type DouyinValidity } from '../douyin-check.js';
-import { randomDouyinAwemeIdExcluding, findDouyinRecordByAwemeId, softDeleteDouyinAwemeRecords, restoreDouyinAwemeRecords } from '../douyin.js';
+import { extractAwemeIdFromText, type DouyinValidity } from '../douyin-check.js';
+import { randomDouyinAwemeIdExcluding, findDouyinRecordByAwemeId, softDeleteDouyinAwemeRecords, restoreDouyinAwemeRecords, checkDouyinAwemeValidityCached } from '../douyin.js';
 import { notifyAdminDouyinInvalid, notifyAdminDouyinResult } from './cards/douyin-invalid-card.js';
 import { fetchMessageById } from './api.js';
 import { parseFeishuMessage, referencedMessageIds } from './message-parser.js';
@@ -108,7 +108,7 @@ export async function resolveValidAwemeId(
     if (!candidate) break;
     lastCandidate = candidate;
     attempted.add(candidate);
-    const validity = await checkDouyinAwemeValidity(candidate);
+    const validity = await checkDouyinAwemeValidityCached(candidate);
     if (validity.valid || validity.errored) {
       // Valid, or the probe was inconclusive: keep this one to avoid false deletes.
       return candidate;
@@ -140,7 +140,7 @@ export async function reportPossiblyInvalidAweme(
   const record = findDouyinRecordByAwemeId(bot.user_id, normalizedId);
   if (!record || record.status === 'delete') return null;
 
-  const validity = await checkDouyinAwemeValidity(normalizedId);
+  const validity = await checkDouyinAwemeValidityCached(normalizedId, /* skipCache */ true);
   console.log('[feishu] douyin keyword check', {
     botId: bot.id,
     awemeId: normalizedId,

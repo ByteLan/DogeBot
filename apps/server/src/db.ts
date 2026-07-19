@@ -151,6 +151,12 @@ if (!douyinAwemeColumns.some((column) => column.name === 'status')) {
 if (!douyinAwemeColumns.some((column) => column.name === 'deleted_at')) {
   db.exec('ALTER TABLE douyin_aweme_records ADD COLUMN deleted_at TEXT');
 }
+if (!douyinAwemeColumns.some((column) => column.name === 'last_checked_at')) {
+  db.exec('ALTER TABLE douyin_aweme_records ADD COLUMN last_checked_at TEXT');
+}
+if (!douyinAwemeColumns.some((column) => column.name === 'last_checked_title')) {
+  db.exec("ALTER TABLE douyin_aweme_records ADD COLUMN last_checked_title TEXT NOT NULL DEFAULT ''");
+}
 
   const passiveSettingsColumns = db.prepare('PRAGMA table_info(feishu_chat_passive_settings)').all() as Array<{ name: string }>;
   if (!passiveSettingsColumns.some((column) => column.name === 'rate')) {
