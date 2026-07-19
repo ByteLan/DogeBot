@@ -11,7 +11,7 @@ export function formatRatePercent(rate: number) {
 }
 
 export function maxRateForDefault(defaultRate: number) {
-  return Math.max(0, Math.min(1, defaultRate * 5));
+  return Math.max(0, Math.min(1, defaultRate * 10));
 }
 
 export function defaultRateForFeature(config: PassiveInteractionConfig, feature: ProbabilisticFeature) {
