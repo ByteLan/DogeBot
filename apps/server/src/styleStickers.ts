@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type Canvas, type SKRSContext2D, GlobalFonts, createCanvas } from '@napi-rs/canvas';
 import type { Request, Response } from 'express';
+import { passiveInteractionConfig } from './config.js';
 import { createConcurrencyLimiter } from './utils/concurrency.js';
 import { encodeUltraHdrJpeg, parseEvParam } from './utils/ultraHdr.js';
 import {
@@ -849,7 +850,9 @@ export async function renderStyleStickerImage(
 }
 
 async function handleStyleSticker(req: Request, res: Response, flavor: StickerFlavor) {
-  const text = typeof req.query.text === 'string' ? req.query.text.trim() : '';
+  const rawText = typeof req.query.text === 'string' ? req.query.text.trim() : '';
+  // Cap the text at the same absolute limit used by the Feishu command paths.
+  const text = rawText.slice(0, passiveInteractionConfig().styleStickerMaxCharsLimit);
   if (!text) {
     res.status(400).json({ error: 'text is required' });
     return;
