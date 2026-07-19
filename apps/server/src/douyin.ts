@@ -1,6 +1,8 @@
 import type { Response } from 'express';
 import type { AuthenticatedRequest } from './auth.js';
+import type { FeishuBot } from './types.js';
 import { db } from './db.js';
+import { checkDouyinAwemeValidity, INVALID_TITLE_MARKER, type DouyinValidity } from './douyin-check.js';
 
 type DouyinAwemeRecord = {
   aweme_id: string;
@@ -146,6 +148,59 @@ export function randomDouyinAwemeIdByClickText(clickText: string) {
   return row?.aweme_id || '';
 }
 
+export function randomDouyinAwemeIdByClickTextExcluding(clickText: string, excludeIds: string[]) {
+  const normalizedExcludes = [...new Set(excludeIds.map((id) => String(id || '').trim()).filter(Boolean))];
+  if (normalizedExcludes.length === 0) return randomDouyinAwemeIdByClickText(clickText);
+  const placeholders = normalizedExcludes.map(() => '?').join(', ');
+  const row = db.prepare(`
+    SELECT aweme_id
+    FROM douyin_aweme_records
+    WHERE click_text = ? AND ${ACTIVE_DOUYIN_RECORD_FILTER}
+      AND aweme_id NOT IN (${placeholders})
+    ORDER BY RANDOM()
+    LIMIT 1
+  `).get(clickText, ...normalizedExcludes) as DouyinAwemeRecord | undefined;
+  return row?.aweme_id || '';
+}
+
+const CHECK_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+function getCheckCache(awemeId: string) {
+  const row = db.prepare(`
+    SELECT last_checked_at, last_checked_title
+    FROM douyin_aweme_records
+    WHERE aweme_id = ? AND ${ACTIVE_DOUYIN_RECORD_FILTER}
+    LIMIT 1
+  `).get(awemeId) as { last_checked_at: string | null; last_checked_title: string } | undefined;
+  if (!row?.last_checked_at) return null;
+  const checkedAt = new Date(row.last_checked_at).getTime();
+  if (Date.now() - checkedAt > CHECK_CACHE_TTL_MS) return null;
+  return { title: row.last_checked_title, checkedAt };
+}
+
+function saveCheckCache(awemeId: string, title: string) {
+  db.prepare(`
+    UPDATE douyin_aweme_records
+    SET last_checked_at = CURRENT_TIMESTAMP, last_checked_title = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE aweme_id = ? AND ${ACTIVE_DOUYIN_RECORD_FILTER}
+  `).run(title, awemeId);
+}
+
+export async function checkDouyinAwemeValidityCached(awemeId: string, skipCache = false): Promise<DouyinValidity> {
+  if (!skipCache) {
+    const cached = getCheckCache(awemeId);
+    if (cached) {
+      const invalid = cached.title.startsWith(INVALID_TITLE_MARKER);
+      return { awemeId, valid: !invalid, title: cached.title, errored: false };
+    }
+  }
+  const result = await checkDouyinAwemeValidity(awemeId);
+  if (!result.errored) {
+    saveCheckCache(awemeId, result.title);
+  }
+  return result;
+}
+
 export function softDeleteDouyinAwemeRecords(userId: number, awemeId: string) {
   const matched = (db.prepare(`
     SELECT COUNT(*) AS value
@@ -174,21 +229,90 @@ export function restoreDouyinAwemeRecords(userId: number, awemeId: string) {
   return { matched, restored: result.changes };
 }
 
-export function getRandomMmVideo(_req: AuthenticatedRequest, res: Response) {
-  const awemeId = randomDouyinAwemeIdByClickText('随机甜妹');
+const OPEN_API_MAX_ATTEMPTS = 3;
+const OPEN_API_BOT_ID = 1;
+
+function getOpenApiBot(): FeishuBot | undefined {
+  return db.prepare('SELECT * FROM feishu_bots WHERE id = ?').get(OPEN_API_BOT_ID) as FeishuBot | undefined;
+}
+
+function getOpenApiAdminUserId(): string {
+  const row = db.prepare('SELECT admin_user_id FROM feishu_bot_default_commands WHERE bot_id = ?')
+    .get(OPEN_API_BOT_ID) as { admin_user_id: string | null } | undefined;
+  return row?.admin_user_id?.trim() || '';
+}
+
+function findRecordOwnerUserId(awemeId: string): number | null {
+  const row = db.prepare(`
+    SELECT user_id FROM douyin_aweme_records WHERE aweme_id = ? AND ${ACTIVE_DOUYIN_RECORD_FILTER} LIMIT 1
+  `).get(awemeId) as { user_id: number } | undefined;
+  return row?.user_id ?? null;
+}
+
+let notifyAdminDouyinInvalidFn: ((bot: FeishuBot, context: any) => Promise<void>) | undefined;
+
+export function setOpenApiInvalidNotifier(fn: (bot: FeishuBot, context: any) => Promise<void>) {
+  notifyAdminDouyinInvalidFn = fn;
+}
+
+async function notifyOpenApiAdmin(awemeId: string, title: string) {
+  if (!notifyAdminDouyinInvalidFn) return;
+  const bot = getOpenApiBot();
+  if (!bot) return;
+  const adminUserId = getOpenApiAdminUserId();
+  if (!adminUserId) return;
+  const userId = findRecordOwnerUserId(awemeId);
+  if (userId == null) return;
+  try {
+    await notifyAdminDouyinInvalidFn(bot, {
+      awemeId,
+      userId,
+      adminUserId,
+      title,
+      triggerChatId: '',
+      triggerPersonId: 'open-api',
+      triggerPersonName: 'Open API',
+      source: 'open-api 自动检测'
+    });
+  } catch (error) {
+    console.error('[douyin] open-api admin notify failed', {
+      awemeId,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+}
+
+async function resolveValidAwemeIdForOpenApi(clickText: string): Promise<{ awemeId: string; title: string }> {
+  const attempted: string[] = [];
+  let lastTitle = '';
+  for (let i = 0; i < OPEN_API_MAX_ATTEMPTS; i++) {
+    const awemeId = randomDouyinAwemeIdByClickTextExcluding(clickText, attempted);
+    if (!awemeId) break;
+    attempted.push(awemeId);
+    const validity = await checkDouyinAwemeValidityCached(awemeId);
+    lastTitle = validity.title;
+    if (validity.valid || validity.errored) return { awemeId, title: validity.title };
+    await notifyOpenApiAdmin(awemeId, validity.title);
+  }
+  return { awemeId: attempted[attempted.length - 1] || '', title: lastTitle };
+}
+
+export async function getRandomMmVideo(_req: AuthenticatedRequest, res: Response) {
+  const { awemeId, title } = await resolveValidAwemeIdForOpenApi('随机甜妹');
   if (!awemeId) {
     res.status(404).json({ error: 'no aweme found' });
     return;
   }
   res.json({
     data: {
-      url: `https://www.douyin.com/video/${awemeId}`
+      url: `https://www.douyin.com/video/${awemeId}`,
+      title
     }
   });
 }
 
-export function redirectRandomMmVideo(_req: AuthenticatedRequest, res: Response) {
-  const awemeId = randomDouyinAwemeIdByClickText('随机甜妹');
+export async function redirectRandomMmVideo(_req: AuthenticatedRequest, res: Response) {
+  const { awemeId } = await resolveValidAwemeIdForOpenApi('随机甜妹');
   if (!awemeId) {
     res.status(404).json({ error: 'no aweme found' });
     return;
