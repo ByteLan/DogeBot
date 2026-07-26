@@ -1,19 +1,20 @@
 import React from 'react';
 import { Button, Select } from '@arco-design/web-react';
 
-// 收敛原先三处重复的「历史下拉 + 删除历史按钮」结构，渲染出的 DOM 与原实现一致。
 export function HistorySelect(props: {
   value: string;
+  ariaLabel: string;
   placeholder: string;
   options: string[];
   onChange: (value: any) => void;
   onDeleteHistory: () => void;
 }) {
-  const { value, placeholder, options, onChange, onDeleteHistory } = props;
+  const { value, ariaLabel, placeholder, options, onChange, onDeleteHistory } = props;
   return (
     <div className="history-select-row">
-      <div className="history-select-main">
+      <div className="history-select-main" title={value}>
         <Select
+          aria-label={ariaLabel}
           showSearch
           allowCreate
           value={value}
@@ -27,7 +28,14 @@ export function HistorySelect(props: {
           ))}
         </Select>
       </div>
-      <Button onClick={onDeleteHistory}>删除历史</Button>
+      <Button
+        className="history-delete-button"
+        aria-label={`删除当前${ariaLabel}历史记录`}
+        title="删除当前历史记录"
+        onClick={onDeleteHistory}
+      >
+        <span className="history-delete-symbol" aria-hidden="true">×</span>
+      </Button>
     </div>
   );
 }
