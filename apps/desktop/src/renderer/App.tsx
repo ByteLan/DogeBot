@@ -34,7 +34,7 @@ import { LoginCard } from './components/LoginCard';
 import { FeishuBotsCard } from './components/FeishuBotsCard';
 import { DouyinMonitorCard } from './components/DouyinMonitorCard';
 
-const { Title } = Typography;
+const { Title, Text } = Typography;
 
 export function App() {
   const [token, setToken] = useState(() => localStorage.getItem('dogebot.token') || '');
@@ -376,7 +376,13 @@ export function App() {
 
   return (
     <main className="app-shell">
-      <Title heading={2}>DogeBot</Title>
+      <header className="app-header">
+        <div className="app-logo" aria-hidden="true">DB</div>
+        <div>
+          <Title heading={2}>DogeBot</Title>
+          <Text className="app-subtitle" type="secondary">桌面自动化控制台</Text>
+        </div>
+      </header>
       {message ? <Alert className="app-message" type="info" content={message} /> : null}
 
       {!loggedIn ? (

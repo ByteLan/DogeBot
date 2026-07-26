@@ -1,26 +1,117 @@
 :root {
-  color-scheme: dark;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color-scheme: light;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-synthesis: none;
+  --page-bg: #f5f7fa;
+  --surface: #ffffff;
+  --surface-subtle: #f8fafc;
+  --border: #e5e9f0;
+  --border-strong: #d8dee8;
+  --text: #182230;
+  --text-secondary: #667085;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-soft: #eff6ff;
+  --danger: #dc2626;
+  --control-height-mini: 26px;
+  --control-height-small: 30px;
+  --control-height-default: 36px;
+  --control-height-large: 40px;
+  --control-radius: 8px;
+  --radius-lg: 14px;
+  --radius-md: 9px;
+  --shadow: 0 1px 2px rgb(16 24 40 / 4%), 0 8px 24px rgb(16 24 40 / 5%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 720px;
+  min-height: 100%;
+  background: var(--page-bg);
 }
 
 body {
+  min-height: 100vh;
   margin: 0;
-  background: #111827;
-  color: #f9fafb;
+  background:
+    radial-gradient(circle at 50% -180px, #ffffff 0, #f8fafc 360px, transparent 640px),
+    var(--page-bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
 }
 
 code {
-  color: #fbbf24;
+  padding: 2px 6px;
+  border: 1px solid #dbe4f0;
+  border-radius: 5px;
+  background: #f3f6fa;
+  color: #344054;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .app-shell {
-  max-width: 980px;
+  width: min(100%, 1080px);
   margin: 0 auto;
-  padding: 28px;
+  padding: 32px 30px 56px;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  margin: 2px 0 24px;
+}
+
+.app-logo {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  place-items: center;
+  border: 1px solid #dbe5f3;
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 2px 8px rgb(37 99 235 / 8%);
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 750;
+  letter-spacing: -0.03em;
+}
+
+.app-header .arco-typography {
+  margin: 0;
+}
+
+.app-header .arco-typography-title {
+  color: var(--text);
+  font-size: 24px;
+  font-weight: 680;
+  letter-spacing: -0.025em;
+  line-height: 1.2;
+}
+
+.app-subtitle {
+  display: block;
+  margin-top: 3px !important;
+  color: #7b8798 !important;
+  font-size: 13px;
+  line-height: 1.4;
 }
 
 .app-shell > .arco-card {
-  margin-bottom: 18px;
+  margin-bottom: 20px;
 }
 
 .app-message,
@@ -30,58 +121,393 @@ code {
 }
 
 .qr-box {
-  margin-top: 16px;
+  margin-top: 18px;
+}
+
+/* Cards */
+.app-shell .arco-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  overflow: hidden;
+}
+
+.app-shell .arco-card-header {
+  min-height: 56px;
+  padding: 0 22px;
+  border-bottom-color: #edf0f4;
+}
+
+.app-shell .arco-card-header-title {
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.app-shell .arco-card-body {
+  padding: 22px;
 }
 
 .douyin-partition-card,
 .douyin-defaults-card {
-  margin-bottom: 16px;
-  background: #0b1220;
-  border: 1px solid #374151;
+  margin-bottom: 18px;
+  background: var(--surface-subtle) !important;
+  border-color: #e8ecf2 !important;
+  border-radius: 11px !important;
+  box-shadow: none !important;
+}
+
+.douyin-partition-card .arco-card-header,
+.douyin-defaults-card .arco-card-header {
+  min-height: 50px;
+  background: rgb(255 255 255 / 62%);
 }
 
 .douyin-partition-list {
-  margin-top: 8px;
-}
-
-.douyin-global-actions {
-  margin-bottom: 16px;
+  margin-top: 12px;
 }
 
 .douyin-task-list {
   display: flex;
   width: 100%;
+  gap: 18px !important;
 }
 
 .douyin-task-card {
   width: 100%;
+  border-color: var(--border-strong) !important;
+  box-shadow: 0 1px 2px rgb(16 24 40 / 4%) !important;
+}
+
+.douyin-task-card > .arco-card-header {
+  background: #fbfcfe;
+}
+
+/* Typography and spacing */
+.app-shell .arco-typography,
+.app-shell .arco-typography-title {
+  color: var(--text);
+}
+
+.app-shell .arco-typography-secondary {
+  color: var(--text-secondary);
+}
+
+.app-shell .arco-typography-paragraph {
+  line-height: 1.7;
+}
+
+.app-shell .arco-form-item {
+  margin-bottom: 18px;
+}
+
+.app-shell .arco-form-label-item > label {
+  color: #475467;
+  font-size: 13px;
+  font-weight: 550;
+}
+
+.douyin-global-actions {
+  margin: 2px 0 16px;
 }
 
 .douyin-task-status {
-  margin-bottom: 16px;
+  margin: 18px 0 6px !important;
+  padding-top: 14px;
+  border-top: 1px solid #edf0f4;
 }
 
 .history-select-row {
   display: flex;
-  gap: 8px;
   align-items: center;
+  gap: 8px;
 }
 
 .history-select-main {
-  flex: 1;
   min-width: 0;
+  flex: 1;
+}
+
+/* Controls share one size system across inputs, selects, number fields and buttons. */
+.app-shell .arco-input,
+.app-shell .arco-input-inner-wrapper,
+.app-shell .arco-select-view,
+.app-shell .arco-textarea-wrapper {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--control-radius);
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgb(16 24 40 / 3%);
+  transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+
+.app-shell .arco-input:hover,
+.app-shell .arco-input-inner-wrapper:hover,
+.app-shell .arco-select-view:hover,
+.app-shell .arco-textarea-wrapper:hover {
+  border-color: #b7c2d0;
+  background: #ffffff;
+}
+
+.app-shell .arco-input:focus,
+.app-shell .arco-input-focus,
+.app-shell .arco-input-inner-wrapper-focus,
+.app-shell .arco-select-focused .arco-select-view,
+.app-shell .arco-textarea-wrapper:focus-within {
+  border-color: var(--accent);
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgb(37 99 235 / 10%);
+}
+
+/* Default: 36px */
+.app-shell .arco-input-size-default,
+.app-shell .arco-input-inner-wrapper,
+.app-shell .arco-select-size-default.arco-select-single .arco-select-view,
+.app-shell .arco-input-number {
+  height: var(--control-height-default);
+  min-height: var(--control-height-default);
+}
+
+.app-shell .arco-select-size-default.arco-select-single .arco-select-view {
+  line-height: calc(var(--control-height-default) - 2px);
+}
+
+/* Mini: 26px */
+.app-shell .arco-input-size-mini,
+.app-shell .arco-input-inner-wrapper-mini,
+.app-shell .arco-select-size-mini.arco-select-single .arco-select-view,
+.app-shell .arco-input-number-size-mini,
+.app-shell .arco-btn.arco-btn-size-mini {
+  height: var(--control-height-mini);
+  min-height: var(--control-height-mini);
+  border-radius: 7px;
+}
+
+.app-shell .arco-select-size-mini.arco-select-single .arco-select-view {
+  line-height: calc(var(--control-height-mini) - 2px);
+}
+
+/* Small: 30px */
+.app-shell .arco-input-size-small,
+.app-shell .arco-input-inner-wrapper-small,
+.app-shell .arco-select-size-small.arco-select-single .arco-select-view,
+.app-shell .arco-input-number-size-small,
+.app-shell .arco-btn.arco-btn-size-small {
+  height: var(--control-height-small);
+  min-height: var(--control-height-small);
+  border-radius: 7px;
+}
+
+.app-shell .arco-select-size-small.arco-select-single .arco-select-view {
+  line-height: calc(var(--control-height-small) - 2px);
+}
+
+/* Large: 40px */
+.app-shell .arco-input-size-large,
+.app-shell .arco-input-inner-wrapper-large,
+.app-shell .arco-select-size-large.arco-select-single .arco-select-view,
+.app-shell .arco-input-number-size-large,
+.app-shell .arco-btn.arco-btn-size-large {
+  height: var(--control-height-large);
+  min-height: var(--control-height-large);
+  border-radius: 9px;
+}
+
+.app-shell .arco-select-size-large.arco-select-single .arco-select-view {
+  line-height: calc(var(--control-height-large) - 2px);
+}
+
+/* Password and InputNumber render an input inside an inner visual shell. */
+.app-shell .arco-input-inner-wrapper > .arco-input,
+.app-shell .arco-input-inner-wrapper > .arco-input-clear-wrapper,
+.app-shell .arco-input-inner-wrapper > .arco-input-clear-wrapper > .arco-input {
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.app-shell .arco-input-inner-wrapper > .arco-input:hover,
+.app-shell .arco-input-inner-wrapper > .arco-input:focus,
+.app-shell .arco-input-inner-wrapper > .arco-input-clear-wrapper > .arco-input:hover,
+.app-shell .arco-input-inner-wrapper > .arco-input-clear-wrapper > .arco-input:focus {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* InputNumber owns its visible border on the inner wrapper. */
+.app-shell .arco-input-number {
+  border: 0;
+  border-radius: var(--control-radius);
+  background: transparent;
+  box-shadow: none;
+}
+
+.app-shell .arco-input-number .arco-input-inner-wrapper {
+  height: 100%;
+  min-height: 100%;
+  padding: 0 12px;
+}
+
+.app-shell .arco-input-number-size-mini .arco-input-inner-wrapper,
+.app-shell .arco-input-number-size-small .arco-input-inner-wrapper {
+  border-radius: 7px;
+}
+
+.app-shell .arco-input-number-size-large .arco-input-inner-wrapper {
+  border-radius: 9px;
+}
+
+.app-shell .arco-input-number-step-layer {
+  right: 5px;
+  top: 5px;
+  bottom: 5px;
+  width: 20px;
+  border: 1px solid #e4e9f0;
+  border-radius: 5px;
+  background: #f8fafc;
+}
+
+.app-shell .arco-input-number-step-button,
+.app-shell .arco-input-number-step-button:hover {
+  border: 0;
+  background: transparent;
+  color: #667085;
+}
+
+.app-shell .arco-input-number-step-button:hover {
+  background: #eef2f6;
+  color: #344054;
+}
+
+.app-shell .arco-input,
+.app-shell .arco-input-number-input,
+.app-shell .arco-select-view-input,
+.app-shell .arco-select-view-value {
+  color: #263244;
+  font-size: 13px;
+}
+
+.app-shell .arco-input {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.app-shell .arco-input::placeholder,
+.app-shell .arco-select-view-placeholder {
+  color: #98a2b3;
+}
+
+/* Buttons and switches */
+.app-shell .arco-btn {
+  height: var(--control-height-default);
+  min-height: var(--control-height-default);
+  padding: 0 15px;
+  border-color: var(--border-strong);
+  border-radius: var(--control-radius);
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgb(16 24 40 / 4%);
+  color: #344054;
+  font-weight: 550;
+  transition: border-color 150ms ease, background 150ms ease, color 150ms ease, box-shadow 150ms ease, transform 100ms ease;
+}
+
+.app-shell .arco-btn:hover {
+  border-color: #b6c0ce;
+  background: #f8fafc;
+  color: #182230;
+}
+
+.app-shell .arco-btn:active {
+  transform: translateY(1px);
+}
+
+.app-shell .arco-btn-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: 0 1px 2px rgb(37 99 235 / 18%);
+  color: #ffffff;
+}
+
+.app-shell .arco-btn-primary:hover {
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
+  color: #ffffff;
+}
+
+.app-shell .arco-btn-status-danger:not(.arco-btn-primary) {
+  border-color: #fecaca;
+  background: #fffafa;
+  color: var(--danger);
+}
+
+.app-shell .arco-btn-size-mini {
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.app-shell .arco-btn-size-small {
+  padding: 0 12px;
+}
+
+.app-shell .arco-btn-size-large {
+  padding: 0 18px;
+}
+
+.app-shell .arco-switch {
+  background: #cbd2dc;
+}
+
+.app-shell .arco-switch-checked {
+  background: var(--accent);
+}
+
+/* Status, lists, and tabs */
+.app-shell .arco-alert {
+  border: 1px solid #d9e7fb;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: #24456f;
+}
+
+.app-shell .arco-list {
+  color: var(--text);
+}
+
+.app-shell .arco-list-item {
+  border-bottom-color: #edf0f4;
+}
+
+.app-shell .arco-list-item-meta-title {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.app-shell .arco-tabs-header-nav-line .arco-tabs-header-title-active,
+.app-shell .arco-tabs-header-title:hover {
+  color: var(--accent);
+}
+
+.app-shell .arco-tabs-header-ink {
+  background: var(--accent);
 }
 
 .json-empty,
 .json-card {
-  background: #111827;
-  border: 1px solid #374151;
+  border: 1px solid var(--border);
+  background: #fbfcfe;
 }
 
 .json-empty {
-  padding: 16px;
-  border-radius: 8px;
-  color: #9ca3af;
+  padding: 22px;
+  border-radius: 10px;
+  color: #98a2b3;
+  text-align: center;
 }
 
 .json-list {
@@ -91,6 +517,31 @@ code {
   overflow: auto;
 }
 
+.json-card {
+  box-shadow: none !important;
+}
+
 .json-card .arco-card-body {
   overflow: auto;
+}
+
+.json-card .json-view-container {
+  color: #344054;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+/* Keep the form comfortable in narrower desktop windows. */
+@media (max-width: 820px) {
+  .app-shell {
+    padding: 24px 22px 40px;
+  }
+
+  .app-shell .arco-card-header {
+    padding: 0 18px;
+  }
+
+  .app-shell .arco-card-body {
+    padding: 18px;
+  }
 }
