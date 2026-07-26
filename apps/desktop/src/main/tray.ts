@@ -1,6 +1,6 @@
 import { app, Menu, nativeImage, Tray } from 'electron';
-import { state } from './douyin/state.js';
-import { stopMonitor } from './douyin/monitor.js';
+import { anyRunnerRunning, state } from './douyin/state.js';
+import { stopAll } from './douyin/monitor.js';
 import { showMainWindow } from './main-window.js';
 
 function buildTrayIcon() {
@@ -21,8 +21,8 @@ export function updateTrayMenu() {
     { label: '显示 DogeBot', click: showMainWindow },
     {
       label: '停止监听',
-      click: () => stopMonitor(),
-      enabled: state.douyinMonitorRunning
+      click: () => stopAll(),
+      enabled: anyRunnerRunning()
     },
     { type: 'separator' },
     {

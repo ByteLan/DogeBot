@@ -1,92 +1,44 @@
-import { BrowserWindow } from 'electron';
+import { BrowserWindow, type Session } from 'electron';
 import { DouyinIpc } from '../../shared/ipc-channels.js';
 import { normalizeCollectListBaseUrl } from '../../shared/url.js';
 import { logDouyin } from '../log.js';
 import { isAllowedNavigationUrl, isAllowedWindowOpenUrl } from '../navigation.js';
 import { douyinPreloadPath } from '../paths.js';
-import { defaultCollectListUrl, douyinUsePageHookCapture } from './constants.js';
+import { defaultCollectListUrl, douyinUrl, douyinUsePageHookCapture } from './constants.js';
 import { attachDouyinDebugger } from './debugger.js';
-import { stopMonitor } from './monitor.js';
+import { stopRunner } from './monitor.js';
 import { configureDouyinSession } from './session.js';
 import { state } from './state.js';
+import type { DouyinRunner } from './types.js';
 
-export function applyDouyinWindowVisibility(win: BrowserWindow) {
-  if (state.douyinRunHidden) {
-    win.hide();
-    return;
-  }
-  win.show();
-  win.focus();
-}
+const douyinWebPreferences = (ses: Session) => ({
+  contextIsolation: true,
+  nodeIntegration: false,
+  sandbox: true,
+  webSecurity: true,
+  allowRunningInsecureContent: false,
+  backgroundThrottling: false,
+  ...(douyinUsePageHookCapture ? { preload: douyinPreloadPath } : {}),
+  session: ses
+});
 
-export function currentCollectListEndpoints() {
-  const result: string[] = [];
-  const seen = new Set<string>();
-  for (const task of state.douyinTasks) {
-    const next = normalizeCollectListBaseUrl(task.collectListUrl);
-    if (!next || seen.has(next)) continue;
-    seen.add(next);
-    result.push(next);
-  }
-  if (result.length === 0) result.push(defaultCollectListUrl);
-  return result;
-}
-
-export function syncDouyinCaptureConfig(win: BrowserWindow) {
-  if (!douyinUsePageHookCapture) return;
-  const collectListEndpoints = currentCollectListEndpoints();
-  win.webContents.send(DouyinIpc.updateCaptureConfig, { collectListEndpoints });
-  logDouyin('capture config synced', { collectListEndpoints });
-}
-
-export function showDouyinWindowNow(win: BrowserWindow) {
-  win.show();
-  win.focus();
-}
-
-export function ensureDouyinWindow() {
-  const douyinSession = configureDouyinSession();
-  if (state.douyinWindow && !state.douyinWindow.isDestroyed()) {
-    logDouyin('reuse window', { hidden: state.douyinRunHidden });
-    applyDouyinWindowVisibility(state.douyinWindow);
-    syncDouyinCaptureConfig(state.douyinWindow);
-    return state.douyinWindow;
-  }
-  logDouyin('create window', { hidden: state.douyinRunHidden });
+// 建一个抖音浏览器窗口，装配与原实现一致的通用行为（弹窗拦截、导航守卫、
+// 调试器、navigator 快照）。runner / 登录窗口各自再挂自己的生命周期监听。
+function buildDouyinWindow(ses: Session, hidden: boolean) {
   const win = new BrowserWindow({
     width: 1280,
     height: 900,
     title: 'Douyin',
-    show: !state.douyinRunHidden,
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      webSecurity: true,
-      allowRunningInsecureContent: false,
-      backgroundThrottling: false,
-      ...(douyinUsePageHookCapture ? { preload: douyinPreloadPath } : {}),
-      session: douyinSession
-    }
+    show: !hidden,
+    webPreferences: douyinWebPreferences(ses)
   });
-  state.douyinWindow = win;
-  applyDouyinWindowVisibility(win);
   win.webContents.setWindowOpenHandler((details: any) => {
     if (isAllowedWindowOpenUrl(details.url)) {
       return {
         action: 'allow',
         overrideBrowserWindowOptions: {
           title: 'Douyin',
-          webPreferences: {
-            contextIsolation: true,
-            nodeIntegration: false,
-            sandbox: true,
-            webSecurity: true,
-            allowRunningInsecureContent: false,
-            backgroundThrottling: false,
-            ...(douyinUsePageHookCapture ? { preload: douyinPreloadPath } : {}),
-            session: douyinSession
-          }
+          webPreferences: douyinWebPreferences(ses)
         }
       };
     }
@@ -111,7 +63,6 @@ export function ensureDouyinWindow() {
   win.webContents.on('did-start-loading', () => logDouyin('did-start-loading', win.webContents.getURL()));
   win.webContents.on('did-finish-load', () => {
     logDouyin('did-finish-load', win.webContents.getURL());
-    syncDouyinCaptureConfig(win);
     win.webContents
       .executeJavaScript('({ userAgent: navigator.userAgent, platform: navigator.platform, webdriver: navigator.webdriver, userAgentData: navigator.userAgentData })')
       .then((snapshot) => logDouyin('navigator snapshot', snapshot))
@@ -120,24 +71,88 @@ export function ensureDouyinWindow() {
   win.webContents.on('did-fail-load', (_event: any, code: number, description: string, validatedURL: string) => {
     logDouyin('did-fail-load', { code, description, validatedURL });
   });
-  win.on('close', (event: any) => {
-    if (state.appQuitting || !state.douyinMonitorRunning) return;
-    event.preventDefault();
-    state.douyinRunHidden = true;
+  attachDouyinDebugger(win);
+  return win;
+}
+
+export function applyRunnerVisibility(runner: DouyinRunner) {
+  const win = runner.window;
+  if (!win || win.isDestroyed()) return;
+  if (runner.runHidden) {
     win.hide();
-    logDouyin('window hidden instead of closed while monitoring');
+    return;
+  }
+  win.show();
+  win.focus();
+}
+
+export function showDouyinWindowNow(win: BrowserWindow) {
+  win.show();
+  win.focus();
+}
+
+// 仅同步该 runner 任务自己的 collectList 端点：每窗口页内的
+// __dogebotDouyinCollectListEndpoints 覆盖优先，共享 partition 下也互不干扰。
+export function syncRunnerCaptureConfig(runner: DouyinRunner) {
+  if (!douyinUsePageHookCapture) return;
+  const win = runner.window;
+  if (!win || win.isDestroyed()) return;
+  const base = normalizeCollectListBaseUrl(runner.task.collectListUrl);
+  const collectListEndpoints = base ? [base] : [defaultCollectListUrl];
+  win.webContents.send(DouyinIpc.updateCaptureConfig, { collectListEndpoints });
+  logDouyin('capture config synced', { taskId: runner.taskId, collectListEndpoints });
+}
+
+export function ensureRunnerWindow(runner: DouyinRunner) {
+  const ses = configureDouyinSession(runner.task.partition);
+  if (runner.window && !runner.window.isDestroyed()) {
+    logDouyin('reuse window', { taskId: runner.taskId, hidden: runner.runHidden });
+    applyRunnerVisibility(runner);
+    syncRunnerCaptureConfig(runner);
+    return runner.window;
+  }
+  logDouyin('create window', { taskId: runner.taskId, hidden: runner.runHidden, partition: runner.task.partition });
+  const win = buildDouyinWindow(ses, runner.runHidden);
+  runner.window = win;
+  applyRunnerVisibility(runner);
+  win.webContents.on('did-finish-load', () => syncRunnerCaptureConfig(runner));
+  win.on('close', (event: any) => {
+    if (state.appQuitting || !runner.running) return;
+    event.preventDefault();
+    runner.runHidden = true;
+    win.hide();
+    logDouyin('window hidden instead of closed while monitoring', { taskId: runner.taskId });
   });
   win.on('minimize', () => {
-    if (!state.douyinMonitorRunning) return;
-    state.douyinRunHidden = true;
+    if (!runner.running) return;
+    runner.runHidden = true;
     win.hide();
-    logDouyin('window hidden on minimize while monitoring');
+    logDouyin('window hidden on minimize while monitoring', { taskId: runner.taskId });
   });
   win.on('closed', () => {
-    logDouyin('window closed');
-    if (state.douyinWindow === win) state.douyinWindow = undefined;
-    stopMonitor();
+    logDouyin('window closed', { taskId: runner.taskId });
+    if (runner.window === win) runner.window = undefined;
+    stopRunner(runner, { destroyWindow: false });
   });
-  attachDouyinDebugger(win);
+  return win;
+}
+
+// 登录窗口：按 partition 建/复用，加载 douyin 首页供扫码登录（与监听 runner 解耦）。
+export function openLoginWindow(partition: string) {
+  const ses = configureDouyinSession(partition);
+  const existing = state.loginWindows.get(partition);
+  if (existing && !existing.isDestroyed()) {
+    showDouyinWindowNow(existing);
+    void existing.loadURL(douyinUrl);
+    return existing;
+  }
+  const win = buildDouyinWindow(ses, false);
+  state.loginWindows.set(partition, win);
+  win.on('closed', () => {
+    if (state.loginWindows.get(partition) === win) state.loginWindows.delete(partition);
+    logDouyin('login window closed', { partition });
+  });
+  void win.loadURL(douyinUrl);
+  showDouyinWindowNow(win);
   return win;
 }

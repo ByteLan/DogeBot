@@ -22,7 +22,10 @@ export function attachDouyinDebugger(win: BrowserWindow) {
         devtools.on('detach', (_event: any, reason: string) => {
           logDouyin('debugger detached', reason);
           debugListenerAttached.delete(win);
-          setTimeout(() => attachDouyinDebugger(win), 1000);
+          setTimeout(() => {
+            if (win.isDestroyed()) return;
+            attachDouyinDebugger(win);
+          }, 1000);
         });
       }
       if (douyinUseFetchDebuggerCapture) {

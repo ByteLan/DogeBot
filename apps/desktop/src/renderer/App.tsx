@@ -7,9 +7,13 @@ import { useDouyinBridge } from './douyin/hooks';
 import { buildUrlHistory, mergeHistoryValues } from './douyin/utils';
 import { useQrRegistration } from './feishu/hooks';
 import {
+  DEFAULT_PARTITION_ID,
   createDefaultTask,
+  createPartitionId,
   initialServerUrl,
+  partitionElectronId,
   readPositiveNumber,
+  readStoredPartitions,
   readStoredStringList,
   readStoredTasks,
   usePersistentState
@@ -19,9 +23,10 @@ import type {
   BotForm,
   Connection,
   DouyinEvent,
-  DouyinMonitorState,
   DouyinMonitorTaskPayload,
+  DouyinPartition,
   DouyinTask,
+  DouyinTaskState,
   LoginForm,
   QrBegin
 } from './types';
@@ -50,6 +55,10 @@ export function App() {
   const [douyinTasks, setDouyinTasks] = usePersistentState<DouyinTask[]>(
     readStoredTasks,
     (value) => localStorage.setItem('dogebot.douyinTasks', JSON.stringify(value))
+  );
+  const [douyinPartitions, setDouyinPartitions] = usePersistentState<DouyinPartition[]>(
+    readStoredPartitions,
+    (value) => localStorage.setItem('dogebot.douyinPartitions', JSON.stringify(value))
   );
   const [favoriteUrlHistory, setFavoriteUrlHistory] = usePersistentState<string[]>(
     () => readStoredStringList('dogebot.douyinFavoriteUrlHistory'),
@@ -84,20 +93,7 @@ export function App() {
     (value) => localStorage.setItem('dogebot.douyinRetryLimit', String(value))
   );
   const [douyinStatus, setDouyinStatus] = useState(window.douyin ? '未开始' : 'Douyin preload 未加载，请检查终端日志');
-  const [douyinMonitorState, setDouyinMonitorState] = useState<DouyinMonitorState>({
-    running: false,
-    mode: 'short',
-    currentIntervalSeconds: douyinShortIntervalSeconds,
-    shortIntervalSeconds: douyinShortIntervalSeconds,
-    longIntervalSeconds: douyinLongIntervalSeconds,
-    sameIdsCount: 0,
-    retryLimit: douyinRetryLimit,
-    nextRunAt: '',
-    tickRunning: false,
-    taskCount: 0,
-    activeTaskId: '',
-    activeTaskLabel: ''
-  });
+  const [douyinTaskStates, setDouyinTaskStates] = useState<Record<string, DouyinTaskState>>({});
   const [douyinTaskStatusMap, setDouyinTaskStatusMap] = useState<Record<string, string>>({});
   const [douyinTaskEvents, setDouyinTaskEvents] = useState<Record<string, DouyinEvent[]>>({});
 
@@ -139,7 +135,7 @@ export function App() {
 
   useDouyinBridge({
     api,
-    setDouyinMonitorState,
+    setDouyinTaskStates,
     setDouyinStatus,
     setDouyinTaskStatusMap,
     setDouyinTaskEvents
@@ -229,6 +225,8 @@ export function App() {
   };
 
   const removeDouyinTask = (taskId: string) => {
+    // 删除任务时强制销毁其窗口并回收 runner，不受 destroyOnStop 影响。
+    window.douyin?.stopTask(taskId, true).catch((error) => console.error('[douyin renderer] stop task on remove failed', error));
     setDouyinTasks((tasks) => tasks.filter((task) => task.id !== taskId));
     setDouyinTaskStatusMap((records) => {
       const next = { ...records };
@@ -251,82 +249,129 @@ export function App() {
     setHistory((items) => items.filter((item) => item !== target));
   };
 
-  const openDouyinLogin = async () => {
+  const rememberHistories = (payloads: DouyinMonitorTaskPayload[]) => {
+    setFavoriteUrlHistory((current) => mergeHistoryValues(defaultFavoriteUrl, current, payloads.map((task) => task.favoriteUrl)));
+    setCollectListUrlHistory((current) => mergeHistoryValues(defaultCollectListUrl, current, payloads.map((task) => task.collectListUrl)));
+    setRequestUrlFilterHistory((current) => mergeHistoryValues(defaultRequestUrlFilter, current, payloads.map((task) => task.requestUrlFilter)));
+  };
+
+  const buildTaskPayload = (task: DouyinTask, index?: number): DouyinMonitorTaskPayload => {
+    const label = index != null ? `任务 ${index + 1}` : '任务';
+    const favoriteUrl = task.favoriteUrl.trim();
+    const collectListUrl = task.collectListUrl.trim();
+    const requestUrlFilter = task.requestUrlFilter.trim();
+    const clickText = task.clickText.trim();
+    if (!favoriteUrl) throw new Error(`${label} 缺少 favoriteUrl`);
+    if (!collectListUrl) throw new Error(`${label} 缺少 collectListUrl`);
+    if (!requestUrlFilter) throw new Error(`${label} 缺少 URL 筛选字符串`);
+    if (!clickText) throw new Error(`${label} 缺少 clickText`);
+    if (!isValidHttpUrl(favoriteUrl)) throw new Error(`${label} 的 favoriteUrl 不是有效 URL`);
+    if (!isValidHttpUrl(collectListUrl)) throw new Error(`${label} 的 collectListUrl 不是有效 URL`);
+    return {
+      id: task.id,
+      partition: partitionElectronId(task.partitionId),
+      favoriteUrl,
+      collectListUrl,
+      requestUrlFilter,
+      clickText,
+      skipClick: task.skipClick,
+      runHidden: task.runHidden,
+      showOnClickFailure: task.showOnClickFailure,
+      shortIntervalSeconds: task.shortIntervalSeconds,
+      longIntervalSeconds: task.longIntervalSeconds,
+      retryLimit: task.retryLimit,
+      destroyOnStop: task.destroyOnStop
+    };
+  };
+
+  const openDouyinLogin = async (partitionId: string) => {
     try {
-      console.log('[douyin renderer] click login');
+      console.log('[douyin renderer] click login', partitionId);
       setDouyinStatus('正在打开 douyin.com...');
-      await requireDouyinBridge().openLogin();
+      await requireDouyinBridge().openLogin(partitionElectronId(partitionId));
       setDouyinStatus('已打开 douyin.com，请在弹出的浏览器窗口完成登录');
     } catch (error) {
       setDouyinStatus(error instanceof Error ? error.message : '打开抖音登录失败');
     }
   };
 
-  const startDouyinMonitor = async () => {
+  const startDouyinTask = async (task: DouyinTask) => {
     try {
-      const tasks = activeDouyinTasks.map((task, index) => {
-        const normalized: DouyinMonitorTaskPayload = {
-          id: task.id,
-          favoriteUrl: task.favoriteUrl.trim(),
-          collectListUrl: task.collectListUrl.trim(),
-          requestUrlFilter: task.requestUrlFilter.trim(),
-          clickText: task.clickText.trim(),
-          skipClick: task.skipClick
-        };
-        if (!normalized.favoriteUrl) throw new Error(`任务 ${index + 1} 缺少 favoriteUrl`);
-        if (!normalized.collectListUrl) throw new Error(`任务 ${index + 1} 缺少 collectListUrl`);
-        if (!normalized.requestUrlFilter) throw new Error(`任务 ${index + 1} 缺少 URL 筛选字符串`);
-        if (!normalized.clickText) throw new Error(`任务 ${index + 1} 缺少 clickText`);
-        if (!isValidHttpUrl(normalized.favoriteUrl)) throw new Error(`任务 ${index + 1} 的 favoriteUrl 不是有效 URL`);
-        if (!isValidHttpUrl(normalized.collectListUrl)) throw new Error(`任务 ${index + 1} 的 collectListUrl 不是有效 URL`);
-        return normalized;
-      });
-      if (tasks.length === 0) {
-        setDouyinStatus('请至少启用一个任务');
-        return;
-      }
-      setFavoriteUrlHistory((current) => mergeHistoryValues(defaultFavoriteUrl, current, tasks.map((task) => task.favoriteUrl)));
-      setCollectListUrlHistory((current) => mergeHistoryValues(defaultCollectListUrl, current, tasks.map((task) => task.collectListUrl)));
-      setRequestUrlFilterHistory((current) => mergeHistoryValues(defaultRequestUrlFilter, current, tasks.map((task) => task.requestUrlFilter)));
-      setDouyinTaskStatusMap((records) => {
-        const next = { ...records };
-        for (const task of tasks) next[task.id] = '等待执行';
-        return next;
-      });
-      console.log('[douyin renderer] start monitor', {
-        taskCount: tasks.length,
-        hidden: douyinRunHidden,
-        showOnClickFailure: douyinShowOnClickFailure,
-        shortIntervalSeconds: douyinShortIntervalSeconds,
-        longIntervalSeconds: douyinLongIntervalSeconds,
-        retryLimit: douyinRetryLimit
-      });
-      setDouyinStatus(`监听中：共 ${tasks.length} 个活跃任务，按顺序执行`);
-      await requireDouyinBridge().startMonitor(tasks, {
-        hidden: douyinRunHidden,
-        showOnClickFailure: douyinShowOnClickFailure,
-        shortIntervalSeconds: douyinShortIntervalSeconds,
-        longIntervalSeconds: douyinLongIntervalSeconds,
-        retryLimit: douyinRetryLimit
-      });
+      const payload = buildTaskPayload(task);
+      rememberHistories([payload]);
+      setDouyinTaskStatusMap((records) => ({ ...records, [task.id]: '等待执行' }));
+      setDouyinStatus(`任务「${task.clickText.trim() || task.id}」监听中`);
+      await requireDouyinBridge().startTask(payload);
     } catch (error) {
       setDouyinStatus(error instanceof Error ? error.message : '开始监听失败');
     }
   };
 
-  const stopDouyinMonitor = async () => {
-    console.log('[douyin renderer] stop monitor');
-    await requireDouyinBridge().stopMonitor();
-    setDouyinStatus('已停止监听');
+  const stopDouyinTask = async (task: DouyinTask) => {
+    try {
+      await requireDouyinBridge().stopTask(task.id);
+      setDouyinStatus(`任务「${task.clickText.trim() || task.id}」已停止监听`);
+    } catch (error) {
+      setDouyinStatus(error instanceof Error ? error.message : '停止监听失败');
+    }
   };
 
-  const refreshDouyinNow = async () => {
+  const refreshDouyinTask = async (task: DouyinTask) => {
     try {
       setDouyinStatus('正在立即刷新...');
-      await requireDouyinBridge().refreshNow();
+      await requireDouyinBridge().refreshTask(task.id);
     } catch (error) {
       setDouyinStatus(error instanceof Error ? error.message : '立即刷新失败');
     }
+  };
+
+  const setDouyinTaskHidden = (task: DouyinTask, hidden: boolean) => {
+    updateDouyinTask(task.id, { runHidden: hidden });
+    window.douyin?.setTaskHidden(task.id, hidden).catch((error) => {
+      console.error('[douyin renderer] set task hidden failed', error);
+      setDouyinStatus(error instanceof Error ? error.message : '切换 Douyin 窗口显示状态失败');
+    });
+  };
+
+  const startAllDouyinTasks = async () => {
+    try {
+      const payloads = activeDouyinTasks.map((task, index) => buildTaskPayload(task, index));
+      if (payloads.length === 0) {
+        setDouyinStatus('请至少启用一个任务');
+        return;
+      }
+      rememberHistories(payloads);
+      setDouyinTaskStatusMap((records) => {
+        const next = { ...records };
+        for (const payload of payloads) next[payload.id] = '等待执行';
+        return next;
+      });
+      setDouyinStatus(`监听中：共 ${payloads.length} 个活跃任务，各自独立执行`);
+      await requireDouyinBridge().startAll(payloads);
+    } catch (error) {
+      setDouyinStatus(error instanceof Error ? error.message : '开始监听失败');
+    }
+  };
+
+  const stopAllDouyinTasks = async () => {
+    try {
+      await requireDouyinBridge().stopAll();
+      setDouyinStatus('已停止全部监听');
+    } catch (error) {
+      setDouyinStatus(error instanceof Error ? error.message : '停止监听失败');
+    }
+  };
+
+  const addDouyinPartition = (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setDouyinPartitions((list) => [...list, { id: createPartitionId(), name: trimmed }]);
+  };
+
+  const removeDouyinPartition = (partitionId: string) => {
+    if (partitionId === DEFAULT_PARTITION_ID) return;
+    setDouyinTasks((tasks) => tasks.map((task) => (task.partitionId === partitionId ? { ...task, partitionId: DEFAULT_PARTITION_ID } : task)));
+    setDouyinPartitions((list) => list.filter((partition) => partition.id !== partitionId));
   };
 
   return (
@@ -370,14 +415,15 @@ export function App() {
             douyinShowOnClickFailure={douyinShowOnClickFailure}
             setDouyinShowOnClickFailure={setDouyinShowOnClickFailure}
             douyinStatus={douyinStatus}
-            setDouyinStatus={setDouyinStatus}
-            douyinMonitorState={douyinMonitorState}
-            onOpenLogin={openDouyinLogin}
+            partitions={douyinPartitions}
+            onAddPartition={addDouyinPartition}
+            onRemovePartition={removeDouyinPartition}
+            onLoginPartition={openDouyinLogin}
             onAddTask={addDouyinTask}
-            onStartMonitor={startDouyinMonitor}
-            onRefreshNow={refreshDouyinNow}
-            onStopMonitor={stopDouyinMonitor}
+            onStartAll={startAllDouyinTasks}
+            onStopAll={stopAllDouyinTasks}
             douyinTasks={douyinTasks}
+            taskStates={douyinTaskStates}
             favoriteUrlOptions={favoriteUrlOptions}
             collectListUrlOptions={collectListUrlOptions}
             requestUrlFilterOptions={requestUrlFilterOptions}
@@ -385,6 +431,11 @@ export function App() {
             douyinTaskEvents={douyinTaskEvents}
             updateDouyinTask={updateDouyinTask}
             removeDouyinTask={removeDouyinTask}
+            onStartTask={startDouyinTask}
+            onStopTask={stopDouyinTask}
+            onRefreshTask={refreshDouyinTask}
+            onSetTaskHidden={setDouyinTaskHidden}
+            onLoginTask={openDouyinLogin}
             deleteHistoryValue={deleteHistoryValue}
             setFavoriteUrlHistory={setFavoriteUrlHistory}
             setCollectListUrlHistory={setCollectListUrlHistory}

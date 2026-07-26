@@ -33,6 +33,21 @@ code {
   margin-top: 16px;
 }
 
+.douyin-partition-card,
+.douyin-defaults-card {
+  margin-bottom: 16px;
+  background: #0b1220;
+  border: 1px solid #374151;
+}
+
+.douyin-partition-list {
+  margin-top: 8px;
+}
+
+.douyin-global-actions {
+  margin-bottom: 16px;
+}
+
 .douyin-task-list {
   display: flex;
   width: 100%;
