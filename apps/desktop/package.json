@@ -5,10 +5,10 @@
   "author": "DogeBot",
   "private": true,
   "type": "module",
-  "main": "dist/main.js",
+  "main": "dist/main/index.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json && vite build && node -e \"const fs=require('fs'); for (const file of ['preload.cjs','douyin-preload.cjs']) fs.copyFileSync('src/'+file, 'dist/'+file)\"",
-    "dev": "pnpm build && electron dist/main.js",
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.renderer.json && vite build && node scripts/copy-preload.mjs",
+    "dev": "pnpm build && electron dist/main/index.js",
     "package:dir": "pnpm build && electron-builder --dir",
     "package:mac": "pnpm build && electron-builder --mac",
     "package:win": "pnpm build && electron-builder --win"
