@@ -13,6 +13,9 @@
   --accent-hover: #1d4ed8;
   --accent-soft: #eff6ff;
   --danger: #dc2626;
+  --disabled-bg: #f0f2f5;
+  --disabled-border: #dde2e9;
+  --disabled-text: #98a2b3;
   --control-height-mini: 26px;
   --control-height-small: 30px;
   --control-height-default: 36px;
@@ -403,6 +406,54 @@ code {
   color: #98a2b3;
 }
 
+/* Disabled fields stay visually distinct and do not react to hover. */
+.app-shell .arco-input.arco-input-disabled,
+.app-shell .arco-input.arco-input-disabled:hover,
+.app-shell .arco-input-inner-wrapper-disabled,
+.app-shell .arco-input-inner-wrapper-disabled:hover,
+.app-shell .arco-select-disabled .arco-select-view,
+.app-shell .arco-select-disabled:hover .arco-select-view,
+.app-shell .arco-textarea-wrapper:has(.arco-textarea-disabled),
+.app-shell .arco-textarea-wrapper:has(.arco-textarea-disabled):hover {
+  border-color: var(--disabled-border);
+  background: var(--disabled-bg);
+  box-shadow: none;
+  color: var(--disabled-text);
+  cursor: not-allowed;
+  -webkit-text-fill-color: var(--disabled-text);
+}
+
+.app-shell .arco-input-inner-wrapper-disabled .arco-input,
+.app-shell .arco-input-inner-wrapper-disabled .arco-input:hover,
+.app-shell .arco-input-inner-wrapper-disabled .arco-input:focus,
+.app-shell .arco-select-disabled .arco-select-view-value,
+.app-shell .arco-select-disabled .arco-select-view-input,
+.app-shell .arco-select-disabled .arco-select-suffix {
+  color: var(--disabled-text);
+  cursor: not-allowed;
+  -webkit-text-fill-color: var(--disabled-text);
+}
+
+.app-shell .arco-input-number.arco-input-group-wrapper-disabled,
+.app-shell .arco-input-number.arco-input-group-wrapper-disabled:hover {
+  background: transparent;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.app-shell .arco-input-group-wrapper-disabled .arco-input-number-step-layer {
+  border-color: var(--disabled-border);
+  background: #e8ebef;
+}
+
+.app-shell .arco-input-number-step-button-disabled,
+.app-shell .arco-input-number-step-button-disabled:hover,
+.app-shell .arco-input-number-step-button-disabled:active {
+  background: transparent;
+  color: #b4bcc8;
+  cursor: not-allowed;
+}
+
 /* Buttons and switches */
 .app-shell .arco-btn {
   height: var(--control-height-default);
@@ -459,12 +510,42 @@ code {
   padding: 0 18px;
 }
 
+.app-shell .arco-btn.arco-btn-disabled,
+.app-shell .arco-btn.arco-btn-disabled:hover,
+.app-shell .arco-btn.arco-btn-disabled:active,
+.app-shell .arco-btn-primary.arco-btn-disabled,
+.app-shell .arco-btn-primary.arco-btn-disabled:hover,
+.app-shell .arco-btn-primary.arco-btn-disabled:active {
+  border-color: var(--disabled-border);
+  background: var(--disabled-bg);
+  box-shadow: none;
+  color: var(--disabled-text);
+  cursor: not-allowed;
+  transform: none;
+}
+
 .app-shell .arco-switch {
   background: #cbd2dc;
 }
 
 .app-shell .arco-switch-checked {
   background: var(--accent);
+}
+
+.app-shell .arco-switch[disabled],
+.app-shell .arco-switch[disabled]:hover {
+  background: #dfe3e8;
+  cursor: not-allowed;
+}
+
+.app-shell .arco-switch[disabled].arco-switch-checked,
+.app-shell .arco-switch[disabled].arco-switch-checked:hover {
+  background: #aebfe0;
+}
+
+.app-shell .arco-switch[disabled] .arco-switch-dot {
+  box-shadow: none;
+  opacity: 0.8;
 }
 
 /* Status, lists, and tabs */
