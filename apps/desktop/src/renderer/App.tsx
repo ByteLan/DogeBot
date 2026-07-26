@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Typography } from '@arco-design/web-react';
+import { Alert, Button, Typography } from '@arco-design/web-react';
 import { defaultFavoriteUrl, defaultCollectListUrl, defaultRequestUrlFilter } from '../shared/constants';
 import { isValidHttpUrl } from '../shared/url';
 import { useApi } from './api';
@@ -375,15 +375,24 @@ export function App() {
   };
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell ${loggedIn ? '' : 'app-shell-login'}`.trim()}>
       <header className="app-header">
-        <div className="app-logo" aria-hidden="true">DB</div>
-        <div>
-          <Title heading={2}>DogeBot</Title>
-          <Text className="app-subtitle" type="secondary">桌面自动化控制台</Text>
+        <div className="app-brand">
+          <div className="app-logo" aria-hidden="true">DB</div>
+          <div>
+            <Title heading={2}>DogeBot</Title>
+            <Text className="app-subtitle" type="secondary">桌面自动化控制台</Text>
+          </div>
         </div>
+        {loggedIn ? <Button className="header-logout" size="small" onClick={logout}>退出登录</Button> : null}
       </header>
-      {message ? <Alert className="app-message" type="info" content={message} /> : null}
+      {message ? (
+        <Alert
+          className="app-message"
+          type={/失败|错误|未加载/.test(message) ? 'error' : /成功|已/.test(message) ? 'success' : 'info'}
+          content={message}
+        />
+      ) : null}
 
       {!loggedIn ? (
         <LoginCard
@@ -400,7 +409,6 @@ export function App() {
             setBotForm={setBotForm}
             onCreateBot={createBot}
             onBeginQrRegistration={beginQrRegistration}
-            onLogout={logout}
             qrRegistration={qrRegistration}
             bots={bots}
             connectionMap={connectionMap}

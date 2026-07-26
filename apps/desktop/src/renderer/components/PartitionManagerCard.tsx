@@ -19,19 +19,19 @@ export function PartitionManagerCard(props: {
     setName('');
   };
   return (
-    <Card className="douyin-partition-card" title="浏览器 partition 管理">
+    <Card className="douyin-partition-card" title="浏览器身份管理">
       <Typography.Paragraph type="secondary">
-        每个 partition 是一份独立的登录态；共享同一 partition 的任务共享登录，各任务仍会打开各自的窗口。
+        每个浏览器身份（partition）保存一份独立登录态；使用同一身份的任务会共享登录。
       </Typography.Paragraph>
-      <Space>
+      <Space className="partition-create-row">
         <Input
-          style={{ width: 240 }}
+          aria-label="新浏览器身份名称"
           value={name}
-          placeholder="新 partition 名称"
+          placeholder="输入新身份名称"
           onChange={setName}
           onPressEnter={submit}
         />
-        <Button type="primary" onClick={submit}>新增 partition</Button>
+        <Button onClick={submit}>新增身份</Button>
       </Space>
       <List
         className="douyin-partition-list"
@@ -41,7 +41,7 @@ export function PartitionManagerCard(props: {
           <List.Item
             key={partition.id}
             actions={[
-              <Button key="login" size="small" onClick={() => onLogin(partition.id)}>登录</Button>,
+              <Button key="login" size="small" onClick={() => onLogin(partition.id)}>登录抖音</Button>,
               <Button
                 key="remove"
                 size="small"

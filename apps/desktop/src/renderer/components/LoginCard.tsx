@@ -16,17 +16,17 @@ export function LoginCard(props: {
     <Card title="登录服务端">
       <Form layout="vertical">
         <Form.Item label="服务端 URL">
-          <Input value={serverUrl} onChange={setServerUrl} />
+          <Input aria-label="服务端 URL" value={serverUrl} onChange={setServerUrl} />
         </Form.Item>
         <Row gutter={12}>
-          <Col span={12}>
+          <Col xs={24} sm={12}>
             <Form.Item label="用户名">
-              <Input value={loginForm.username} autoComplete="username" onChange={(username) => setLoginForm((form) => ({ ...form, username }))} />
+              <Input aria-label="用户名" value={loginForm.username} autoComplete="username" onChange={(username) => setLoginForm((form) => ({ ...form, username }))} />
             </Form.Item>
           </Col>
-          <Col span={12}>
+          <Col xs={24} sm={12}>
             <Form.Item label="密码">
-              <Input.Password value={loginForm.password} autoComplete="current-password" onChange={(password) => setLoginForm((form) => ({ ...form, password }))} />
+              <Input.Password aria-label="密码" value={loginForm.password} autoComplete="current-password" onChange={(password) => setLoginForm((form) => ({ ...form, password }))} />
             </Form.Item>
           </Col>
         </Row>

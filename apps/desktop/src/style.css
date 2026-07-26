@@ -31,7 +31,7 @@
 }
 
 html {
-  min-width: 720px;
+  min-width: 560px;
   min-height: 100%;
   background: var(--page-bg);
 }
@@ -70,11 +70,22 @@ code {
   padding: 32px 30px 56px;
 }
 
+.app-shell-login {
+  width: min(100%, 760px);
+}
+
 .app-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 13px;
   margin: 2px 0 24px;
+}
+
+.app-brand {
+  display: flex;
+  align-items: center;
+  gap: 13px;
 }
 
 .app-logo {
@@ -108,9 +119,13 @@ code {
 .app-subtitle {
   display: block;
   margin-top: 3px !important;
-  color: #7b8798 !important;
+  color: var(--text-secondary) !important;
   font-size: 13px;
   line-height: 1.4;
+}
+
+.header-logout {
+  flex: 0 0 auto;
 }
 
 .app-shell > .arco-card {
@@ -189,6 +204,23 @@ code {
   background: #fbfcfe;
 }
 
+.task-enabled-label {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: #f2f4f7;
+  color: #667085;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.task-enabled-label.is-enabled {
+  background: #ecfdf3;
+  color: #18794e;
+}
+
 /* Typography and spacing */
 .app-shell .arco-typography,
 .app-shell .arco-typography-title {
@@ -213,8 +245,183 @@ code {
   font-weight: 550;
 }
 
+.feishu-quick-bind {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin: 18px 0;
+  padding: 18px;
+  border: 1px solid #cfe0fb;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #f8fbff 0%, #f1f6ff 100%);
+}
+
+.quick-bind-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.section-kicker {
+  color: var(--accent) !important;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+}
+
+.quick-bind-title {
+  color: var(--text) !important;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.quick-bind-actions {
+  flex: 0 0 auto;
+}
+
+.domain-select {
+  width: 150px;
+}
+
+.section-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 24px 0 10px;
+}
+
+.section-heading > div {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.section-heading .arco-typography-title,
+.section-heading .arco-typography {
+  margin: 0;
+}
+
+.compact-empty {
+  padding: 16px;
+  color: #98a2b3;
+  text-align: center;
+}
+
+/* Low-frequency settings stay available without dominating the page. */
+.ui-collapse {
+  border: 1px solid var(--border) !important;
+  border-radius: 10px;
+  background: #fbfcfe;
+  overflow: hidden;
+}
+
+.ui-collapse .arco-collapse-item-header,
+.ui-collapse .arco-collapse-item-active > .arco-collapse-item-header {
+  min-height: 48px;
+  padding-top: 11px;
+  padding-bottom: 11px;
+  border-bottom-color: transparent;
+  background: #fbfcfe;
+  color: #344054;
+  font-weight: 600;
+}
+
+.ui-collapse .arco-collapse-item-active > .arco-collapse-item-header {
+  border-bottom-color: var(--border);
+}
+
+.ui-collapse .arco-collapse-item-content {
+  background: #ffffff;
+}
+
+.ui-collapse .arco-collapse-item-content-box {
+  padding: 18px;
+}
+
+.manual-bind-collapse {
+  margin: 16px 0 4px;
+}
+
+.collapse-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  line-height: 1.4;
+}
+
+.collapse-heading .arco-typography-secondary {
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.monitor-command-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 18px 0 12px;
+}
+
+.runner-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #f8fafc;
+  white-space: nowrap;
+}
+
+.runner-summary .arco-typography {
+  color: #667085;
+  font-size: 12px;
+}
+
+.runner-dot,
+.status-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: #98a2b3;
+  box-shadow: 0 0 0 3px rgb(152 162 179 / 12%);
+}
+
+.runner-summary.is-running .runner-dot,
+.status-dot.is-running {
+  background: #22a06b;
+  box-shadow: 0 0 0 3px rgb(34 160 107 / 13%);
+}
+
+.status-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+}
+
+.settings-collapse {
+  margin: 14px 0 24px;
+}
+
+.settings-note {
+  display: block;
+  margin: 0 0 16px;
+  font-size: 12px;
+}
+
+.task-section-heading {
+  margin-top: 0;
+}
+
 .douyin-global-actions {
-  margin: 2px 0 16px;
+  margin: 0;
 }
 
 .douyin-task-status {
@@ -232,6 +439,118 @@ code {
 .history-select-main {
   min-width: 0;
   flex: 1;
+}
+
+.history-delete-button {
+  width: var(--control-height-default);
+  min-width: var(--control-height-default);
+  padding: 0 !important;
+  color: #667085 !important;
+}
+
+.history-delete-button:hover {
+  border-color: #fecaca !important;
+  background: #fff7f7 !important;
+  color: var(--danger) !important;
+}
+
+.history-delete-symbol {
+  display: block;
+  font-size: 18px;
+  font-weight: 400;
+  line-height: 1;
+  transform: translateY(-1px);
+}
+
+.partition-create-row {
+  display: flex;
+  width: 100%;
+}
+
+.partition-create-row .arco-input {
+  width: 240px;
+}
+
+.option-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+
+.option-grid-compact {
+  max-width: 680px;
+}
+
+.option-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 58px;
+  padding: 11px 12px;
+  border: 1px solid #e8ecf2;
+  border-radius: 9px;
+  background: #ffffff;
+}
+
+.option-row .arco-switch {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.option-row > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.option-row .arco-typography {
+  line-height: 1.4;
+}
+
+.option-row .arco-typography-secondary {
+  font-size: 12px;
+}
+
+.task-actions {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.task-status-panel {
+  margin-top: 18px;
+  padding: 14px 16px;
+  border: 1px solid #e8ecf2;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.task-current-status {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+
+.task-runtime-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+}
+
+.task-runtime-meta > span {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.task-runtime-meta .arco-typography {
+  font-size: 12px;
+}
+
+.result-collapse {
+  margin-top: 12px;
+  border-color: #e8ecf2 !important;
 }
 
 /* Controls share one size system across inputs, selects, number fields and buttons. */
@@ -556,6 +875,28 @@ code {
   color: #24456f;
 }
 
+.app-shell .arco-alert-success {
+  border-color: #b7ebcd;
+  background: #f0fbf5;
+  color: #166b49;
+}
+
+.app-shell .arco-alert-warning {
+  border-color: #f5d995;
+  background: #fff9e8;
+  color: #7a4d0b;
+}
+
+.app-shell .arco-alert-error {
+  border-color: #f5c2c7;
+  background: #fff3f3;
+  color: #9b252d;
+}
+
+.app-shell .arco-alert .arco-typography {
+  color: inherit;
+}
+
 .app-shell .arco-list {
   color: var(--text);
 }
@@ -624,5 +965,62 @@ code {
 
   .app-shell .arco-card-body {
     padding: 18px;
+  }
+
+  .feishu-quick-bind,
+  .monitor-command-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .quick-bind-actions {
+    display: flex;
+    flex-wrap: wrap;
+  }
+
+  .runner-summary {
+    align-self: flex-start;
+  }
+
+  .option-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .status-content {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
+  }
+}
+
+@media (max-width: 640px) {
+  .app-shell {
+    padding: 20px 16px 32px;
+  }
+
+  .app-header {
+    margin-bottom: 18px;
+  }
+
+  .app-shell .arco-card-header,
+  .app-shell .arco-card-body {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .douyin-global-actions,
+  .quick-bind-actions,
+  .partition-create-row {
+    display: flex;
+    flex-wrap: wrap;
+  }
+
+  .domain-select,
+  .partition-create-row .arco-input {
+    width: 100%;
+  }
+
+  .ui-collapse .arco-collapse-item-content-box {
+    padding: 14px;
   }
 }
