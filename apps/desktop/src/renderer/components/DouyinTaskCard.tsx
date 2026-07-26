@@ -1,6 +1,6 @@
 import React, { type Dispatch, type SetStateAction } from 'react';
 import { Button, Card, Form, Grid, Input, InputNumber, Select, Space, Switch, Tabs, Typography } from '@arco-design/web-react';
-import { JsonView, allExpanded, collapseAllNested, darkStyles } from 'react-json-view-lite';
+import { JsonView, allExpanded, collapseAllNested, defaultStyles } from 'react-json-view-lite';
 import { extractAwemeIds } from '../../shared/aweme';
 import { defaultRequestUrlFilter } from '../../shared/constants';
 import type { DouyinEvent, DouyinPartition, DouyinTask, DouyinTaskState } from '../types';
@@ -193,10 +193,10 @@ export function DouyinTaskCard(props: {
             <Card key={event.id} className="json-card" title={`${new Date(Number(event.id.split('-')[0])).toLocaleString()} · ${event.title}`}>
               <Tabs defaultActiveTab="awemeIds">
                 <Tabs.TabPane key="awemeIds" title="aweme_id">
-                  <JsonView data={extractAwemeIds(event.data)} shouldExpandNode={allExpanded} style={darkStyles} />
+                  <JsonView data={extractAwemeIds(event.data)} shouldExpandNode={allExpanded} style={defaultStyles} />
                 </Tabs.TabPane>
                 <Tabs.TabPane key="body" title="Body">
-                  <JsonView data={event.data as object} shouldExpandNode={collapseAllNested} style={darkStyles} />
+                  <JsonView data={event.data as object} shouldExpandNode={collapseAllNested} style={defaultStyles} />
                 </Tabs.TabPane>
               </Tabs>
             </Card>

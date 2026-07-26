@@ -27,7 +27,7 @@ export function HistorySelect(props: {
           ))}
         </Select>
       </div>
-      <Button size="mini" onClick={onDeleteHistory}>删除历史</Button>
+      <Button onClick={onDeleteHistory}>删除历史</Button>
     </div>
   );
 }
