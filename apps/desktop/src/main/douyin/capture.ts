@@ -3,17 +3,17 @@ import { DouyinIpc } from '../../shared/ipc-channels.js';
 import type { DouyinTaskConfig } from '../../shared/types.js';
 import { logDouyin } from '../log.js';
 import { douyinCaptureWaitMs } from './constants.js';
-import { DOUYIN_TASK_SEEN_IDS_MAX, douyinTaskSeenIds, state } from './state.js';
+import { DOUYIN_TASK_SEEN_IDS_MAX, state } from './state.js';
 import { isCollectListUrl, taskLabel } from './tasks.js';
-import type { DouyinTaskRunResult } from './types.js';
+import type { DouyinRunner, DouyinTaskRunResult } from './types.js';
 
 type CollectListData = { url?: unknown; status?: unknown; body?: unknown; error?: unknown; source?: unknown; receivedAt?: unknown };
 
-export function clearPendingCapture(result?: DouyinTaskRunResult) {
-  if (!state.douyinPendingCapture) return;
-  clearTimeout(state.douyinPendingCapture.timer);
-  const pending = state.douyinPendingCapture;
-  state.douyinPendingCapture = undefined;
+export function clearPendingCapture(runner: DouyinRunner, result?: DouyinTaskRunResult) {
+  if (!runner.pendingCapture) return;
+  clearTimeout(runner.pendingCapture.timer);
+  const pending = runner.pendingCapture;
+  runner.pendingCapture = undefined;
   if (!pending.settled) {
     pending.settled = true;
     pending.resolve(result || { captured: false, changed: false, awemeIds: [] });
@@ -36,14 +36,9 @@ function buildCollectListResult(task: DouyinTaskConfig, data: CollectListData) {
   };
 }
 
-function findMatchedTaskByUrl(url: string, preferredTask?: DouyinTaskConfig) {
-  if (preferredTask && isCollectListUrl(url, preferredTask)) return preferredTask;
-  return state.douyinTasks.find((task) => isCollectListUrl(url, task));
-}
-
-function checkAndUpdateSeenIds(taskId: string, awemeIds: string[]) {
+function checkAndUpdateSeenIds(runner: DouyinRunner, awemeIds: string[]) {
   if (awemeIds.length === 0) return false;
-  let seenList = douyinTaskSeenIds.get(taskId) || [];
+  let seenList = runner.seenIds;
   const seenSet = new Set(seenList);
   const hasNew = awemeIds.some((id) => !seenSet.has(id));
   if (!hasNew) return false;
@@ -56,14 +51,15 @@ function checkAndUpdateSeenIds(taskId: string, awemeIds: string[]) {
   if (seenList.length > DOUYIN_TASK_SEEN_IDS_MAX) {
     seenList = seenList.slice(seenList.length - DOUYIN_TASK_SEEN_IDS_MAX);
   }
-  douyinTaskSeenIds.set(taskId, seenList);
+  runner.seenIds = seenList;
   return true;
 }
 
-function emitCollectListResult(task: DouyinTaskConfig, data: CollectListData) {
+function emitCollectListResult(runner: DouyinRunner, data: CollectListData) {
+  const task = runner.task;
   const result = buildCollectListResult(task, data);
   const awemeIds = result.body ? extractAwemeIdsFromBody(result.body) : [];
-  const changed = checkAndUpdateSeenIds(task.id, awemeIds);
+  const changed = checkAndUpdateSeenIds(runner, awemeIds);
   logDouyin('collect list response captured', {
     taskId: result.taskId,
     url: result.url,
@@ -73,37 +69,38 @@ function emitCollectListResult(task: DouyinTaskConfig, data: CollectListData) {
     error: result.error,
     changed,
     awemeCount: awemeIds.length,
-    seenCount: (douyinTaskSeenIds.get(task.id) || []).length
+    seenCount: runner.seenIds.length
   });
   state.mainWindow?.webContents.send(DouyinIpc.collectsVideoList, { ...result, awemeIds, changed });
   return { changed, awemeIds };
 }
 
-export function handleCapturedCollectsVideoList(payload: unknown) {
+// 抓包 payload 已由 event.sender 定位到具体 runner；仍用 URL 二次校验归属该任务。
+export function handleCapturedCollectsVideoList(runner: DouyinRunner, payload: unknown) {
   if (!payload || typeof payload !== 'object') return;
   const data = payload as CollectListData;
-  const pending = state.douyinPendingCapture;
   if (typeof data.url !== 'string') {
-    logDouyin('ignored collect list payload without url', { source: data.source });
+    logDouyin('ignored collect list payload without url', { taskId: runner.taskId, source: data.source });
     return;
   }
-  const matchedTask = findMatchedTaskByUrl(data.url, pending?.task);
-  if (!matchedTask) {
-    logDouyin('ignored collect list payload', { url: data.url, source: data.source });
+  if (!isCollectListUrl(data.url, runner.task)) {
+    logDouyin('ignored collect list payload', { taskId: runner.taskId, url: data.url, source: data.source });
     return;
   }
-  if (!state.douyinMonitorRunning && (!pending || matchedTask.id !== pending.task.id)) {
-    logDouyin('ignored collect list payload while monitor stopped', { url: data.url, taskId: matchedTask.id });
+  const pending = runner.pendingCapture;
+  if (!runner.running && !pending) {
+    logDouyin('ignored collect list payload while runner stopped', { taskId: runner.taskId, url: data.url });
     return;
   }
-  const result = emitCollectListResult(matchedTask, data);
-  if (pending && matchedTask.id === pending.task.id) {
-    clearPendingCapture({ captured: true, changed: result.changed, awemeIds: result.awemeIds });
+  const result = emitCollectListResult(runner, data);
+  if (pending) {
+    clearPendingCapture(runner, { captured: true, changed: result.changed, awemeIds: result.awemeIds });
   }
 }
 
-export function createPendingCapture(task: DouyinTaskConfig) {
-  clearPendingCapture();
+export function createPendingCapture(runner: DouyinRunner) {
+  clearPendingCapture(runner);
+  const task = runner.task;
   return new Promise<DouyinTaskRunResult>((resolve) => {
     const timer = setTimeout(() => {
       logDouyin('collect list wait timeout', { taskId: task.id, task: taskLabel(task) });
@@ -120,9 +117,9 @@ export function createPendingCapture(task: DouyinTaskConfig) {
         receivedAt: new Date().toISOString(),
         awemeIds: []
       });
-      clearPendingCapture({ captured: false, changed: false, awemeIds: [] });
+      clearPendingCapture(runner, { captured: false, changed: false, awemeIds: [] });
     }, douyinCaptureWaitMs);
-    state.douyinPendingCapture = {
+    runner.pendingCapture = {
       task,
       resolve,
       timer,

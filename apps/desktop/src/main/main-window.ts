@@ -1,7 +1,7 @@
 import { BrowserWindow } from 'electron';
 import { indexHtmlPath, preloadPath } from './paths.js';
 import { state } from './douyin/state.js';
-import { sendMonitorState } from './douyin/monitor.js';
+import { sendTasksState } from './douyin/monitor.js';
 
 export function showMainWindow() {
   if (!state.mainWindow || state.mainWindow.isDestroyed()) createWindow();
@@ -9,7 +9,7 @@ export function showMainWindow() {
   if (state.mainWindow.isMinimized()) state.mainWindow.restore();
   state.mainWindow.show();
   state.mainWindow.focus();
-  sendMonitorState();
+  sendTasksState();
 }
 
 export function hideMainWindowToTray() {

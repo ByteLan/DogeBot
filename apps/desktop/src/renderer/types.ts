@@ -1,6 +1,6 @@
-import type { DouyinTaskConfig, DouyinMonitorSharedConfig, DouyinMonitorState } from '../shared/types';
+import type { DouyinTaskConfig, DouyinMonitorSharedConfig, DouyinTaskState, DouyinPartition } from '../shared/types';
 
-export type { DouyinMonitorSharedConfig, DouyinMonitorState };
+export type { DouyinMonitorSharedConfig, DouyinTaskState, DouyinPartition };
 export type DouyinMonitorTaskPayload = DouyinTaskConfig;
 
 export type Bot = {
@@ -44,23 +44,32 @@ export type BotForm = {
 export type DouyinTask = {
   id: string;
   enabled: boolean;
+  partitionId: string;
   favoriteUrl: string;
   collectListUrl: string;
   requestUrlFilter: string;
   clickText: string;
   skipClick: boolean;
+  runHidden: boolean;
+  showOnClickFailure: boolean;
+  shortIntervalSeconds: number;
+  longIntervalSeconds: number;
+  retryLimit: number;
+  destroyOnStop: boolean;
 };
 
 export type DouyinBridge = {
-  openLogin: () => Promise<void>;
-  startMonitor: (tasks: DouyinMonitorTaskPayload[], sharedConfig?: DouyinMonitorSharedConfig) => Promise<void>;
-  stopMonitor: () => Promise<void>;
-  refreshNow: () => Promise<void>;
-  getMonitorState: () => Promise<DouyinMonitorState>;
-  setHidden: (hidden: boolean) => Promise<void>;
+  openLogin: (partition: string) => Promise<void>;
+  startTask: (task: DouyinMonitorTaskPayload) => Promise<void>;
+  startAll: (tasks: DouyinMonitorTaskPayload[]) => Promise<void>;
+  stopTask: (taskId: string, destroyWindow?: boolean) => Promise<void>;
+  stopAll: () => Promise<void>;
+  refreshTask: (taskId: string) => Promise<void>;
+  setTaskHidden: (taskId: string, hidden: boolean) => Promise<void>;
+  getTasksState: () => Promise<Record<string, DouyinTaskState>>;
   onClickResult: (listener: (data: unknown) => void) => () => void;
   onCollectsVideoList: (listener: (data: unknown) => void) => () => void;
-  onMonitorState: (listener: (data: DouyinMonitorState) => void) => () => void;
+  onTasksState: (listener: (data: Record<string, DouyinTaskState>) => void) => () => void;
 };
 
 export type DouyinEvent = {

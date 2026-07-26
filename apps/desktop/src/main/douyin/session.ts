@@ -1,14 +1,15 @@
 import { session } from 'electron';
 import { logDouyin } from '../log.js';
 import { isAllowedNavigationUrl } from '../navigation.js';
-import { chromeVersion, douyinPartition, douyinUserAgent } from './constants.js';
+import { chromeVersion, douyinUserAgent } from './constants.js';
+import { state } from './state.js';
 
-let douyinSessionConfigured = false;
-
-export function configureDouyinSession() {
-  const ses = session.fromPartition(douyinPartition);
-  if (douyinSessionConfigured) return ses;
-  douyinSessionConfigured = true;
+// 按 partition 配置一次（UA / 请求头改写 / 自定义协议拦截）。
+// 多个窗口复用同一 partition 时不会重复挂 webRequest 监听。
+export function configureDouyinSession(partition: string) {
+  const ses = session.fromPartition(partition);
+  if (state.configuredPartitions.has(partition)) return ses;
+  state.configuredPartitions.add(partition);
   ses.setUserAgent(douyinUserAgent);
   ses.webRequest.onBeforeSendHeaders({ urls: ['*://www.douyin.com/*', '*://*.douyin.com/*'] }, (details: any, callback: any) => {
     const headers = { ...details.requestHeaders };
@@ -32,6 +33,6 @@ export function configureDouyinSession() {
     logDouyin('blocked custom protocol request', { url: details.url, resourceType: details.resourceType });
     callback({ cancel: true });
   });
-  logDouyin('session configured', { userAgent: douyinUserAgent, partition: douyinPartition });
+  logDouyin('session configured', { userAgent: douyinUserAgent, partition });
   return ses;
 }

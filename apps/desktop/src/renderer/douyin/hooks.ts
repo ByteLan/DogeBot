@@ -1,22 +1,22 @@
 import { useEffect, type Dispatch, type SetStateAction } from 'react';
 import { extractAwemeIds } from '../../shared/aweme';
 import type { ApiClient } from '../api';
-import type { DouyinClickResult, DouyinCollectResult, DouyinEvent, DouyinMonitorState } from '../types';
+import type { DouyinClickResult, DouyinCollectResult, DouyinEvent, DouyinTaskState } from '../types';
 import { appendEventRecord, parseCollectListBody } from './utils';
 
 // 订阅 Douyin 主进程桥接事件：与原 App 内的 useEffect 逐字一致，依赖数组保持 [api]。
 export function useDouyinBridge(params: {
   api: ApiClient;
-  setDouyinMonitorState: Dispatch<SetStateAction<DouyinMonitorState>>;
+  setDouyinTaskStates: Dispatch<SetStateAction<Record<string, DouyinTaskState>>>;
   setDouyinStatus: Dispatch<SetStateAction<string>>;
   setDouyinTaskStatusMap: Dispatch<SetStateAction<Record<string, string>>>;
   setDouyinTaskEvents: Dispatch<SetStateAction<Record<string, DouyinEvent[]>>>;
 }) {
-  const { api, setDouyinMonitorState, setDouyinStatus, setDouyinTaskStatusMap, setDouyinTaskEvents } = params;
+  const { api, setDouyinTaskStates, setDouyinStatus, setDouyinTaskStatusMap, setDouyinTaskEvents } = params;
   useEffect(() => {
     if (!window.douyin) return;
     console.log('[douyin renderer] bridge ready');
-    window.douyin.getMonitorState().then(setDouyinMonitorState).catch((error) => console.error('[douyin renderer] get monitor state failed', error));
+    window.douyin.getTasksState().then(setDouyinTaskStates).catch((error) => console.error('[douyin renderer] get tasks state failed', error));
 
     const addTaskEvent = (taskId: string, title: string, data: unknown) => {
       const event: DouyinEvent = {
@@ -89,7 +89,7 @@ export function useDouyinBridge(params: {
         });
     });
 
-    const offState = window.douyin.onMonitorState(setDouyinMonitorState);
+    const offState = window.douyin.onTasksState(setDouyinTaskStates);
     return () => {
       offClick();
       offList();

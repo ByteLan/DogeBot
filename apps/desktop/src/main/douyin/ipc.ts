@@ -1,103 +1,87 @@
 import { ipcMain } from 'electron';
 import { DouyinIpc } from '../../shared/ipc-channels.js';
-import type { DouyinMonitorSharedConfig, DouyinTaskConfig } from '../../shared/types.js';
+import type { DouyinTaskConfig } from '../../shared/types.js';
 import { logDouyin } from '../log.js';
-import { douyinUrl, douyinUserAgent } from './constants.js';
+import { douyinPartition } from './constants.js';
 import { handleCapturedCollectsVideoList } from './capture.js';
 import {
-  currentMonitorState,
-  resetMonitorIntervalState,
-  runMonitorTick,
-  sendMonitorState,
-  stopMonitor
+  collectTasksState,
+  refreshTask,
+  setRunnerHidden,
+  startAll,
+  startTask,
+  stopAll,
+  stopTask
 } from './monitor.js';
-import { douyinTaskSeenIds, state } from './state.js';
-import { normalizeDouyinTask, toPositiveInteger } from './tasks.js';
-import { applyDouyinWindowVisibility, ensureDouyinWindow, syncDouyinCaptureConfig } from './window.js';
+import { findRunnerByWebContents, isKnownDouyinWebContents } from './state.js';
+import { normalizeDouyinTask } from './tasks.js';
+import { openLoginWindow } from './window.js';
+
+function normalizePartition(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : douyinPartition;
+}
 
 export function registerDouyinIpc() {
   ipcMain.on(DouyinIpc.collectsVideoListCaptured, (event: any, payload: unknown) => {
-    if (!state.douyinWindow || event.sender !== state.douyinWindow.webContents) {
+    const runner = findRunnerByWebContents(event.sender);
+    if (!runner) {
       logDouyin('ignored collect list payload from unknown sender');
       return;
     }
-    handleCapturedCollectsVideoList(payload);
+    handleCapturedCollectsVideoList(runner, payload);
   });
 
   ipcMain.on(DouyinIpc.hookLog, (event: any, payload: unknown) => {
-    if (!state.douyinWindow || event.sender !== state.douyinWindow.webContents) return;
+    if (!isKnownDouyinWebContents(event.sender)) return;
     logDouyin('page hook log', payload);
   });
 
   ipcMain.on(DouyinIpc.preloadReady, (event: any, payload: unknown) => {
-    if (!state.douyinWindow || event.sender !== state.douyinWindow.webContents) return;
+    if (!isKnownDouyinWebContents(event.sender)) return;
     logDouyin('page preload ready', payload);
   });
 
-  ipcMain.handle(DouyinIpc.openLogin, async () => {
-    logDouyin('ipc open-login');
-    state.douyinRunHidden = false;
-    const win = ensureDouyinWindow();
-    logDouyin('load douyin login url', douyinUrl);
-    await win.loadURL(douyinUrl, { userAgent: douyinUserAgent });
-    applyDouyinWindowVisibility(win);
-    logDouyin('open-login done');
+  ipcMain.handle(DouyinIpc.openLogin, async (_event: any, partitionInput?: unknown) => {
+    const partition = normalizePartition(partitionInput);
+    logDouyin('ipc open-login', { partition });
+    openLoginWindow(partition);
+    logDouyin('open-login done', { partition });
   });
 
-  ipcMain.handle(DouyinIpc.startMonitor, async (_event: any, tasksInput: unknown, sharedConfigInput?: DouyinMonitorSharedConfig) => {
+  ipcMain.handle(DouyinIpc.startTask, async (_event: any, taskInput: unknown) => {
+    const task = normalizeDouyinTask(taskInput);
+    if (!task) throw new Error('任务配置无效');
+    startTask(task);
+  });
+
+  ipcMain.handle(DouyinIpc.startAll, async (_event: any, tasksInput: unknown) => {
     const tasks = Array.isArray(tasksInput) ? tasksInput.map(normalizeDouyinTask).filter(Boolean) as DouyinTaskConfig[] : [];
     if (tasks.length === 0) throw new Error('请至少配置一个有效任务');
-    state.douyinRunHidden = Boolean(sharedConfigInput?.hidden);
-    state.douyinShowOnClickFailure = Boolean(sharedConfigInput?.showOnClickFailure);
-    state.douyinShortIntervalMs = toPositiveInteger(sharedConfigInput?.shortIntervalSeconds, 10) * 1000;
-    state.douyinLongIntervalMs = toPositiveInteger(sharedConfigInput?.longIntervalSeconds, 60) * 1000;
-    state.douyinRetryLimit = toPositiveInteger(sharedConfigInput?.retryLimit, 3);
-    state.douyinTasks = tasks;
-    douyinTaskSeenIds.clear();
-    if (state.douyinWindow && !state.douyinWindow.isDestroyed()) syncDouyinCaptureConfig(state.douyinWindow);
-    resetMonitorIntervalState();
-    state.douyinMonitorRunning = true;
-    state.douyinNextRunAt = '';
-    sendMonitorState();
-    logDouyin('ipc start-monitor', {
-      hidden: state.douyinRunHidden,
-      showOnClickFailure: state.douyinShowOnClickFailure,
-      shortIntervalMs: state.douyinShortIntervalMs,
-      longIntervalMs: state.douyinLongIntervalMs,
-      retryLimit: state.douyinRetryLimit,
-      tasks: state.douyinTasks.map((task) => ({
-        id: task.id,
-        favoriteUrl: task.favoriteUrl,
-        collectListUrl: task.collectListUrl,
-        requestUrlFilter: task.requestUrlFilter,
-        clickText: task.clickText,
-        skipClick: task.skipClick
-      }))
-    });
-    if (state.monitorTimer) clearTimeout(state.monitorTimer);
-    state.monitorTimer = undefined;
-    await runMonitorTick();
+    startAll(tasks);
   });
 
-  ipcMain.handle(DouyinIpc.setHidden, (_event: any, hidden?: boolean) => {
-    state.douyinRunHidden = Boolean(hidden);
-    logDouyin('ipc set-hidden', { hidden: state.douyinRunHidden });
-    if (state.douyinWindow && !state.douyinWindow.isDestroyed()) applyDouyinWindowVisibility(state.douyinWindow);
+  ipcMain.handle(DouyinIpc.stopTask, (_event: any, taskId: unknown, destroyWindow?: unknown) => {
+    if (typeof taskId !== 'string' || !taskId) return;
+    logDouyin('ipc stop-task', { taskId, destroyWindow });
+    stopTask(taskId, typeof destroyWindow === 'boolean' ? destroyWindow : undefined);
   });
 
-  ipcMain.handle(DouyinIpc.stopMonitor, () => {
-    logDouyin('ipc stop-monitor');
-    stopMonitor();
+  ipcMain.handle(DouyinIpc.stopAll, () => {
+    logDouyin('ipc stop-all');
+    stopAll();
   });
 
-  ipcMain.handle(DouyinIpc.refreshNow, async () => {
-    logDouyin('ipc refresh-now');
-    if (!state.douyinMonitorRunning) throw new Error('监听未启动');
-    if (state.monitorTimer) clearTimeout(state.monitorTimer);
-    state.monitorTimer = undefined;
-    state.douyinNextRunAt = '';
-    await runMonitorTick();
+  ipcMain.handle(DouyinIpc.refreshTask, async (_event: any, taskId: unknown) => {
+    if (typeof taskId !== 'string' || !taskId) throw new Error('监听未启动');
+    logDouyin('ipc refresh-task', { taskId });
+    refreshTask(taskId);
   });
 
-  ipcMain.handle(DouyinIpc.getMonitorState, () => currentMonitorState());
+  ipcMain.handle(DouyinIpc.setTaskHidden, (_event: any, taskId: unknown, hidden?: unknown) => {
+    if (typeof taskId !== 'string' || !taskId) return;
+    logDouyin('ipc set-task-hidden', { taskId, hidden: Boolean(hidden) });
+    setRunnerHidden(taskId, Boolean(hidden));
+  });
+
+  ipcMain.handle(DouyinIpc.getTasksState, () => collectTasksState());
 }
