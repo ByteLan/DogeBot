@@ -11,15 +11,12 @@
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.66.1",
-    "@napi-rs/canvas": "^1.0.2",
-    "better-sqlite3": "^11.8.1",
     "colord": "^2.9.3",
     "cors": "^2.8.5",
     "express": "^4.21.2",
-    "hdrify": "^0.12.1"
+    "@syru/byted-sticker-generator": "1.0.0-beta.2"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.7",

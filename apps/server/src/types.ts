@@ -1,4 +1,4 @@
-import type { StickerFlavor } from './styleStickerCore.js';
+import type { StickerFlavor } from './styleStickers.js';
 
 export type FeishuBot = {
   id: number;

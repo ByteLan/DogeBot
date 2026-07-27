@@ -1,6 +1,6 @@
 import type { FeishuBot, StyleStickerFeature, StyleStickerCardAction, StyleStickerCardState } from '../../types.js';
-import type { StickerFlavor } from '../../styleStickerCore.js';
-import { renderStyleStickerImage } from '../../styleStickers.js';
+import type { StickerFlavor } from '../../styleStickers.js';
+import { STYLE_STICKER_COLOR_SWATCHES, renderStyleStickerImage } from '../../styleStickers.js';
 import { uploadImage, sendImageToChat, replyCard } from '../api.js';
 import { hexToRgba } from '../../utils/color.js';
 import { styleStickerFeatureName } from '../passive/settings.js';
@@ -17,26 +17,7 @@ const STYLE_STICKER_FORM_FIELDS = {
   gradientAngle: 'gradientAngle',
   hdrEv: 'hdrEv'
 } as const;
-const STYLE_STICKER_CARD_COLOR_OPTIONS = [
-  '#9af665',
-  '#44b305',
-  '#ef6cdf',
-  '#ed12d3',
-  '#ff975c',
-  '#fb5b00',
-  '#69d1f2',
-  '#0989b2',
-  '#fb609e',
-  '#fa0064',
-  '#73e8d7',
-  '#14a38e',
-  '#ffb65c',
-  '#ff8d00',
-  '#5eb4fc',
-  '#0089ff',
-  '#755df6',
-  '#2c06f9'
-] as const;
+const STYLE_STICKER_CARD_COLOR_OPTIONS = STYLE_STICKER_COLOR_SWATCHES;
 
 function styleStickerFlavor(feature: StyleStickerFeature): StickerFlavor {
   return feature === 'byte_style' ? 'bs' : 'snh';
