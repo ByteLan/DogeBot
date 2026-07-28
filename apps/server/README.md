@@ -80,7 +80,7 @@ pnpm add-user <用户名> <密码>
 - `DOGEBOT_LLM_TIMEOUT_MS`：大模型请求超时时间，默认 `15000`。
 - `DOGEBOT_LLM_MAX_TOKENS`：大模型回复 token 上限，默认 `160`。
 - `DOGEBOT_LLM_DISABLE_THINKING`：设为 `1` 时，请求 OpenAI 兼容接口会额外带 `enable_thinking: false`，用于关闭支持该参数的模型思考模式。
-- `/open-api/v1/byte-style` 与 `/open-api/v1/scale-new-heights` 现在直接通过 `@napi-rs/canvas` 在服务端出图；所需字体资源已随 `apps/server/assets/fonts` 一起纳入仓库，并会在构建时复制到 `dist/assets/fonts`，其中包含 emoji / symbol fallback 字体以支持 `⛰` 等符号。
+- `/open-api/v1/byte-style` 与 `/open-api/v1/scale-new-heights` 通过 `scale-new-heights-generator` 在服务端出图；DogeBot 只负责把 `apps/server/assets/fonts` 中的字体资源传给源包，以及 HTTP、飞书发送、并发限流与短缓存。
 - `DOGEBOT_STYLE_STICKER_RENDER_CONCURRENCY`：字节范/勇攀高峰生图的全局并发数，默认 `2`；`/open-api/v1/byte-style`、`/open-api/v1/scale-new-heights`、飞书命令生图、随机生图、卡片预览共用这一组并发额度。
 - `DOGEBOT_STYLE_STICKER_RENDER_QUEUE_MAX`：字节范/勇攀高峰生图的等待队列上限，默认 `20`；超过后新任务会立即抛出 `QUEUE_FULL` 错误，避免请求堆积占用内存。
 - `DOGEBOT_STYLE_STICKER_RENDER_TIMEOUT_MS`：单个字节范/勇攀高峰生图任务的最大执行时间（毫秒），默认 `20000`；超时后会立即释放并发额度并抛出 `TASK_TIMEOUT` 错误，避免卡死后续任务。
@@ -167,7 +167,7 @@ pm2 restart dogebot-server --update-env
 - SQLite 数据目录建议固定为项目外的 `/www/wwwroot/DogeBot-data`，这样更新或重建项目不会丢数据库。
 - 飞书长连接是服务端主动连接飞书，不要求服务器有公网入口；但桌面客户端需要能访问 `PORT` 对应的 HTTP API。
 - 如果桌面客户端走公网访问，建议在宝塔里配置反向代理到 `http://127.0.0.1:3000` 并开启 HTTPS。
-- `better-sqlite3` 是 native 依赖，首次安装失败时，先安装 `python3`、`make`、`gcc/g++` 等基础编译工具。
+- SQLite 访问使用 Node 原生 `node:sqlite` 同步 binding；部署环境需使用支持该模块的 Node 版本。
 
 ## 数据表
 

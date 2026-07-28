@@ -1,13 +1,75 @@
-import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { DatabaseSync, type StatementSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
+
+type SqliteParam = string | number | bigint | Uint8Array | null | undefined;
+type NativeSqliteParam = Exclude<SqliteParam, undefined>;
+type SqliteRunResult = ReturnType<StatementSync['run']>;
+
+class NativeSqliteStatement {
+  constructor(private readonly statement: StatementSync) {}
+
+  all(...params: SqliteParam[]) {
+    return this.statement.all(...normalizeParams(params));
+  }
+
+  get(...params: SqliteParam[]) {
+    return this.statement.get(...normalizeParams(params));
+  }
+
+  run(...params: SqliteParam[]): SqliteRunResult {
+    return this.statement.run(...normalizeParams(params));
+  }
+}
+
+function normalizeParams(params: SqliteParam[]): NativeSqliteParam[] {
+  return params.map((param) => (param === undefined ? null : param));
+}
+
+class NativeSqliteDatabase {
+  private transactionDepth = 0;
+
+  constructor(private readonly database: DatabaseSync) {}
+
+  prepare(sql: string) {
+    return new NativeSqliteStatement(this.database.prepare(sql));
+  }
+
+  exec(sql: string) {
+    this.database.exec(sql);
+  }
+
+  pragma(expression: string) {
+    this.exec(`PRAGMA ${expression}`);
+  }
+
+  transaction<Args extends unknown[], Result>(handler: (...args: Args) => Result) {
+    return (...args: Args): Result => {
+      const savepoint = `dogebot_tx_${this.transactionDepth}`;
+      const nested = this.transactionDepth > 0;
+      this.exec(nested ? `SAVEPOINT ${savepoint}` : 'BEGIN IMMEDIATE');
+      this.transactionDepth += 1;
+      try {
+        const result = handler(...args);
+        this.transactionDepth -= 1;
+        this.exec(nested ? `RELEASE SAVEPOINT ${savepoint}` : 'COMMIT');
+        return result;
+      } catch (error) {
+        this.transactionDepth -= 1;
+        this.exec(nested ? `ROLLBACK TO SAVEPOINT ${savepoint}` : 'ROLLBACK');
+        if (nested) this.exec(`RELEASE SAVEPOINT ${savepoint}`);
+        throw error;
+      }
+    };
+  }
+}
 
 const appDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const dataDir = process.env.DOGEBOT_DATA_DIR || join(appDir, 'data');
 mkdirSync(dataDir, { recursive: true });
 
-export const db = new Database(join(dataDir, 'dogebot.sqlite'));
+export const db = new NativeSqliteDatabase(new DatabaseSync(join(dataDir, 'dogebot.sqlite')));
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
