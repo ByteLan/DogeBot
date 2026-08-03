@@ -8,7 +8,7 @@ import { sendDouyinMessages, getDefaultCommandRecord, getDefaultCommand, setDefa
 import { replyUsersCard, softDeleteMentions, upsertMentions, topMentions, listMentions } from './users.js';
 import { getPassiveFeatureSetting, setPassiveFeatureSetting, getStyleStickerSetting, setStyleStickerSetting, passiveFeatureUsage, styleStickerUsage, describePassiveFeatureSetting, describeStyleStickerSetting, formatRatePercent, maxRateForDefault, defaultRateForFeature } from '../passive/settings.js';
 import { resolveAwemeIdFromMessage, botAdminUserId } from '../douyin-guard.js';
-import { searchDouyinByTitle, searchDouyinByTitleRandom, checkDouyinAwemeValidityCached } from '../../douyin.js';
+import { searchDouyinByTitle, searchDouyinByTitleRandom, checkDouyinAwemeValidityCached, SEARCH_RESULT_COUNT } from '../../douyin.js';
 import { buildDouyinDeleteConfirmCard, notifyAdminDouyinInvalid } from '../cards/douyin-invalid-card.js';
 import { renderStyleStickerImage } from '../../styleStickers.js';
 import { resolvePassiveMediaResource } from '../media/resource-cache.js';
@@ -527,7 +527,7 @@ export async function handleFeishuCommand(bot: FeishuBot, event: any, messageId:
           }
         }
         if (validResults.length > 0) {
-          for (let i = 0; i < Math.min(validResults.length, 3); i++) {
+          for (let i = 0; i < Math.min(validResults.length, SEARCH_RESULT_COUNT); i++) {
             const line = `${validResults[i].last_checked_title}\nhttps://www.douyin.com/video/${validResults[i].aweme_id}`;
             await replyText(bot, messageId, line);
           }
