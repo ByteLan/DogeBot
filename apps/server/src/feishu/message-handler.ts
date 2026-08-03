@@ -74,7 +74,9 @@ export async function handleFeishuMessage(bot: FeishuBot, event: any) {
 
     const defaultCommand = getDefaultCommand(bot.id);
     if (defaultCommand) {
-      const effectiveCommand = defaultCommand.trimEnd().endsWith('--search') && text.trim()
+      const trimmedDefault = defaultCommand.trimEnd();
+      const appendSearch = (trimmedDefault.endsWith('--search') || trimmedDefault.endsWith('--search-random')) && text.trim();
+      const effectiveCommand = appendSearch
         ? `${defaultCommand} ${text.trim()}`
         : defaultCommand;
       const fallbackHandled = await handleFeishuCommand(bot, event, messageId, effectiveCommand, { allowSetDefault: false });

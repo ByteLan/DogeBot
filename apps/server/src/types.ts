@@ -49,6 +49,7 @@ export type DouyinCommand = {
   shouldSubscribe: boolean;
   shouldUnsubscribe: boolean;
   shouldSearch: boolean;
+  shouldSearchRandom: boolean;
   searchText: string;
   deleteAwemeId: string;
   hasInvalidCount: boolean;

@@ -201,6 +201,36 @@ export function searchDouyinByTitle(userId: number, clickText: string, searchTex
   `).all(...likeParams, userId, clickText, ...likeParams) as { aweme_id: string; last_checked_title: string; score: number }[];
 }
 
+export function searchDouyinByTitleRandom(userId: number, clickText: string, searchText: string) {
+  const allTokens = extractSearchTokens(searchText);
+  if (allTokens.length === 0) return [];
+
+  const tokens = allTokens.length > 30 ? allTokens.slice(0, 30) : allTokens;
+
+  const orConditions = tokens.map(() => 'last_checked_title LIKE ?').join(' OR ');
+  const scoreExpr = tokens.map(() => "CASE WHEN last_checked_title LIKE ? THEN 1 ELSE 0 END").join(' + ');
+  const likeParams = tokens.map((t) => `%${t}%`);
+
+  const candidates = db.prepare(`
+    SELECT aweme_id, last_checked_title, (${scoreExpr}) AS score
+    FROM douyin_aweme_records
+    WHERE user_id = ? AND click_text = ? AND ${ACTIVE_DOUYIN_RECORD_FILTER}
+      AND last_checked_title <> ''
+      AND (${orConditions})
+    ORDER BY score DESC, LENGTH(last_checked_title) ASC
+    LIMIT 200
+  `).all(...likeParams, userId, clickText, ...likeParams) as { aweme_id: string; last_checked_title: string; score: number }[];
+
+  if (candidates.length === 0) return [];
+  const poolSize = Math.max(Math.ceil(candidates.length / 2), 5);
+  const pool = candidates.slice(0, poolSize);
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  return pool.slice(0, 5);
+}
+
 const CHECK_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 function getCheckCache(awemeId: string) {

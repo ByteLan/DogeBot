@@ -45,6 +45,7 @@ export function parseDouyinCommand(text: string): DouyinCommand {
       shouldSubscribe: false,
       shouldUnsubscribe: false,
       shouldSearch: false,
+      shouldSearchRandom: false,
       searchText: '',
       deleteAwemeId: '',
       hasInvalidCount: false,
@@ -56,10 +57,12 @@ export function parseDouyinCommand(text: string): DouyinCommand {
   const hasDeleteFlag = /(?:^|\s)--delete(?:\s|$)/.test(argsText);
   const hasSubscribeFlag = /(?:^|\s)--subscribe(?:\s|$)/.test(argsText);
   const hasUnsubscribeFlag = /(?:^|\s)--unsubscribe(?:\s|$)/.test(argsText);
-  const hasSearchFlag = /(?:^|\s)--search(?:\s|$)/.test(argsText);
-  const searchMatch = argsText.match(/(?:^|\s)--search\s+(.*)/);
+  const hasSearchRandomFlag = /(?:^|\s)--search-random(?:\s|$)/.test(argsText);
+  const hasSearchFlag = !hasSearchRandomFlag && /(?:^|\s)--search(?:\s|$)/.test(argsText);
+  const searchRegex = hasSearchRandomFlag ? /(?:^|\s)--search-random\s+(.*)/ : /(?:^|\s)--search\s+(.*)/;
+  const searchMatch = argsText.match(searchRegex);
   const searchText = searchMatch ? searchMatch[1].replace(/\s*--\S+(?:\s+\S+)?/g, '').trim() : '';
-  const actionCount = [hasDeleteFlag, hasSubscribeFlag, hasUnsubscribeFlag, hasSearchFlag].filter(Boolean).length;
+  const actionCount = [hasDeleteFlag, hasSubscribeFlag, hasUnsubscribeFlag, hasSearchFlag || hasSearchRandomFlag].filter(Boolean).length;
   const deleteAwemeId = '';
   const hasInvalidDelete = false;
   const hasCountFlag = /(?:^|\s)--count(?:\s|$)/.test(argsText);
@@ -68,6 +71,7 @@ export function parseDouyinCommand(text: string): DouyinCommand {
     .replace(/(?:^|\s)--delete(?:\s|$)/, ' ')
     .replace(/(?:^|\s)--subscribe(?:\s|$)/, ' ')
     .replace(/(?:^|\s)--unsubscribe(?:\s|$)/, ' ')
+    .replace(/(?:^|\s)--search-random(?:\s+.*)?$/, ' ')
     .replace(/(?:^|\s)--search(?:\s+.*)?$/, ' ')
     .replace(/(?:^|\s)--count(?:\s+\S+)?/, ' ')
     .trim()
@@ -82,6 +86,7 @@ export function parseDouyinCommand(text: string): DouyinCommand {
       shouldSubscribe: hasSubscribeFlag,
       shouldUnsubscribe: hasUnsubscribeFlag,
       shouldSearch: hasSearchFlag,
+      shouldSearchRandom: hasSearchRandomFlag,
       searchText,
       deleteAwemeId,
       hasInvalidCount: false,
@@ -99,6 +104,7 @@ export function parseDouyinCommand(text: string): DouyinCommand {
       shouldSubscribe: hasSubscribeFlag,
       shouldUnsubscribe: hasUnsubscribeFlag,
       shouldSearch: hasSearchFlag,
+      shouldSearchRandom: hasSearchRandomFlag,
       searchText,
       deleteAwemeId,
       hasInvalidCount: true,
@@ -116,6 +122,7 @@ export function parseDouyinCommand(text: string): DouyinCommand {
     shouldSubscribe: hasSubscribeFlag,
     shouldUnsubscribe: hasUnsubscribeFlag,
     shouldSearch: hasSearchFlag,
+    shouldSearchRandom: hasSearchRandomFlag,
     searchText,
     deleteAwemeId,
     hasInvalidCount: !Number.isInteger(count) || count <= 0,
