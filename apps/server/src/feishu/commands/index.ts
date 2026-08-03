@@ -8,7 +8,7 @@ import { sendDouyinMessages, getDefaultCommandRecord, getDefaultCommand, setDefa
 import { replyUsersCard, softDeleteMentions, upsertMentions, topMentions, listMentions } from './users.js';
 import { getPassiveFeatureSetting, setPassiveFeatureSetting, getStyleStickerSetting, setStyleStickerSetting, passiveFeatureUsage, styleStickerUsage, describePassiveFeatureSetting, describeStyleStickerSetting, formatRatePercent, maxRateForDefault, defaultRateForFeature } from '../passive/settings.js';
 import { resolveAwemeIdFromMessage } from '../douyin-guard.js';
-import { searchDouyinByTitle } from '../../douyin.js';
+import { searchDouyinByTitle, searchDouyinByTitleRandom } from '../../douyin.js';
 import { buildDouyinDeleteConfirmCard } from '../cards/douyin-invalid-card.js';
 import { renderStyleStickerImage } from '../../styleStickers.js';
 import { resolvePassiveMediaResource } from '../media/resource-cache.js';
@@ -493,7 +493,7 @@ export async function handleFeishuCommand(bot: FeishuBot, event: any, messageId:
       await replyText(bot, messageId, `已取消当前会话对"${douyinCommand.clickText}"这个 clickText 分组的订阅`);
       return true;
     }
-    if (douyinCommand.shouldSearch && douyinCommand.searchText) {
+    if ((douyinCommand.shouldSearch || douyinCommand.shouldSearchRandom) && douyinCommand.searchText) {
       if (!douyinCommand.clickText) {
         await replyText(bot, messageId, '用法：/douyin {模拟点击文案} --search {关键词}');
         return true;
@@ -502,7 +502,9 @@ export async function handleFeishuCommand(bot: FeishuBot, event: any, messageId:
         await replyText(bot, messageId, '当前机器人未绑定用户，无法搜索抖音收藏记录');
         return true;
       }
-      const results = searchDouyinByTitle(bot.user_id, douyinCommand.clickText, douyinCommand.searchText);
+      const results = douyinCommand.shouldSearchRandom
+        ? searchDouyinByTitleRandom(bot.user_id, douyinCommand.clickText, douyinCommand.searchText)
+        : searchDouyinByTitle(bot.user_id, douyinCommand.clickText, douyinCommand.searchText);
       if (results.length > 0) {
         const firstLine = `${results[0].last_checked_title}\nhttps://www.douyin.com/video/${results[0].aweme_id}`;
         const firstReplyId = await replyText(bot, messageId, firstLine);
