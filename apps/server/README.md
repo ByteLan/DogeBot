@@ -89,7 +89,8 @@ pnpm add-user <用户名> <密码>
 - `DOGEBOT_PYTHON_TASK_TIMEOUT_MS`：单个 `python3` 子进程任务的最大执行时间（毫秒），默认 `20000`；超时后会通过 `AbortSignal` 结束子进程并抛出 `TASK_TIMEOUT` 错误。
 - `OpenApiBaseUrl`：`/help` 卡片里展示 OpenAPI 示例地址时使用的基础域名，默认 `https://doge.bbyte.cn`；同时兼容 `DOGEBOT_OPEN_API_BASE_URL` 与 `OPEN_API_BASE_URL`。
 - `DOGEBOT_FEISHU_BYTE_STYLE_RATE`：普通文本消息随机生成为“字节范”图片的概率，默认 `0.05`。该能力默认开启，可用 `/byte-style --disable` 或 `/字节范 --disable` 针对单个会话关闭。
-- `DOGEBOT_FEISHU_SCALE_NEW_HEIGHTS_RATE`：普通文本消息随机生成为“勇攀高峰”图片的概率，默认 `0.05`。该能力默认开启，可用 `/scale-new-heights --disable` 或 `/勇攀高峰 --disable` 针对单个会话关闭。
+- `DOGEBOT_FEISHU_SCALE_NEW_HEIGHTS_RATE`：普通文本消息随机生成为"勇攀高峰"图片的概率，默认 `0.05`。该能力默认开启，可用 `/scale-new-heights --disable` 或 `/勇攀高峰 --disable` 针对单个会话关闭。
+- `DOGEBOT_DOUYIN_SEARCH_COUNT`：`/douyin --search` 和 `--search-random` 返回的最大结果数，默认 `2`；`--search-random` 的候选池最小值为该值的两倍。
 - `DOGEBOT_FEISHU_STYLE_STICKER_MAX_CHARS`：`/byte-style`、`/字节范`、`/scale-new-heights` 与 `/勇攀高峰` 在当前会话未显式设置 `--max` 时的默认最大处理字符数，默认 `10`。
 - `DOGEBOT_FEISHU_STYLE_STICKER_MAX_CHARS_LIMIT`：随机生图允许处理的绝对字符上限。即使会话里配置了更大的 `--max`，或者 `DOGEBOT_FEISHU_STYLE_STICKER_MAX_CHARS` 更大，实际处理长度也不会超过这个值；未配置时默认 `150`。
 - 飞书里直接发送 `/byte-style`、`/字节范`、`/scale-new-heights` 或 `/勇攀高峰` 且不带其他参数时，如果当前消息不在话题里且引用消息里有文字，会直接用引用文字生图；否则会回复一个交互卡片：顶部展示随机颜色和随机渐变角度生成的预览图，下方可编辑文案、通过下拉选择两个常用色，也可填写自定义 `#RRGGBB` 色值，并填写渐变角度；通过“预览”刷新卡片，通过“发送”会先撤回卡片，再回复触发这张卡片的原始消息发送图片，或通过“撤回”只撤回卡片。
@@ -235,7 +236,8 @@ pm2 restart dogebot-server --update-env
 ## `/douyin` 命令
 
 - `/douyin {模拟点击文案} [--count n]`：随机发送匹配文案的抖音收藏视频。
-- `/douyin {模拟点击文案} --search {关键词}`：按标题模糊搜索该分组下的视频，返回匹配度最高的前 5 条结果（含标题和链接）。搜索采用 bigram 匹配，无需完全匹配标题，输入一段话也能找到相关视频。若 `/set-default` 设为 `/douyin {文案} --search`（以 `--search` 结尾），用户直接发文字会自动拼接为搜索词。
+- `/douyin {模拟点击文案} --search {关键词}`：按标题模糊搜索该分组下的视频，返回匹配度最高的结果（含标题和链接）。搜索使用 `Intl.Segmenter` 中文分词，无需完全匹配标题，输入一段话也能找到相关视频。若 `/set-default` 设为 `/douyin {文案} --search`（以 `--search` 结尾），用户直接发文字会自动拼接为搜索词。无搜索词或未命中时回退到随机视频。
+- `/douyin {模拟点击文案} --search-random {关键词}`：与 `--search` 相同的搜索逻辑，但从高分候选池中随机选取结果，每次返回不同。同样支持 `/set-default` 拼接。
 - `/douyin --delete {aweme_id}`：软删除当前 bot 绑定用户名下的指定抖音收藏记录，`aweme_id` 必须是大于 5 位的数字，且只有该 bot 的 `/set-default` 管理员可以执行。
 - `/douyin --subscribe {模拟点击文案}`：为当前发消息的群聊或与 bot 的单聊订阅该 `click_text` 分组；后续桌面端同步时，只有该分组有新的 `aweme_id` 成功入库，才会把新增视频链接发到当前会话，已有库存不会补发。
 - `/douyin --unsubscribe {模拟点击文案}`：取消当前会话对该 `click_text` 分组的订阅。

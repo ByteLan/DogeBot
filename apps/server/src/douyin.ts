@@ -2,6 +2,7 @@ import type { Response } from 'express';
 import type { AuthenticatedRequest } from './auth.js';
 import type { FeishuBot } from './types.js';
 import { db } from './db.js';
+import { parsePositiveInt } from './config.js';
 import { checkDouyinAwemeValidity, INVALID_TITLE_MARKER, type DouyinValidity } from './douyin-check.js';
 
 type DouyinAwemeRecord = {
@@ -164,6 +165,7 @@ export function randomDouyinAwemeIdByClickTextExcluding(clickText: string, exclu
 }
 
 const segmenter = new Intl.Segmenter('zh-CN', { granularity: 'word' });
+export const SEARCH_RESULT_COUNT = parsePositiveInt(process.env.DOGEBOT_DOUYIN_SEARCH_COUNT, 2);
 
 function extractSearchTokens(text: string): string[] {
   const seen = new Set<string>();
@@ -197,8 +199,8 @@ export function searchDouyinByTitle(userId: number, clickText: string, searchTex
       AND last_checked_title <> ''
       AND (${orConditions})
     ORDER BY score DESC, LENGTH(last_checked_title) ASC
-    LIMIT 3
-  `).all(...likeParams, userId, clickText, ...likeParams) as { aweme_id: string; last_checked_title: string; score: number }[];
+    LIMIT ?
+  `).all(...likeParams, userId, clickText, ...likeParams, SEARCH_RESULT_COUNT) as { aweme_id: string; last_checked_title: string; score: number }[];
 }
 
 export function searchDouyinByTitleRandom(userId: number, clickText: string, searchText: string) {
@@ -222,13 +224,13 @@ export function searchDouyinByTitleRandom(userId: number, clickText: string, sea
   `).all(...likeParams, userId, clickText, ...likeParams) as { aweme_id: string; last_checked_title: string; score: number }[];
 
   if (candidates.length === 0) return [];
-  const poolSize = Math.max(Math.ceil(candidates.length / 2), 5);
+  const poolSize = Math.max(Math.ceil(candidates.length / 2), SEARCH_RESULT_COUNT * 2);
   const pool = candidates.slice(0, poolSize);
   for (let i = pool.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [pool[i], pool[j]] = [pool[j], pool[i]];
   }
-  return pool.slice(0, 3);
+  return pool.slice(0, SEARCH_RESULT_COUNT);
 }
 
 const CHECK_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
