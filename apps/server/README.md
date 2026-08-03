@@ -235,6 +235,7 @@ pm2 restart dogebot-server --update-env
 ## `/douyin` 命令
 
 - `/douyin {模拟点击文案} [--count n]`：随机发送匹配文案的抖音收藏视频。
+- `/douyin {模拟点击文案} --search {关键词}`：按标题模糊搜索该分组下的视频，返回匹配度最高的前 5 条结果（含标题和链接）。搜索采用 bigram 匹配，无需完全匹配标题，输入一段话也能找到相关视频。若 `/set-default` 设为 `/douyin {文案} --search`（以 `--search` 结尾），用户直接发文字会自动拼接为搜索词。
 - `/douyin --delete {aweme_id}`：软删除当前 bot 绑定用户名下的指定抖音收藏记录，`aweme_id` 必须是大于 5 位的数字，且只有该 bot 的 `/set-default` 管理员可以执行。
 - `/douyin --subscribe {模拟点击文案}`：为当前发消息的群聊或与 bot 的单聊订阅该 `click_text` 分组；后续桌面端同步时，只有该分组有新的 `aweme_id` 成功入库，才会把新增视频链接发到当前会话，已有库存不会补发。
 - `/douyin --unsubscribe {模拟点击文案}`：取消当前会话对该 `click_text` 分组的订阅。
