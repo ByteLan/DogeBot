@@ -75,9 +75,14 @@ export async function handleFeishuMessage(bot: FeishuBot, event: any) {
     const defaultCommand = getDefaultCommand(bot.id);
     if (defaultCommand) {
       const trimmedDefault = defaultCommand.trimEnd();
-      const appendSearch = (trimmedDefault.endsWith('--search') || trimmedDefault.endsWith('--search-random')) && text.trim();
+      const mentions = (Array.isArray(message?.mentions) ? message.mentions : []) as { name?: string }[];
+      const mentionTexts = mentions.map((m) => `@${String(m.name || '').trim()}`).filter((t) => t.length > 1);
+      let searchInput = text;
+      for (const mt of mentionTexts) searchInput = searchInput.split(mt).join('');
+      searchInput = searchInput.trim();
+      const appendSearch = (trimmedDefault.endsWith('--search') || trimmedDefault.endsWith('--search-random')) && searchInput;
       const effectiveCommand = appendSearch
-        ? `${defaultCommand} ${text.trim()}`
+        ? `${defaultCommand} ${searchInput}`
         : defaultCommand;
       const fallbackHandled = await handleFeishuCommand(bot, event, messageId, effectiveCommand, { allowSetDefault: false });
       if (!fallbackHandled) {
