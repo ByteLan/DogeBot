@@ -31,11 +31,12 @@ export async function createChatMessage(bot: FeishuBot, chatId: string, msgType:
 export async function replyText(bot: FeishuBot, messageId: string, text: string, replyInThread = false) {
   const token = await tenantAccessToken(bot);
   try {
-    await feishuJson(`${openBase(bot.domain)}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reply`, {
+    const result = await feishuJson<{ data?: { message_id?: string } }>(`${openBase(bot.domain)}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reply`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ msg_type: 'text', content: JSON.stringify({ text }), reply_in_thread: replyInThread })
     });
+    return String(result.data?.message_id || '').trim();
   } catch (error) {
     console.error('[feishu] text reply send failed', {
       botId: bot.id,

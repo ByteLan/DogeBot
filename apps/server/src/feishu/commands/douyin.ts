@@ -9,7 +9,7 @@ export async function sendDouyinMessages(
   bot: FeishuBot,
   clickText: string,
   count: number,
-  sendMessage: (text: string) => Promise<void>,
+  sendMessage: (text: string) => Promise<unknown>,
   trigger: DouyinTriggerContext
 ) {
   const awemeRecords = randomDouyinAwemeIds(bot.user_id!, clickText, count);
