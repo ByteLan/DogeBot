@@ -527,11 +527,9 @@ export async function handleFeishuCommand(bot: FeishuBot, event: any, messageId:
           }
         }
         if (validResults.length > 0) {
-          const firstLine = `${validResults[0].last_checked_title}\nhttps://www.douyin.com/video/${validResults[0].aweme_id}`;
-          const firstReplyId = await replyText(bot, messageId, firstLine);
-          for (let i = 1; i < validResults.length && firstReplyId; i++) {
+          for (let i = 0; i < Math.min(validResults.length, 3); i++) {
             const line = `${validResults[i].last_checked_title}\nhttps://www.douyin.com/video/${validResults[i].aweme_id}`;
-            await replyText(bot, firstReplyId, line, true);
+            await replyText(bot, messageId, line);
           }
           return true;
         }
