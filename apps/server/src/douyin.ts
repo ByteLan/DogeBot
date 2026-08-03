@@ -163,6 +163,37 @@ export function randomDouyinAwemeIdByClickTextExcluding(clickText: string, exclu
   return row?.aweme_id || '';
 }
 
+export function searchDouyinByTitle(userId: number, clickText: string, searchText: string) {
+  const cleaned = searchText.replace(/[^\p{L}\p{N}]/gu, '');
+  if (!cleaned) return [];
+
+  const allBigrams: string[] = [];
+  for (let i = 0; i < cleaned.length - 1; i++) {
+    const bg = cleaned.slice(i, i + 2);
+    if (!allBigrams.includes(bg)) allBigrams.push(bg);
+  }
+  if (cleaned.length === 1 && allBigrams.length === 0) allBigrams.push(cleaned);
+  if (allBigrams.length === 0) return [];
+
+  const bigrams = allBigrams.length > 30
+    ? allBigrams.filter((_, i) => i % Math.ceil(allBigrams.length / 30) === 0).slice(0, 30)
+    : allBigrams;
+
+  const orConditions = bigrams.map(() => 'last_checked_title LIKE ?').join(' OR ');
+  const scoreExpr = bigrams.map(() => "CASE WHEN last_checked_title LIKE ? THEN 1 ELSE 0 END").join(' + ');
+  const likeParams = bigrams.map((bg) => `%${bg}%`);
+
+  return db.prepare(`
+    SELECT aweme_id, last_checked_title, (${scoreExpr}) AS score
+    FROM douyin_aweme_records
+    WHERE user_id = ? AND click_text = ? AND ${ACTIVE_DOUYIN_RECORD_FILTER}
+      AND last_checked_title <> ''
+      AND (${orConditions})
+    ORDER BY score DESC, LENGTH(last_checked_title) ASC
+    LIMIT 5
+  `).all(...likeParams, userId, clickText, ...likeParams) as { aweme_id: string; last_checked_title: string; score: number }[];
+}
+
 const CHECK_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 function getCheckCache(awemeId: string) {

@@ -8,6 +8,7 @@ import { sendDouyinMessages, getDefaultCommandRecord, getDefaultCommand, setDefa
 import { replyUsersCard, softDeleteMentions, upsertMentions, topMentions, listMentions } from './users.js';
 import { getPassiveFeatureSetting, setPassiveFeatureSetting, getStyleStickerSetting, setStyleStickerSetting, passiveFeatureUsage, styleStickerUsage, describePassiveFeatureSetting, describeStyleStickerSetting, formatRatePercent, maxRateForDefault, defaultRateForFeature } from '../passive/settings.js';
 import { resolveAwemeIdFromMessage } from '../douyin-guard.js';
+import { searchDouyinByTitle } from '../../douyin.js';
 import { buildDouyinDeleteConfirmCard } from '../cards/douyin-invalid-card.js';
 import { renderStyleStickerImage } from '../../styleStickers.js';
 import { resolvePassiveMediaResource } from '../media/resource-cache.js';
@@ -406,7 +407,7 @@ export async function handleFeishuCommand(bot: FeishuBot, event: any, messageId:
   const douyinCommand = parseDouyinCommand(text);
   if (douyinCommand.isDouyin) {
     if (douyinCommand.hasConflictingAction) {
-      await replyText(bot, messageId, '用法冲突：/douyin 同时只能使用一种动作参数（--delete、--subscribe、--unsubscribe）。常用：/douyin {模拟点击文案} [--count n]；/douyin --subscribe {模拟点击文案}');
+      await replyText(bot, messageId, '用法冲突：/douyin 同时只能使用一种动作参数（--delete、--subscribe、--unsubscribe、--search）。常用：/douyin {模拟点击文案} [--count n]；/douyin --subscribe {模拟点击文案}');
       return true;
     }
     if (douyinCommand.shouldDelete) {
@@ -492,8 +493,24 @@ export async function handleFeishuCommand(bot: FeishuBot, event: any, messageId:
       await replyText(bot, messageId, `已取消当前会话对"${douyinCommand.clickText}"这个 clickText 分组的订阅`);
       return true;
     }
+    if (douyinCommand.shouldSearch && douyinCommand.searchText) {
+      if (!douyinCommand.clickText) {
+        await replyText(bot, messageId, '用法：/douyin {模拟点击文案} --search {关键词}');
+        return true;
+      }
+      if (bot.user_id == null) {
+        await replyText(bot, messageId, '当前机器人未绑定用户，无法搜索抖音收藏记录');
+        return true;
+      }
+      const results = searchDouyinByTitle(bot.user_id, douyinCommand.clickText, douyinCommand.searchText);
+      if (results.length > 0) {
+        const lines = results.map((r, i) => `${i + 1}. ${r.last_checked_title}\nhttps://www.douyin.com/video/${r.aweme_id}`);
+        await replyText(bot, messageId, lines.join('\n\n'));
+        return true;
+      }
+    }
     if (!douyinCommand.clickText) {
-      await replyText(bot, messageId, '用法：/douyin {模拟点击文案} [--count n]；订阅新增记录：/douyin --subscribe {模拟点击文案}；取消订阅：/douyin --unsubscribe {模拟点击文案}');
+      await replyText(bot, messageId, '用法：/douyin {模拟点击文案} [--count n]；搜索视频：/douyin {模拟点击文案} --search {关键词}；订阅新增记录：/douyin --subscribe {模拟点击文案}；取消订阅：/douyin --unsubscribe {模拟点击文案}');
       return true;
     }
     if (douyinCommand.hasInvalidCount) {
