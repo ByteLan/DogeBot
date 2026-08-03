@@ -197,7 +197,7 @@ export function searchDouyinByTitle(userId: number, clickText: string, searchTex
       AND last_checked_title <> ''
       AND (${orConditions})
     ORDER BY score DESC, LENGTH(last_checked_title) ASC
-    LIMIT 5
+    LIMIT 3
   `).all(...likeParams, userId, clickText, ...likeParams) as { aweme_id: string; last_checked_title: string; score: number }[];
 }
 
@@ -228,7 +228,7 @@ export function searchDouyinByTitleRandom(userId: number, clickText: string, sea
     const j = Math.floor(Math.random() * (i + 1));
     [pool[i], pool[j]] = [pool[j], pool[i]];
   }
-  return pool.slice(0, 5);
+  return pool.slice(0, 3);
 }
 
 const CHECK_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
