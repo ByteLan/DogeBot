@@ -163,25 +163,32 @@ export function randomDouyinAwemeIdByClickTextExcluding(clickText: string, exclu
   return row?.aweme_id || '';
 }
 
-export function searchDouyinByTitle(userId: number, clickText: string, searchText: string) {
-  const cleaned = searchText.replace(/[^\p{L}\p{N}]/gu, '');
-  if (!cleaned) return [];
+const segmenter = new Intl.Segmenter('zh-CN', { granularity: 'word' });
 
-  const allBigrams: string[] = [];
-  for (let i = 0; i < cleaned.length - 1; i++) {
-    const bg = cleaned.slice(i, i + 2);
-    if (!allBigrams.includes(bg)) allBigrams.push(bg);
+function extractSearchTokens(text: string): string[] {
+  const seen = new Set<string>();
+  const tokens: string[] = [];
+  for (const { segment, isWordLike } of segmenter.segment(text)) {
+    if (!isWordLike) continue;
+    const lower = segment.toLowerCase();
+    if (lower.length === 1 && /[\p{P}\p{S}\p{Z}]/u.test(lower)) continue;
+    if (!seen.has(lower)) {
+      seen.add(lower);
+      tokens.push(lower);
+    }
   }
-  if (cleaned.length === 1 && allBigrams.length === 0) allBigrams.push(cleaned);
-  if (allBigrams.length === 0) return [];
+  return tokens;
+}
 
-  const bigrams = allBigrams.length > 30
-    ? allBigrams.filter((_, i) => i % Math.ceil(allBigrams.length / 30) === 0).slice(0, 30)
-    : allBigrams;
+export function searchDouyinByTitle(userId: number, clickText: string, searchText: string) {
+  const allTokens = extractSearchTokens(searchText);
+  if (allTokens.length === 0) return [];
 
-  const orConditions = bigrams.map(() => 'last_checked_title LIKE ?').join(' OR ');
-  const scoreExpr = bigrams.map(() => "CASE WHEN last_checked_title LIKE ? THEN 1 ELSE 0 END").join(' + ');
-  const likeParams = bigrams.map((bg) => `%${bg}%`);
+  const tokens = allTokens.length > 30 ? allTokens.slice(0, 30) : allTokens;
+
+  const orConditions = tokens.map(() => 'last_checked_title LIKE ?').join(' OR ');
+  const scoreExpr = tokens.map(() => "CASE WHEN last_checked_title LIKE ? THEN 1 ELSE 0 END").join(' + ');
+  const likeParams = tokens.map((t) => `%${t}%`);
 
   return db.prepare(`
     SELECT aweme_id, last_checked_title, (${scoreExpr}) AS score
