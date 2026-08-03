@@ -504,8 +504,12 @@ export async function handleFeishuCommand(bot: FeishuBot, event: any, messageId:
       }
       const results = searchDouyinByTitle(bot.user_id, douyinCommand.clickText, douyinCommand.searchText);
       if (results.length > 0) {
-        const lines = results.map((r, i) => `${i + 1}. ${r.last_checked_title}\nhttps://www.douyin.com/video/${r.aweme_id}`);
-        await replyText(bot, messageId, lines.join('\n\n'));
+        const firstLine = `${results[0].last_checked_title}\nhttps://www.douyin.com/video/${results[0].aweme_id}`;
+        const firstReplyId = await replyText(bot, messageId, firstLine);
+        if (results.length > 1 && firstReplyId) {
+          const rest = results.slice(1).map((r, i) => `${i + 2}. ${r.last_checked_title}\nhttps://www.douyin.com/video/${r.aweme_id}`);
+          await replyText(bot, firstReplyId, rest.join('\n\n'), true);
+        }
         return true;
       }
     }
