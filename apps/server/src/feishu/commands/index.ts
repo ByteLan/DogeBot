@@ -7,9 +7,9 @@ import { parseUsersCommand, parseDouyinCommand, parseSetDefaultCommand, parseRev
 import { sendDouyinMessages, getDefaultCommandRecord, getDefaultCommand, setDefaultCommand, addDouyinSubscription, removeDouyinSubscription } from './douyin.js';
 import { replyUsersCard, softDeleteMentions, upsertMentions, topMentions, listMentions } from './users.js';
 import { getPassiveFeatureSetting, setPassiveFeatureSetting, getStyleStickerSetting, setStyleStickerSetting, passiveFeatureUsage, styleStickerUsage, describePassiveFeatureSetting, describeStyleStickerSetting, formatRatePercent, maxRateForDefault, defaultRateForFeature } from '../passive/settings.js';
-import { resolveAwemeIdFromMessage } from '../douyin-guard.js';
-import { searchDouyinByTitle, searchDouyinByTitleRandom } from '../../douyin.js';
-import { buildDouyinDeleteConfirmCard } from '../cards/douyin-invalid-card.js';
+import { resolveAwemeIdFromMessage, botAdminUserId } from '../douyin-guard.js';
+import { searchDouyinByTitle, searchDouyinByTitleRandom, checkDouyinAwemeValidityCached } from '../../douyin.js';
+import { buildDouyinDeleteConfirmCard, notifyAdminDouyinInvalid } from '../cards/douyin-invalid-card.js';
 import { renderStyleStickerImage } from '../../styleStickers.js';
 import { resolvePassiveMediaResource } from '../media/resource-cache.js';
 import { buildMirroredImage, sendMirroredMediaResource } from '../media/mirror.js';
@@ -506,13 +506,35 @@ export async function handleFeishuCommand(bot: FeishuBot, event: any, messageId:
         ? searchDouyinByTitleRandom(bot.user_id, douyinCommand.clickText, douyinCommand.searchText)
         : searchDouyinByTitle(bot.user_id, douyinCommand.clickText, douyinCommand.searchText);
       if (results.length > 0) {
-        const firstLine = `${results[0].last_checked_title}\nhttps://www.douyin.com/video/${results[0].aweme_id}`;
-        const firstReplyId = await replyText(bot, messageId, firstLine);
-        for (let i = 1; i < results.length && firstReplyId; i++) {
-          const line = `${results[i].last_checked_title}\nhttps://www.douyin.com/video/${results[i].aweme_id}`;
-          await replyText(bot, firstReplyId, line, true);
+        const searchSender = senderIdentity(event);
+        const adminUserId = botAdminUserId(bot.id);
+        const validResults: typeof results = [];
+        for (const r of results) {
+          const validity = await checkDouyinAwemeValidityCached(r.aweme_id);
+          if (validity.valid || validity.errored) {
+            validResults.push(r);
+          } else if (adminUserId && bot.user_id != null) {
+            notifyAdminDouyinInvalid(bot, {
+              awemeId: r.aweme_id,
+              userId: bot.user_id,
+              adminUserId,
+              title: validity.title,
+              triggerChatId: chatId,
+              triggerPersonId: searchSender.id,
+              triggerPersonName: searchSender.name,
+              source: '/douyin --search 指令'
+            }).catch(() => {});
+          }
         }
-        return true;
+        if (validResults.length > 0) {
+          const firstLine = `${validResults[0].last_checked_title}\nhttps://www.douyin.com/video/${validResults[0].aweme_id}`;
+          const firstReplyId = await replyText(bot, messageId, firstLine);
+          for (let i = 1; i < validResults.length && firstReplyId; i++) {
+            const line = `${validResults[i].last_checked_title}\nhttps://www.douyin.com/video/${validResults[i].aweme_id}`;
+            await replyText(bot, firstReplyId, line, true);
+          }
+          return true;
+        }
       }
     }
     if (!douyinCommand.clickText) {
