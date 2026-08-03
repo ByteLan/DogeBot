@@ -508,9 +508,9 @@ export async function handleFeishuCommand(bot: FeishuBot, event: any, messageId:
       if (results.length > 0) {
         const firstLine = `${results[0].last_checked_title}\nhttps://www.douyin.com/video/${results[0].aweme_id}`;
         const firstReplyId = await replyText(bot, messageId, firstLine);
-        if (results.length > 1 && firstReplyId) {
-          const rest = results.slice(1).map((r, i) => `${i + 2}. ${r.last_checked_title}\nhttps://www.douyin.com/video/${r.aweme_id}`);
-          await replyText(bot, firstReplyId, rest.join('\n\n'), true);
+        for (let i = 1; i < results.length && firstReplyId; i++) {
+          const line = `${results[i].last_checked_title}\nhttps://www.douyin.com/video/${results[i].aweme_id}`;
+          await replyText(bot, firstReplyId, line, true);
         }
         return true;
       }
