@@ -24,9 +24,9 @@ app.get('/open-api/v1/mm/redirect', redirectRandomMmVideo);
 app.get('/open-api/v1/byte-style', renderByteStyle);
 app.get('/open-api/v1/scale-new-heights', renderScaleNewHeights);
 
-app.post('/api/login', (req, res) => {
+app.post('/api/login', async (req, res) => {
   const { username, password } = req.body || {};
-  const user = typeof username === 'string' && typeof password === 'string' ? authenticate(username, password) : null;
+  const user = typeof username === 'string' && typeof password === 'string' ? await authenticate(username, password) : null;
   if (!user) {
     res.status(401).json({ error: 'invalid username or password' });
     return;

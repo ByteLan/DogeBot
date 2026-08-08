@@ -1,6 +1,9 @@
-import { createHmac, pbkdf2Sync, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHmac, pbkdf2, randomBytes, timingSafeEqual } from 'node:crypto';
+import { promisify } from 'node:util';
 import type { NextFunction, Request, Response } from 'express';
 import { db } from './db.js';
+
+const pbkdf2Async = promisify(pbkdf2);
 
 const TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60;
 const TOKEN_RENEW_THRESHOLD_SECONDS = 3 * 24 * 60 * 60;
@@ -22,13 +25,13 @@ function safeEqual(left: string, right: string): boolean {
   return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-export function hashPassword(password: string, salt = randomBytes(16).toString('hex')) {
-  const hash = pbkdf2Sync(password, salt, 210_000, 32, 'sha256').toString('hex');
+export async function hashPassword(password: string, salt = randomBytes(16).toString('hex')) {
+  const hash = (await pbkdf2Async(password, salt, 210_000, 32, 'sha256')).toString('hex');
   return { salt, hash };
 }
 
-export function verifyPassword(password: string, salt: string, expectedHash: string): boolean {
-  const actual = Buffer.from(hashPassword(password, salt).hash, 'hex');
+export async function verifyPassword(password: string, salt: string, expectedHash: string): Promise<boolean> {
+  const actual = Buffer.from((await hashPassword(password, salt)).hash, 'hex');
   const expected = Buffer.from(expectedHash, 'hex');
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
@@ -104,15 +107,15 @@ export function requireAuth(req: AuthenticatedRequest, res: Response, next: Next
   next();
 }
 
-export function addUser(username: string, password: string) {
-  const { salt, hash } = hashPassword(password);
+export async function addUser(username: string, password: string) {
+  const { salt, hash } = await hashPassword(password);
   db.prepare('INSERT INTO users (username, password_hash, salt) VALUES (?, ?, ?)').run(username, hash, salt);
 }
 
-export function authenticate(username: string, password: string) {
+export async function authenticate(username: string, password: string) {
   const row = db.prepare('SELECT id, username, password_hash, salt FROM users WHERE username = ?').get(username) as
     | { id: number; username: string; password_hash: string; salt: string }
     | undefined;
-  if (!row || !verifyPassword(password, row.salt, row.password_hash)) return null;
+  if (!row || !(await verifyPassword(password, row.salt, row.password_hash))) return null;
   return { id: row.id, username: row.username };
 }

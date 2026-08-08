@@ -77,17 +77,20 @@ export async function uploadDouyinAwemeRecords(req: AuthenticatedRequest, res: R
     return;
   }
   const result = saveDouyinAwemeRecords(req.user.id, clickText, awemeIds);
+  // Fire-and-forget the subscription fan-out: it pushes to every subscribed
+  // group serially (500ms apart) and can take seconds, but the uploader only
+  // needs its save result. Push failures are already logged, never surfaced.
   if (result.insertedAwemeIds.length > 0 && douyinAwemeNotifier) {
-    try {
-      await douyinAwemeNotifier({ userId: req.user.id, clickText, awemeIds: result.insertedAwemeIds });
-    } catch (error) {
+    const userId = req.user.id;
+    const insertedAwemeIds = result.insertedAwemeIds;
+    void douyinAwemeNotifier({ userId, clickText, awemeIds: insertedAwemeIds }).catch((error) => {
       console.error('[douyin] notify subscribers failed', {
-        userId: req.user.id,
+        userId,
         clickText,
-        inserted: result.insertedAwemeIds.length,
+        inserted: insertedAwemeIds.length,
         error: error instanceof Error ? error.message : String(error)
       });
-    }
+    });
   }
   res.json(result);
 }
@@ -374,7 +377,9 @@ async function resolveValidAwemeIdForOpenApi(clickText: string): Promise<{ aweme
     const validity = await checkDouyinAwemeValidityCached(awemeId);
     lastTitle = validity.title;
     if (validity.valid || validity.errored) return { awemeId, title: validity.title };
-    await notifyOpenApiAdmin(awemeId, validity.title);
+    // Fire-and-forget: notifying the admin about an invalid draw shouldn't add a
+    // network round-trip to the video-draw latency. Errors are logged inside.
+    void notifyOpenApiAdmin(awemeId, validity.title);
   }
   return { awemeId: attempted[attempted.length - 1] || '', title: lastTitle };
 }

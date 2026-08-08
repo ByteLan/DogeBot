@@ -7,7 +7,7 @@ if (!username || !password) {
 }
 
 try {
-  addUser(username, password);
+  await addUser(username, password);
   console.log(`Created user: ${username}`);
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);
