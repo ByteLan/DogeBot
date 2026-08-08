@@ -2,8 +2,9 @@ import type { Response } from 'express';
 import type { AuthenticatedRequest } from './auth.js';
 import type { FeishuBot } from './types.js';
 import { db } from './db.js';
-import { parsePositiveInt } from './config.js';
+import { parsePositiveInt, parsePositiveNumber } from './config.js';
 import { checkDouyinAwemeValidity, INVALID_TITLE_MARKER, type DouyinValidity } from './douyin-check.js';
+import { enqueueDouyinCheck } from './douyin-check-queue.js';
 
 type DouyinAwemeRecord = {
   aweme_id: string;
@@ -233,7 +234,10 @@ export function searchDouyinByTitleRandom(userId: number, clickText: string, sea
   return pool.slice(0, SEARCH_RESULT_COUNT);
 }
 
-const CHECK_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+// DB title cache freshness window. A record whose last_checked_at is within
+// this window is served straight from the DB without a network probe.
+// Configurable in hours (decimal allowed, e.g. 0.5 = 30min), default 24h.
+const CHECK_CACHE_TTL_MS = parsePositiveNumber(process.env.DOGEBOT_DOUYIN_CHECK_CACHE_HOURS, 24) * 60 * 60 * 1000;
 
 function getCheckCache(awemeId: string) {
   const row = db.prepare(`
@@ -274,13 +278,37 @@ export async function checkDouyinAwemeValidityCached(awemeId: string, skipCache 
       return { awemeId, valid: !invalid, title: cached.title, errored: false };
     }
   }
-  const result = await checkDouyinAwemeValidity(awemeId);
-  if (!result.errored) {
-    saveCheckCache(awemeId, result.title);
-  } else if (!result.title) {
-    result.title = getStaleCachedTitle(awemeId);
+  // Cache miss: go through the global throttle (concurrency + QPS) with
+  // in-flight de-duplication so concurrent callers for the same id share one
+  // network probe. Re-check the cache after dequeue in case a sibling task
+  // populated it while we waited.
+  try {
+    return await enqueueDouyinCheck(awemeId, async () => {
+      if (!skipCache) {
+        const cached = getCheckCache(awemeId);
+        if (cached) {
+          const invalid = cached.title.startsWith(INVALID_TITLE_MARKER);
+          return { awemeId, valid: !invalid, title: cached.title, errored: false } satisfies DouyinValidity;
+        }
+      }
+      const result = await checkDouyinAwemeValidity(awemeId);
+      if (!result.errored) {
+        saveCheckCache(awemeId, result.title);
+      } else if (!result.title) {
+        result.title = getStaleCachedTitle(awemeId);
+      }
+      return result;
+    });
+  } catch (error) {
+    // Queue full / scheduler error: treat as inconclusive so callers never
+    // delete a video just because we were overloaded, and fall back to any
+    // stale cached title we may have.
+    console.error('[douyin] validity check enqueue failed', {
+      awemeId,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return { awemeId, valid: true, title: getStaleCachedTitle(awemeId), errored: true };
   }
-  return result;
 }
 
 export function softDeleteDouyinAwemeRecords(userId: number, awemeId: string) {
@@ -313,6 +341,12 @@ export function restoreDouyinAwemeRecords(userId: number, awemeId: string) {
 
 const OPEN_API_MAX_ATTEMPTS = 3;
 const OPEN_API_BOT_ID = 1;
+// Short-lived cache shared by both open-api endpoints (/mm and /mm/redirect):
+// within this window every request returns the same resolved entry, so bursts
+// don't each trigger a fresh draw + probe. Configurable in seconds (decimal
+// allowed), default 2s.
+const OPEN_API_CACHE_TTL_MS = parsePositiveNumber(process.env.DOGEBOT_DOUYIN_OPEN_API_CACHE_SECONDS, 2) * 1000;
+const openApiResolvedCache = new Map<string, { value: { awemeId: string; title: string }; at: number }>();
 
 function getOpenApiBot(): FeishuBot | undefined {
   return db.prepare('SELECT * FROM feishu_bots WHERE id = ?').get(OPEN_API_BOT_ID) as FeishuBot | undefined;
@@ -365,6 +399,10 @@ async function notifyOpenApiAdmin(awemeId: string, title: string) {
 }
 
 async function resolveValidAwemeIdForOpenApi(clickText: string): Promise<{ awemeId: string; title: string }> {
+  const cached = openApiResolvedCache.get(clickText);
+  if (cached && Date.now() - cached.at < OPEN_API_CACHE_TTL_MS && cached.value.awemeId) {
+    return cached.value;
+  }
   const attempted: string[] = [];
   let lastTitle = '';
   for (let i = 0; i < OPEN_API_MAX_ATTEMPTS; i++) {
@@ -373,10 +411,16 @@ async function resolveValidAwemeIdForOpenApi(clickText: string): Promise<{ aweme
     attempted.push(awemeId);
     const validity = await checkDouyinAwemeValidityCached(awemeId);
     lastTitle = validity.title;
-    if (validity.valid || validity.errored) return { awemeId, title: validity.title };
+    if (validity.valid || validity.errored) {
+      const value = { awemeId, title: validity.title };
+      openApiResolvedCache.set(clickText, { value, at: Date.now() });
+      return value;
+    }
     await notifyOpenApiAdmin(awemeId, validity.title);
   }
-  return { awemeId: attempted[attempted.length - 1] || '', title: lastTitle };
+  const value = { awemeId: attempted[attempted.length - 1] || '', title: lastTitle };
+  if (value.awemeId) openApiResolvedCache.set(clickText, { value, at: Date.now() });
+  return value;
 }
 
 export async function getRandomMmVideo(_req: AuthenticatedRequest, res: Response) {
