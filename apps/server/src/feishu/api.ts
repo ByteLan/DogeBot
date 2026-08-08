@@ -1,5 +1,5 @@
 import type { FeishuBot, FeishuMessageDetails, FeishuMention } from '../types.js';
-import { feishuJson, openBase, tenantAccessToken } from './client.js';
+import { feishuJson, openBase, tenantAccessToken, isBotBlockedError } from './client.js';
 
 function idFromFeishuObject(value: any): string {
   if (typeof value === 'string') return value.trim();
@@ -18,7 +18,11 @@ export async function createChatMessage(bot: FeishuBot, chatId: string, msgType:
     if (!messageId) throw new Error('chat message send failed: missing message_id');
     return messageId;
   } catch (error) {
-    console.error('[feishu] chat message send failed', {
+    // "bot stopped / not in chat" is a recipient-side state, not a bug on our
+    // side — log at warn so it doesn't drown the error stream, then rethrow so
+    // callers can still decide to skip (passive) or surface (interactive).
+    const logger = isBotBlockedError(error) ? console.warn : console.error;
+    logger('[feishu] chat message send failed', {
       botId: bot.id,
       chatId,
       msgType,

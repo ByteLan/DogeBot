@@ -270,7 +270,7 @@ function saveCheckCache(awemeId: string, title: string) {
   `).run(title, awemeId);
 }
 
-export async function checkDouyinAwemeValidityCached(awemeId: string, skipCache = false): Promise<DouyinValidity> {
+export async function checkDouyinAwemeValidityCached(awemeId: string, skipCache = false, source = ''): Promise<DouyinValidity> {
   if (!skipCache) {
     const cached = getCheckCache(awemeId);
     if (cached) {
@@ -298,13 +298,14 @@ export async function checkDouyinAwemeValidityCached(awemeId: string, skipCache 
         result.title = getStaleCachedTitle(awemeId);
       }
       return result;
-    });
+    }, source);
   } catch (error) {
     // Queue full / scheduler error: treat as inconclusive so callers never
     // delete a video just because we were overloaded, and fall back to any
     // stale cached title we may have.
     console.error('[douyin] validity check enqueue failed', {
       awemeId,
+      source,
       error: error instanceof Error ? error.message : String(error)
     });
     return { awemeId, valid: true, title: getStaleCachedTitle(awemeId), errored: true };
@@ -415,7 +416,7 @@ async function drawValidAwemeIdForOpenApi(clickText: string): Promise<OpenApiRes
     const awemeId = randomDouyinAwemeIdByClickTextExcluding(clickText, attempted);
     if (!awemeId) break;
     attempted.push(awemeId);
-    const validity = await checkDouyinAwemeValidityCached(awemeId);
+    const validity = await checkDouyinAwemeValidityCached(awemeId, false, 'open-api 自动检测');
     lastTitle = validity.title;
     if (validity.valid || validity.errored) {
       return { awemeId, title: validity.title };

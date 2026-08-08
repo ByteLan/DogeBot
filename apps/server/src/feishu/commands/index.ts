@@ -510,7 +510,7 @@ export async function handleFeishuCommand(bot: FeishuBot, event: any, messageId:
         const adminUserId = botAdminUserId(bot.id);
         const validResults: typeof results = [];
         for (const r of results) {
-          const validity = await checkDouyinAwemeValidityCached(r.aweme_id);
+          const validity = await checkDouyinAwemeValidityCached(r.aweme_id, false, '/douyin --search 指令');
           if (validity.valid || validity.errored) {
             validResults.push(r);
           } else if (adminUserId && bot.user_id != null) {

@@ -2,6 +2,7 @@ import type { ChatCronTask, CronField, FeishuBot, DouyinCommand } from '../types
 import { db } from '../db.js';
 import { getBot } from './bot-management.js';
 import { sendTextToChat } from './api.js';
+import { isBotBlockedError } from './client.js';
 import { randomDouyinAwemeIds } from '../douyin.js';
 import { resolveValidAwemeId, type DouyinTriggerContext } from './douyin-guard.js';
 
@@ -215,6 +216,16 @@ async function sendDouyinMessages(
     try {
       await sendMessage(`https://www.douyin.com/video/${awemeId}`);
     } catch (error) {
+      // Cron is passive: a blocked/stopped bot is expected — log at warn and stop.
+      if (trigger.passive && isBotBlockedError(error)) {
+        console.warn('[feishu] douyin cron send skipped (bot blocked)', {
+          botId: bot.id,
+          clickText,
+          source: trigger.source,
+          reason: error instanceof Error ? error.message : String(error)
+        });
+        return;
+      }
       console.error('[feishu] douyin send failed', {
         botId: bot.id,
         userId: bot.user_id,
@@ -222,6 +233,7 @@ async function sendDouyinMessages(
         awemeId,
         currentIndex: index + 1,
         totalCount: awemeRecords.length,
+        source: trigger.source,
         error: error instanceof Error ? error.message : String(error)
       });
       throw error;
@@ -265,7 +277,8 @@ async function executeCronTask(task: ChatCronTask) {
       chatId: task.chat_id,
       personId: '',
       personName: '定时任务',
-      source: `定时任务 #${task.id}`
+      source: `定时任务 #${task.id}`,
+      passive: true
     }
   );
 }
