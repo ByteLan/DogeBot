@@ -345,8 +345,18 @@ const OPEN_API_BOT_ID = 1;
 // within this window every request returns the same resolved entry, so bursts
 // don't each trigger a fresh draw + probe. Configurable in seconds (decimal
 // allowed), default 2s.
+//
+// The entry is a discriminated union so a cold-cache burst is coalesced too:
+// the first request registers a `pending` promise synchronously (before any
+// await), and concurrent callers reuse it instead of each drawing a different
+// aweme_id and probing separately. `pending` reuse is intentionally NOT gated
+// by the TTL — a probe may take longer than the (short) TTL, and we still want
+// every in-flight caller to share that one probe. Only the resolved `done`
+// entry expires by TTL.
+type OpenApiResolved = { awemeId: string; title: string };
+type OpenApiCacheEntry = { pending: Promise<OpenApiResolved> } | { value: OpenApiResolved; at: number };
 const OPEN_API_CACHE_TTL_MS = parsePositiveNumber(process.env.DOGEBOT_DOUYIN_OPEN_API_CACHE_SECONDS, 2) * 1000;
-const openApiResolvedCache = new Map<string, { value: { awemeId: string; title: string }; at: number }>();
+const openApiResolvedCache = new Map<string, OpenApiCacheEntry>();
 
 function getOpenApiBot(): FeishuBot | undefined {
   return db.prepare('SELECT * FROM feishu_bots WHERE id = ?').get(OPEN_API_BOT_ID) as FeishuBot | undefined;
@@ -398,11 +408,7 @@ async function notifyOpenApiAdmin(awemeId: string, title: string) {
   }
 }
 
-async function resolveValidAwemeIdForOpenApi(clickText: string): Promise<{ awemeId: string; title: string }> {
-  const cached = openApiResolvedCache.get(clickText);
-  if (cached && Date.now() - cached.at < OPEN_API_CACHE_TTL_MS && cached.value.awemeId) {
-    return cached.value;
-  }
+async function drawValidAwemeIdForOpenApi(clickText: string): Promise<OpenApiResolved> {
   const attempted: string[] = [];
   let lastTitle = '';
   for (let i = 0; i < OPEN_API_MAX_ATTEMPTS; i++) {
@@ -412,15 +418,38 @@ async function resolveValidAwemeIdForOpenApi(clickText: string): Promise<{ aweme
     const validity = await checkDouyinAwemeValidityCached(awemeId);
     lastTitle = validity.title;
     if (validity.valid || validity.errored) {
-      const value = { awemeId, title: validity.title };
-      openApiResolvedCache.set(clickText, { value, at: Date.now() });
-      return value;
+      return { awemeId, title: validity.title };
     }
     await notifyOpenApiAdmin(awemeId, validity.title);
   }
-  const value = { awemeId: attempted[attempted.length - 1] || '', title: lastTitle };
-  if (value.awemeId) openApiResolvedCache.set(clickText, { value, at: Date.now() });
-  return value;
+  return { awemeId: attempted[attempted.length - 1] || '', title: lastTitle };
+}
+
+async function resolveValidAwemeIdForOpenApi(clickText: string): Promise<OpenApiResolved> {
+  const cached = openApiResolvedCache.get(clickText);
+  if (cached) {
+    // A probe already in flight: reuse it (single-flight), regardless of TTL.
+    if ('pending' in cached) return cached.pending;
+    // A resolved result still within its TTL: serve it.
+    if (Date.now() - cached.at < OPEN_API_CACHE_TTL_MS && cached.value.awemeId) return cached.value;
+  }
+
+  // Register the in-flight promise synchronously (before the first await) so a
+  // concurrent cold-cache burst across /mm and /mm/redirect coalesces here.
+  const pending = drawValidAwemeIdForOpenApi(clickText);
+  const entry: OpenApiCacheEntry = { pending };
+  openApiResolvedCache.set(clickText, entry);
+  try {
+    const value = await pending;
+    // Only cache a usable draw; on empty, drop our entry so the next request retries.
+    if (value.awemeId) openApiResolvedCache.set(clickText, { value, at: Date.now() });
+    else if (openApiResolvedCache.get(clickText) === entry) openApiResolvedCache.delete(clickText);
+    return value;
+  } catch (error) {
+    // Probe threw: clear our pending entry so it isn't pinned for the whole TTL.
+    if (openApiResolvedCache.get(clickText) === entry) openApiResolvedCache.delete(clickText);
+    throw error;
+  }
 }
 
 export async function getRandomMmVideo(_req: AuthenticatedRequest, res: Response) {
