@@ -62,6 +62,14 @@ pnpm dev
 - `DOGEBOT_DATA_DIR`：SQLite 数据目录，默认 `apps/server/data`。
 - `DOGEBOT_AUTH_SECRET`：登录 token 签名密钥；开发环境有默认值，生产环境建议显式配置。
 
+抖音检测频控（可选，均有默认值）：
+
+- `DOGEBOT_DOUYIN_CHECK_CONCURRENCY`：抖音有效性检测的全局并发数，整数，默认 `1`（串行）。
+- `DOGEBOT_DOUYIN_CHECK_QPS`：每秒最多放行的检测数，支持小数（如 `0.5` 表示每 2 秒一个），默认 `1`。
+- `DOGEBOT_DOUYIN_CHECK_QUEUE_MAX`：检测队列上限，整数，默认 `0`（不限）；超限的请求降级为“探测失败”，不做破坏性处理。
+- `DOGEBOT_DOUYIN_CHECK_CACHE_HOURS`：数据库标题缓存的新鲜期，单位小时，支持小数，默认 `24`；命中缓存直接返回，不发起网络请求。
+- `DOGEBOT_DOUYIN_OPEN_API_CACHE_SECONDS`：两个 OpenAPI 接口（`/mm` 与 `/mm/redirect`）共用的短缓存，单位秒，支持小数，默认 `2`。
+
 ## 飞书机器人配置
 
 推荐方式是在桌面客户端点击“扫码创建并绑定”：

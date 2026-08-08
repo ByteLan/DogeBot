@@ -31,6 +31,12 @@ export function parsePositiveInt(raw: string | undefined, fallback: number) {
   return Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
+/** Like parsePositiveInt but accepts positive decimals (e.g. QPS 0.5, TTL 1.5h). */
+export function parsePositiveNumber(raw: string | undefined, fallback: number) {
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 export function parseBooleanFlag(raw: string | undefined, fallback = false) {
   if (!raw?.trim()) return fallback;
   return ['1', 'true', 'yes', 'on'].includes(raw.trim().toLowerCase());
