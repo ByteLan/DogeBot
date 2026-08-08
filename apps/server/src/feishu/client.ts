@@ -11,11 +11,38 @@ export function openBase(domain: string) {
   return FEISHU_BASE[domain] || FEISHU_BASE.feishu;
 }
 
+/** Error carrying the Feishu business `code` so callers can classify failures. */
+export class FeishuApiError extends Error {
+  readonly code: number;
+  readonly httpStatus: number;
+  constructor(message: string, code: number, httpStatus: number) {
+    super(message);
+    this.name = 'FeishuApiError';
+    this.code = code;
+    this.httpStatus = httpStatus;
+  }
+}
+
+// Feishu business codes that mean "this chat/user will never accept our message"
+// (bot stopped / removed / not in chat). Retrying or logging them as errors on
+// passive pushes is noise, so callers treat these as skippable.
+const BOT_BLOCKED_CODES = new Set([230002, 230013, 230017, 230034, 230035]);
+
+export function isBotBlockedError(error: unknown): boolean {
+  if (error instanceof FeishuApiError && BOT_BLOCKED_CODES.has(error.code)) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /stopped the bot|not in the chat|bot is not|hasn't opened|has not opened/i.test(message);
+}
+
 export async function feishuJson<T>(url: string, init: RequestInit): Promise<T> {
   const response = await fetch(url, init);
   const data = (await response.json().catch(() => ({}))) as T & { code?: number; msg?: string };
   if (!response.ok || (typeof data.code === 'number' && data.code !== 0)) {
-    throw new Error(data.msg || `Feishu request failed: ${response.status}`);
+    throw new FeishuApiError(
+      data.msg || `Feishu request failed: ${response.status}`,
+      typeof data.code === 'number' ? data.code : -1,
+      response.status
+    );
   }
   return data;
 }

@@ -40,6 +40,7 @@ export class DouyinCheckQueueFullError extends Error {
 
 type QueuedItem = {
   awemeId: string;
+  source: string;
   enqueuedAt: number;
   run: () => void;
 };
@@ -86,7 +87,7 @@ function pump() {
   waiting.shift();
   active++;
   lastReleaseAt = Date.now();
-  log('start', { awemeId: next.awemeId, waitedMs: lastReleaseAt - next.enqueuedAt });
+  log('start', { awemeId: next.awemeId, waitedMs: lastReleaseAt - next.enqueuedAt, source: next.source });
   next.run();
   // A single release may have freed room for another concurrent slot.
   pump();
@@ -95,29 +96,32 @@ function pump() {
 /**
  * Enqueue a Douyin probe under the global concurrency + QPS gates, de-duplicated
  * by aweme_id. `worker` should perform the actual network probe (and any cache
- * write); it is invoked at most once per in-flight id.
+ * write); it is invoked at most once per in-flight id. `source` is a free-form
+ * trigger label (e.g. "订阅推送", "定时任务 #3", "open-api 自动检测") echoed into
+ * every queue log line for observability.
  *
  * Throws {@link DouyinCheckQueueFullError} synchronously (rejected promise) when
  * the queue is full — callers treat this as an inconclusive probe so a video is
  * never deleted just because we were overloaded.
  */
-export function enqueueDouyinCheck<T>(awemeId: string, worker: () => Promise<T>): Promise<T> {
+export function enqueueDouyinCheck<T>(awemeId: string, worker: () => Promise<T>, source = ''): Promise<T> {
   const existing = inFlight.get(awemeId);
   if (existing) {
     const reuseCount = (reuseCounts.get(awemeId) ?? 0) + 1;
     reuseCounts.set(awemeId, reuseCount);
-    log('reuse', { awemeId, reuseCount });
+    log('reuse', { awemeId, reuseCount, source });
     return existing as Promise<T>;
   }
 
   if (waiting.length >= maxQueue) {
-    log('reject', { awemeId, reason: 'queue-full', maxQueue });
+    log('reject', { awemeId, reason: 'queue-full', maxQueue, source });
     return Promise.reject(new DouyinCheckQueueFullError(`douyin check queue full (max=${maxQueue})`));
   }
 
   const promise = new Promise<T>((resolve, reject) => {
     waiting.push({
       awemeId,
+      source,
       enqueuedAt: Date.now(),
       run: () => {
         const startedAt = Date.now();
@@ -129,7 +133,8 @@ export function enqueueDouyinCheck<T>(awemeId: string, worker: () => Promise<T>)
                 awemeId,
                 status: 'ok',
                 durationMs: Date.now() - startedAt,
-                reuseCount: reuseCounts.get(awemeId) ?? 0
+                reuseCount: reuseCounts.get(awemeId) ?? 0,
+                source
               });
               resolve(value);
             },
@@ -139,6 +144,7 @@ export function enqueueDouyinCheck<T>(awemeId: string, worker: () => Promise<T>)
                 status: 'error',
                 durationMs: Date.now() - startedAt,
                 reuseCount: reuseCounts.get(awemeId) ?? 0,
+                source,
                 error: error instanceof Error ? error.message : String(error)
               });
               reject(error);
@@ -152,7 +158,7 @@ export function enqueueDouyinCheck<T>(awemeId: string, worker: () => Promise<T>)
           });
       }
     });
-    log('enqueue', { awemeId });
+    log('enqueue', { awemeId, source });
     pump();
   });
 

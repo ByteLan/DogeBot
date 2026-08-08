@@ -2,6 +2,7 @@ import type { FeishuBot, DouyinSubscriptionRecord, DefaultCommandRecord, SetDefa
 import { db } from '../../db.js';
 import { randomDouyinAwemeIds } from '../../douyin.js';
 import { sendTextToChat } from '../api.js';
+import { isBotBlockedError } from '../client.js';
 import { getBot } from '../bot-management.js';
 import { resolveValidAwemeId, type DouyinTriggerContext } from '../douyin-guard.js';
 
@@ -23,6 +24,16 @@ export async function sendDouyinMessages(
     try {
       await sendMessage(`https://www.douyin.com/video/${awemeId}`);
     } catch (error) {
+      // Passive flows (cron) tolerate a blocked/stopped bot: log at warn and stop.
+      if (trigger.passive && isBotBlockedError(error)) {
+        console.warn('[feishu] douyin send skipped (bot blocked)', {
+          botId: bot.id,
+          clickText,
+          source: trigger.source,
+          reason: error instanceof Error ? error.message : String(error)
+        });
+        return;
+      }
       console.error('[feishu] douyin send failed', {
         botId: bot.id,
         userId: bot.user_id,
@@ -30,6 +41,7 @@ export async function sendDouyinMessages(
         awemeId,
         currentIndex: index + 1,
         totalCount: awemeRecords.length,
+        source: trigger.source,
         error: error instanceof Error ? error.message : String(error)
       });
       throw error;
@@ -76,19 +88,35 @@ export async function notifyDouyinSubscriptions(payload: { userId: number; click
   for (const subscription of subscriptions) {
     const bot = getBot(subscription.bot_id);
     if (!bot || !bot.enabled) continue;
+    const source = `订阅推送（clickText=${payload.clickText}）`;
     const trigger: DouyinTriggerContext = {
       chatId: subscription.chat_id,
       personId: '',
       personName: '订阅推送',
-      source: `订阅推送（clickText=${payload.clickText}）`
+      source,
+      passive: true
     };
     const attempted = new Set<string>();
 
     for (const [index, awemeId] of payload.awemeIds.entries()) {
-      const resolvedAwemeId = await resolveValidAwemeId(bot, payload.clickText, awemeId, trigger, attempted);
+      // Subscription push: no pool re-draw on invalid (would fan old-record
+      // probes across every subscribed chat) — skip the dead id instead.
+      const resolvedAwemeId = await resolveValidAwemeId(bot, payload.clickText, awemeId, trigger, attempted, /* redraw */ false);
+      if (!resolvedAwemeId) continue;
       try {
         await sendTextToChat(bot, subscription.chat_id, `https://www.douyin.com/video/${resolvedAwemeId}`);
       } catch (error) {
+        // Passive push: a blocked/stopped bot is expected — skip this chat quietly.
+        if (isBotBlockedError(error)) {
+          console.warn('[feishu] douyin subscription send skipped (bot blocked)', {
+            botId: bot.id,
+            chatId: subscription.chat_id,
+            clickText: payload.clickText,
+            source,
+            reason: error instanceof Error ? error.message : String(error)
+          });
+          break;
+        }
         console.error('[feishu] douyin subscription send failed', {
           botId: bot.id,
           userId: payload.userId,
@@ -97,6 +125,7 @@ export async function notifyDouyinSubscriptions(payload: { userId: number; click
           awemeId: resolvedAwemeId,
           currentIndex: index + 1,
           totalCount: payload.awemeIds.length,
+          source,
           error: error instanceof Error ? error.message : String(error)
         });
         break;
