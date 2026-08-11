@@ -30,6 +30,8 @@ export type DouyinCardContext = {
   triggerPersonName: string;
   /** where the card was triggered: keyword report, auto send path, or /douyin --delete. */
   source: string;
+  /** pre-formatted per-stage detection diagnostics (markdown lines); optional. */
+  checkInfo?: string;
 };
 
 function plainText(content: string) {
@@ -48,7 +50,8 @@ function callbackValue(context: DouyinCardContext, action: DouyinInvalidCardActi
     triggerChatId: context.triggerChatId,
     triggerPersonId: context.triggerPersonId,
     triggerPersonName: context.triggerPersonName,
-    source: context.source
+    source: context.source,
+    checkInfo: context.checkInfo || ''
   };
 }
 
@@ -160,10 +163,12 @@ export function renderDouyinCardState(context: DouyinCardContext, state: DouyinC
     `- **标题**：${context.title || titleFallback(context.variant)}`,
     `- **触发群聊**：\`${context.triggerChatId || '未知'}\``,
     `- **触发人**：${triggerPersonLabel(context)}`,
-    `- **触发来源**：${context.source}`,
-    '',
-    footer
+    `- **触发来源**：${context.source}`
   ];
+  if (context.checkInfo) {
+    lines.push('', '**检测过程**', context.checkInfo);
+  }
+  lines.push('', footer);
   return {
     schema: '2.0',
     body: {

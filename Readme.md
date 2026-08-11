@@ -69,6 +69,8 @@ pnpm dev
 - `DOGEBOT_DOUYIN_CHECK_QUEUE_MAX`：检测队列上限，整数，默认 `0`（不限）；超限的请求降级为“探测失败”，不做破坏性处理。
 - `DOGEBOT_DOUYIN_CHECK_CACHE_HOURS`：数据库标题缓存的新鲜期，单位小时，支持小数，默认 `24`；命中缓存直接返回，不发起网络请求。
 - `DOGEBOT_DOUYIN_OPEN_API_CACHE_SECONDS`：两个 OpenAPI 接口（`/mm` 与 `/mm/redirect`）共用的短缓存，单位秒，支持小数，默认 `2`。
+- `DOGEBOT_DOUYIN_CHECK_STAGE1_ENABLED`：是否启用检测阶段1（移动端分享页，靠标题判定），默认 `true`。
+- `DOGEBOT_DOUYIN_CHECK_STAGE2_ENABLED`：是否启用检测阶段2（Web 详情 API 二次确认，可拿到真实标题），默认 `true`；关闭后阶段1 的兜底标题即判失效（旧行为）。
 
 ## 飞书机器人配置
 
