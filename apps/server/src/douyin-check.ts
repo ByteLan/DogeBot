@@ -17,8 +17,10 @@ const DOUYIN_HOME = 'https://www.douyin.com/';
 const DESKTOP_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 // The detail API rejects anonymous requests but accepts a plain `ttwid` cookie
-// (no a_bogus/msToken signing needed). Prime it once from the home page and
-// reuse it; clear on rejection so the next probe re-primes.
+// (no a_bogus/msToken signing needed). Obtain it from the bytedance ttwid
+// registration endpoint (works without JS/browser, unlike the douyin.com home
+// page which only sets the cookie client-side via JS). Cache and reuse it.
+const TTWID_REGISTER_URL = 'https://ttwid.bytedance.com/ttwid/union/register/';
 const TTWID_TTL_MS = 30 * 60 * 1000;
 let cachedTtwid = '';
 let cachedTtwidAt = 0;
@@ -106,21 +108,34 @@ async function fetchShareProbe(awemeId: string): Promise<ShareProbe> {
   }
 }
 
-/** Lazily obtain (and cache) a `ttwid` cookie the detail API needs to authorize. */
+/** Obtain a fresh `ttwid` cookie from ByteDance's ttwid registration service. */
 async function getTtwid(): Promise<string> {
   if (cachedTtwid && Date.now() - cachedTtwidAt < TTWID_TTL_MS) return cachedTtwid;
   try {
-    const response = await fetchWithTimeout(DOUYIN_HOME, { headers: { 'user-agent': DESKTOP_UA } });
+    const response = await fetchWithTimeout(TTWID_REGISTER_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'user-agent': DESKTOP_UA },
+      body: JSON.stringify({
+        region: 'cn',
+        aid: 1768,
+        needFid: false,
+        service: 'www.ixigua.com',
+        migrate_info: { ticket: '', source: 'node' },
+        cbUrlProtocol: 'https',
+        union: true
+      })
+    });
+    // The ttwid is returned as a set-cookie header.
     const cookies = response.headers.getSetCookie?.() ?? [];
     for (const cookie of cookies) {
-      const match = cookie.match(/(?:^|;\s*)ttwid=([^;]+)/);
+      const match = cookie.match(/ttwid=([^;]+)/);
       if (match) {
         cachedTtwid = `ttwid=${match[1]}`;
         cachedTtwidAt = Date.now();
         return cachedTtwid;
       }
     }
-    // Fallback: look for ttwid in the combined 'set-cookie' header (older Node)
+    // Fallback: combined header (older Node versions)
     const rawSetCookie = response.headers.get('set-cookie') || '';
     const fallbackMatch = rawSetCookie.match(/ttwid=([^;]+)/);
     if (fallbackMatch) {
@@ -128,13 +143,13 @@ async function getTtwid(): Promise<string> {
       cachedTtwidAt = Date.now();
       return cachedTtwid;
     }
-    console.warn('[douyin] ttwid not found in response cookies', {
+    console.warn('[douyin] ttwid register: cookie not found in response', {
       status: response.status,
       cookieCount: cookies.length,
       hasSetCookieHeader: !!rawSetCookie
     });
   } catch (error) {
-    console.error('[douyin] ttwid prime failed', {
+    console.error('[douyin] ttwid register failed', {
       error: error instanceof Error ? error.message : String(error)
     });
   }
