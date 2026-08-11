@@ -126,8 +126,15 @@ export async function resolveValidAwemeId(
     lastCandidate = candidate;
     attempted.add(candidate);
     const validity = await checkDouyinAwemeValidityCached(candidate, false, trigger.source);
-    if (validity.valid || validity.errored) {
-      // Valid, or the probe was inconclusive: keep this one to avoid false deletes.
+    if (validity.valid && !validity.errored) {
+      // Confirmed valid: keep this one, no admin notification needed.
+      return candidate;
+    }
+    if (validity.errored) {
+      // Inconclusive (both stages failed to get a title): still send this id
+      // (never block on a failed probe), but notify the admin so they can
+      // manually confirm whether to delete it.
+      notifyAdminResult(bot, candidate, 'errored', validity, trigger).catch(() => {});
       return candidate;
     }
     await notifyAdmin(bot, candidate, validity, trigger);

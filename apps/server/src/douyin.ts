@@ -440,7 +440,12 @@ async function drawValidAwemeIdForOpenApi(clickText: string): Promise<OpenApiRes
     attempted.push(awemeId);
     const validity = await checkDouyinAwemeValidityCached(awemeId, false, 'open-api 自动检测');
     lastTitle = validity.title;
-    if (validity.valid || validity.errored) {
+    if (validity.valid && !validity.errored) {
+      return { awemeId, title: validity.title };
+    }
+    if (validity.errored) {
+      // Inconclusive: still use this id (never block), but notify admin.
+      notifyOpenApiAdmin(awemeId, validity).catch(() => {});
       return { awemeId, title: validity.title };
     }
     await notifyOpenApiAdmin(awemeId, validity);
