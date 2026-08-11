@@ -109,15 +109,34 @@ async function fetchShareProbe(awemeId: string): Promise<ShareProbe> {
 /** Lazily obtain (and cache) a `ttwid` cookie the detail API needs to authorize. */
 async function getTtwid(): Promise<string> {
   if (cachedTtwid && Date.now() - cachedTtwidAt < TTWID_TTL_MS) return cachedTtwid;
-  const response = await fetchWithTimeout(DOUYIN_HOME, { headers: { 'user-agent': DESKTOP_UA } });
-  const cookies = response.headers.getSetCookie?.() ?? [];
-  for (const cookie of cookies) {
-    const match = cookie.match(/(?:^|;\s*)ttwid=([^;]+)/);
-    if (match) {
-      cachedTtwid = `ttwid=${match[1]}`;
+  try {
+    const response = await fetchWithTimeout(DOUYIN_HOME, { headers: { 'user-agent': DESKTOP_UA } });
+    const cookies = response.headers.getSetCookie?.() ?? [];
+    for (const cookie of cookies) {
+      const match = cookie.match(/(?:^|;\s*)ttwid=([^;]+)/);
+      if (match) {
+        cachedTtwid = `ttwid=${match[1]}`;
+        cachedTtwidAt = Date.now();
+        return cachedTtwid;
+      }
+    }
+    // Fallback: look for ttwid in the combined 'set-cookie' header (older Node)
+    const rawSetCookie = response.headers.get('set-cookie') || '';
+    const fallbackMatch = rawSetCookie.match(/ttwid=([^;]+)/);
+    if (fallbackMatch) {
+      cachedTtwid = `ttwid=${fallbackMatch[1]}`;
       cachedTtwidAt = Date.now();
       return cachedTtwid;
     }
+    console.warn('[douyin] ttwid not found in response cookies', {
+      status: response.status,
+      cookieCount: cookies.length,
+      hasSetCookieHeader: !!rawSetCookie
+    });
+  } catch (error) {
+    console.error('[douyin] ttwid prime failed', {
+      error: error instanceof Error ? error.message : String(error)
+    });
   }
   cachedTtwid = '';
   return '';
@@ -151,17 +170,29 @@ async function fetchDetailProbe(awemeId: string): Promise<DetailProbe> {
     };
     let response = await call();
     // A stale/absent ttwid tends to surface as a 4xx: re-prime once and retry.
-    if (!response.ok && ttwid) {
+    if (!response.ok) {
       cachedTtwid = '';
       cachedTtwidAt = 0;
       ttwid = await getTtwid();
-      response = await call();
+      if (ttwid) response = await call();
     }
     if (!response.ok) {
-      console.error('[douyin] detail api non-ok', { awemeId, status: response.status });
+      console.error('[douyin] detail api non-ok', { awemeId, status: response.status, hasTtwid: !!ttwid });
       return { ok: false, error: `http ${response.status}`, status: response.status };
     }
-    const data = (await response.json()) as { aweme_detail?: { desc?: string } | null };
+    const text = await response.text();
+    let data: { aweme_detail?: { desc?: string } | null };
+    try {
+      data = JSON.parse(text);
+    } catch {
+      console.error('[douyin] detail api json parse failed', {
+        awemeId,
+        status: response.status,
+        hasTtwid: !!ttwid,
+        bodyPreview: text.slice(0, 200)
+      });
+      return { ok: false, error: `json parse failed (status ${response.status}, body ${text.length}b)`, status: response.status };
+    }
     if (data.aweme_detail && typeof data.aweme_detail === 'object') {
       return { ok: true, valid: true, title: String(data.aweme_detail.desc || '').trim(), status: response.status };
     }
