@@ -1,6 +1,6 @@
 import type { FeishuBot } from '../types.js';
 import { db } from '../db.js';
-import { extractAwemeIdFromText, type DouyinValidity } from '../douyin-check.js';
+import { extractAwemeIdFromText, formatDouyinCheckStages, type DouyinValidity } from '../douyin-check.js';
 import { randomDouyinAwemeIdExcluding, findDouyinRecordByAwemeId, softDeleteDouyinAwemeRecords, restoreDouyinAwemeRecords, checkDouyinAwemeValidityCached } from '../douyin.js';
 import { notifyAdminDouyinInvalid, notifyAdminDouyinResult } from './cards/douyin-invalid-card.js';
 import { fetchMessageById } from './api.js';
@@ -32,7 +32,7 @@ export function botAdminUserId(botId: number) {
   return row?.admin_user_id?.trim() || '';
 }
 
-async function notifyAdmin(bot: FeishuBot, awemeId: string, title: string, trigger: DouyinTriggerContext) {
+async function notifyAdmin(bot: FeishuBot, awemeId: string, validity: DouyinValidity, trigger: DouyinTriggerContext) {
   const adminUserId = botAdminUserId(bot.id);
   if (!adminUserId || bot.user_id == null) return;
   try {
@@ -40,11 +40,12 @@ async function notifyAdmin(bot: FeishuBot, awemeId: string, title: string, trigg
       awemeId,
       userId: bot.user_id,
       adminUserId,
-      title,
+      title: validity.title,
       triggerChatId: trigger.chatId,
       triggerPersonId: trigger.personId,
       triggerPersonName: trigger.personName,
-      source: trigger.source
+      source: trigger.source,
+      checkInfo: formatDouyinCheckStages(validity)
     });
   } catch (error) {
     console.error('[feishu] douyin invalid admin notify failed', {
@@ -59,7 +60,7 @@ async function notifyAdminResult(
   bot: FeishuBot,
   awemeId: string,
   outcome: 'valid' | 'errored',
-  title: string,
+  validity: DouyinValidity,
   trigger: DouyinTriggerContext
 ) {
   const adminUserId = botAdminUserId(bot.id);
@@ -70,11 +71,12 @@ async function notifyAdminResult(
       outcome,
       userId: bot.user_id,
       adminUserId,
-      title,
+      title: validity.title,
       triggerChatId: trigger.chatId,
       triggerPersonId: trigger.personId,
       triggerPersonName: trigger.personName,
-      source: trigger.source
+      source: trigger.source,
+      checkInfo: formatDouyinCheckStages(validity)
     });
   } catch (error) {
     console.error('[feishu] douyin result admin notify failed', {
@@ -128,7 +130,7 @@ export async function resolveValidAwemeId(
       // Valid, or the probe was inconclusive: keep this one to avoid false deletes.
       return candidate;
     }
-    await notifyAdmin(bot, candidate, validity.title, trigger);
+    await notifyAdmin(bot, candidate, validity, trigger);
     if (!redraw) {
       // Caller opted out of pool re-draws (e.g. subscription push): skip this id.
       console.log('[feishu] douyin invalid, skipping (redraw disabled)', {
@@ -185,11 +187,11 @@ export async function reportPossiblyInvalidAweme(
     source: trigger.source
   });
   if (validity.valid && !validity.errored) {
-    await notifyAdminResult(bot, normalizedId, 'valid', validity.title, trigger);
+    await notifyAdminResult(bot, normalizedId, 'valid', validity, trigger);
   } else if (validity.errored) {
-    await notifyAdminResult(bot, normalizedId, 'errored', validity.title, trigger);
+    await notifyAdminResult(bot, normalizedId, 'errored', validity, trigger);
   } else {
-    await notifyAdmin(bot, normalizedId, validity.title, trigger);
+    await notifyAdmin(bot, normalizedId, validity, trigger);
   }
   return validity;
 }

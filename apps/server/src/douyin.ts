@@ -3,7 +3,7 @@ import type { AuthenticatedRequest } from './auth.js';
 import type { FeishuBot } from './types.js';
 import { db } from './db.js';
 import { parsePositiveInt, parsePositiveNumber } from './config.js';
-import { checkDouyinAwemeValidity, INVALID_TITLE_MARKER, type DouyinValidity } from './douyin-check.js';
+import { checkDouyinAwemeValidity, INVALID_TITLE_MARKER, formatDouyinCheckStages, type DouyinValidity } from './douyin-check.js';
 import { enqueueDouyinCheck } from './douyin-check-queue.js';
 
 type DouyinAwemeRecord = {
@@ -275,7 +275,14 @@ export async function checkDouyinAwemeValidityCached(awemeId: string, skipCache 
     const cached = getCheckCache(awemeId);
     if (cached) {
       const invalid = cached.title.startsWith(INVALID_TITLE_MARKER);
-      return { awemeId, valid: !invalid, title: cached.title, errored: false };
+      return {
+        awemeId,
+        valid: !invalid,
+        title: cached.title,
+        errored: false,
+        stages: [{ stage: 'share', outcome: invalid ? 'invalid' : 'valid', title: cached.title, info: 'db cache hit' }],
+        decidedBy: 'cache'
+      };
     }
   }
   // Cache miss: go through the global throttle (concurrency + QPS) with
@@ -288,7 +295,14 @@ export async function checkDouyinAwemeValidityCached(awemeId: string, skipCache 
         const cached = getCheckCache(awemeId);
         if (cached) {
           const invalid = cached.title.startsWith(INVALID_TITLE_MARKER);
-          return { awemeId, valid: !invalid, title: cached.title, errored: false } satisfies DouyinValidity;
+          return {
+            awemeId,
+            valid: !invalid,
+            title: cached.title,
+            errored: false,
+            stages: [{ stage: 'share', outcome: invalid ? 'invalid' : 'valid', title: cached.title, info: 'db cache hit' }],
+            decidedBy: 'cache'
+          } satisfies DouyinValidity;
         }
       }
       const result = await checkDouyinAwemeValidity(awemeId);
@@ -308,7 +322,14 @@ export async function checkDouyinAwemeValidityCached(awemeId: string, skipCache 
       source,
       error: error instanceof Error ? error.message : String(error)
     });
-    return { awemeId, valid: true, title: getStaleCachedTitle(awemeId), errored: true };
+    return {
+      awemeId,
+      valid: true,
+      title: getStaleCachedTitle(awemeId),
+      errored: true,
+      stages: [{ stage: 'share', outcome: 'errored', info: `queue: ${error instanceof Error ? error.message : String(error)}` }],
+      decidedBy: 'none'
+    };
   }
 }
 
@@ -382,7 +403,7 @@ export function setOpenApiInvalidNotifier(fn: (bot: FeishuBot, context: any) => 
   notifyAdminDouyinInvalidFn = fn;
 }
 
-async function notifyOpenApiAdmin(awemeId: string, title: string) {
+async function notifyOpenApiAdmin(awemeId: string, validity: DouyinValidity) {
   if (!notifyAdminDouyinInvalidFn) return;
   const bot = getOpenApiBot();
   if (!bot) return;
@@ -395,11 +416,12 @@ async function notifyOpenApiAdmin(awemeId: string, title: string) {
       awemeId,
       userId,
       adminUserId,
-      title,
+      title: validity.title,
       triggerChatId: '',
       triggerPersonId: 'open-api',
       triggerPersonName: 'Open API',
-      source: 'open-api 自动检测'
+      source: 'open-api 自动检测',
+      checkInfo: formatDouyinCheckStages(validity)
     });
   } catch (error) {
     console.error('[douyin] open-api admin notify failed', {
@@ -421,7 +443,7 @@ async function drawValidAwemeIdForOpenApi(clickText: string): Promise<OpenApiRes
     if (validity.valid || validity.errored) {
       return { awemeId, title: validity.title };
     }
-    await notifyOpenApiAdmin(awemeId, validity.title);
+    await notifyOpenApiAdmin(awemeId, validity);
   }
   return { awemeId: attempted[attempted.length - 1] || '', title: lastTitle };
 }

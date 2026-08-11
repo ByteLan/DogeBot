@@ -190,7 +190,8 @@ function parseDouyinInvalidCardActionPayload(payload: any) {
     triggerChatId: firstStringValue(actionValue.triggerChatId),
     triggerPersonId: firstStringValue(actionValue.triggerPersonId),
     triggerPersonName: firstStringValue(actionValue.triggerPersonName),
-    source: firstStringValue(actionValue.source)
+    source: firstStringValue(actionValue.source),
+    checkInfo: firstStringValue(actionValue.checkInfo)
   };
   return {
     eventId: context.eventId,

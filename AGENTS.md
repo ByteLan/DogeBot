@@ -57,6 +57,12 @@ cd apps/server && npx tsc -p tsconfig.json --noEmit
 - **探测失败绝不产生破坏性后果**。网络错误/超时/队列满一律视为"不确定"(`errored: true` 且 `valid: true`),调用方不得据此删除或跳过数据。
 - 缓存命中直接返回,不进队列;高并发同 key 请求合并为一次真实请求。
 
+抖音检测采用**两阶段**策略(参考 yt-dlp),各阶段可用 env 单独开关,均默认开:
+- **阶段1** 移动端分享页 `iesdouyin.com/share/video/<id>`,抓 `<title>`。真实标题=有效(快路径)。注意抖音已不在 SSR 内嵌视频数据,失效视频与相当比例的有效视频都只返回兜底标题(`在抖音记录美好生活…` 或裸"抖音"),见 `isFallbackShareTitle`——兜底标题只表示"不确定,转阶段2"。
+- **阶段2** Web 详情 API `www.douyin.com/aweme/v1/web/aweme/detail/?aweme_id=<id>`,靠 `ttwid` cookie(惰性缓存,不签名)。`aweme_detail` 非空=有效(取 `desc` 作真实标题),为 `null`=失效。这是**非官方接口**,抖音可能收紧(如强制 `a_bogus` 签名),届时降级为 `errored`(不误删),可用 env 关闭。
+- 结果 `DouyinValidity` 携带 `stages[]`(每个执行/跳过阶段的 outcome/title/info)与 `decidedBy`,用 `formatDouyinCheckStages` 渲染进管理员卡片的「检测过程」。新增检测入口构造卡片时要带上 `checkInfo`。
+- 缓存回读契约:有效结果标题**永不**以 `INVALID_TITLE_MARKER` 开头,确认失效结果**必须**以之开头(douyin.ts 靠 `startsWith` 回读有效性)。
+
 ## 数据库约定
 
 - SQLite 通过 better-sqlite3,schema 与迁移集中在 [`db.ts`](apps/server/src/db.ts),用 `CREATE TABLE IF NOT EXISTS` + 幂等的列迁移(检测列是否存在再 `ALTER`)。新增列走同样的幂等迁移方式,不要假设旧库已有新列。
@@ -82,6 +88,8 @@ cd apps/server && npx tsc -p tsconfig.json --noEmit
 | `DOGEBOT_DOUYIN_CHECK_QUEUE_MAX` | `0` | 队列上限(整数,0=不限,超限降级为 errored) |
 | `DOGEBOT_DOUYIN_CHECK_CACHE_HOURS` | `24` | DB 标题缓存新鲜期,单位小时(**支持小数**) |
 | `DOGEBOT_DOUYIN_OPEN_API_CACHE_SECONDS` | `2` | 两个 OpenAPI 接口共用短缓存,单位秒(**支持小数**) |
+| `DOGEBOT_DOUYIN_CHECK_STAGE1_ENABLED` | `true` | 是否启用检测阶段1(分享页) |
+| `DOGEBOT_DOUYIN_CHECK_STAGE2_ENABLED` | `true` | 是否启用检测阶段2(详情 API);关闭后阶段1 兜底标题即判失效(旧行为) |
 
 ## 提交规范
 
