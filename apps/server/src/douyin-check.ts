@@ -2,7 +2,7 @@ import { parseBooleanFlag } from './config.js';
 
 const SHARE_ENDPOINT = 'https://www.iesdouyin.com/share/video/';
 const MOBILE_UA =
-  'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1';
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) larkUrl AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1';
 // Douyin serves this fallback title on the mobile share page when a video is
 // deleted / private / otherwise unavailable. A live video renders its real title.
 export const INVALID_TITLE_MARKER = '在抖音记录美好生活';
