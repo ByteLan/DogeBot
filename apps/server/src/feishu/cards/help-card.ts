@@ -1,15 +1,31 @@
-import type { FeishuBot, HelpCommandRow, HelpRateDescriptor, HelpMaxDescriptor, HelpCardAction, ChatCronTask, DouyinClickTextOption, PassiveChatSetting, StyleStickerChatSetting, PassiveInteractionConfig } from '../../types.js';
+import type {
+  ChatCronTask,
+  DouyinClickTextOption,
+  FeishuBot,
+  HelpCardAction,
+  HelpCardPage,
+  HelpCommandRow,
+  HelpMaxDescriptor,
+  HelpRateDescriptor,
+  PassiveChatSetting,
+  PassiveInteractionConfig,
+  StyleStickerChatSetting
+} from '../../types.js';
 import { db } from '../../db.js';
-import { passiveInteractionConfig, openApiBaseUrl } from '../../config.js';
+import { openApiBaseUrl, passiveInteractionConfig } from '../../config.js';
 import { replyCard } from '../api.js';
-import { getPassiveFeatureSetting, getStyleStickerSetting, defaultRateForFeature, formatRatePercent } from '../passive/settings.js';
+import {
+  defaultRateForFeature,
+  formatRatePercent,
+  getPassiveFeatureSetting,
+  getStyleStickerSetting
+} from '../passive/settings.js';
 import { fallbackMentionCardEnabled } from '../fallback-mentions.js';
 import { plainText } from './style-sticker-card.js';
-import { listChatCronTasks, cronTaskSummary } from '../cron.js';
+import { cronTaskSummary, listChatCronTasks } from '../cron.js';
 import { getDefaultCommand } from '../commands/douyin.js';
 
 const HELP_CARD_KIND = 'help_probability_settings';
-const HELP_RATE_FORM_NAME = 'help_probability_form';
 const HELP_RATE_FORM_FIELDS = {
   reaction: 'reactionRate',
   repeat: 'repeatRate',
@@ -37,6 +53,26 @@ const HELP_FALLBACK_MENTION_FORM_FIELDS = {
   enabled: 'fallbackMentionCardEnabled'
 } as const;
 
+const HELP_CARD_PAGES: HelpCardPage[] = [
+  'home',
+  'commands',
+  'commands_basic',
+  'commands_douyin',
+  'commands_settings',
+  'api',
+  'interaction',
+  'style',
+  'douyin',
+  'douyin_subscribe',
+  'douyin_unsubscribe',
+  'douyin_unsubscribe_confirm',
+  'cron',
+  'cron_add',
+  'cron_delete',
+  'cron_delete_confirm',
+  'advanced'
+];
+
 const HELP_RATE_DESCRIPTORS: HelpRateDescriptor[] = [
   { kind: 'passive', feature: 'reaction', command: '/reaction', featureName: '贴表情', formField: HELP_RATE_FORM_FIELDS.reaction },
   { kind: 'passive', feature: 'repeat', command: '/repeat', featureName: '文本复读', formField: HELP_RATE_FORM_FIELDS.repeat },
@@ -46,16 +82,19 @@ const HELP_RATE_DESCRIPTORS: HelpRateDescriptor[] = [
   { kind: 'passive', feature: 'sticker_reverse', command: '/sticker-reverse', featureName: '表情包镜像反转', formField: HELP_RATE_FORM_FIELDS.stickerReverse },
   { kind: 'style', feature: 'byte_style', command: '/byte-style / /字节范', featureName: '字节范随机生图', formField: HELP_RATE_FORM_FIELDS.byteStyle },
   { kind: 'style', feature: 'scale_new_heights', command: '/scale-new-heights / /勇攀高峰', featureName: '勇攀高峰随机生图', formField: HELP_RATE_FORM_FIELDS.scaleNewHeights }
-] as const;
+];
+const HELP_INTERACTION_DESCRIPTORS = HELP_RATE_DESCRIPTORS.filter((descriptor) => descriptor.kind === 'passive');
+const HELP_STYLE_DESCRIPTORS = HELP_RATE_DESCRIPTORS.filter((descriptor) => descriptor.kind === 'style');
 const HELP_MAX_DESCRIPTORS: HelpMaxDescriptor[] = [
   { feature: 'byte_style', command: '/byte-style / /字节范', featureName: '字节范最大字符数', formField: HELP_MAX_FORM_FIELDS.byteStyle },
   { feature: 'scale_new_heights', command: '/scale-new-heights / /勇攀高峰', featureName: '勇攀高峰最大字符数', formField: HELP_MAX_FORM_FIELDS.scaleNewHeights }
-] as const;
+];
+
 const HELP_COMMAND_ROWS: HelpCommandRow[] = [
   {
     command: '/help',
     params: '无',
-    description: '查看当前机器人支持的斜杠命令、可填参数和功能说明，并可配置当前会话的概率能力。'
+    description: '打开帮助中心，按分类查看命令、OpenAPI 和当前会话配置。'
   },
   {
     command: '/users',
@@ -90,7 +129,7 @@ const HELP_COMMAND_ROWS: HelpCommandRow[] = [
   {
     command: '视频无效 / 视频失效',
     params: '关键词触发；从当前消息或引用消息取最后一串大于 10 位的数字作为 aweme_id',
-    description: '联网检测抖音视频是否失效；疑似失效时不直接删除，而是私聊 /set-default 管理员发送确认卡片（取消/删除），删除才会标记该 aweme_id 为删除。发送抖音链接的各入口也会自动校验，失效则重抽最多 5 次并私聊上报管理员。'
+    description: '联网检测抖音视频是否失效；疑似失效时私聊 /set-default 管理员确认，不会直接删除。'
   },
   {
     command: '/set-default',
@@ -100,12 +139,12 @@ const HELP_COMMAND_ROWS: HelpCommandRow[] = [
   {
     command: '/add-cron',
     params: '"*/5 * * * *" "[命令]"、--list、--delete n',
-    description: '给当前会话添加定时任务；支持列出当前任务并按序号删除；命令可省略，省略时使用 /set-default 配置。'
+    description: '给当前会话添加定时任务；支持列出当前任务并按序号删除。'
   },
   {
     command: '/reverse、/反转',
-    params: '也支持直接发送 reverse / 反转 / 翻转 / 镜像 / 对称；优先取当前消息首图，否则取引用消息里的图片或表情包',
-    description: '将找到的图片或表情包做一次镜像反转；如果命中话题消息，则直接回复到话题里，否则发送到当前会话。'
+    params: '当前消息首图，或引用消息里的图片/表情包',
+    description: '将找到的图片或表情包做一次镜像反转。'
   },
   {
     command: '/revert、/撤回',
@@ -115,73 +154,66 @@ const HELP_COMMAND_ROWS: HelpCommandRow[] = [
   {
     command: '/reaction、/repeat、/llm-reply',
     params: '--enable / --disable / --rate n',
-    description: '开启或关闭当前会话的贴表情、文本复读、大模型接话等被动能力，并可设置会话概率。'
+    description: '管理贴表情、文本复读、大模型接话等被动能力。'
   },
   {
     command: '/media-repeat、/image-reverse、/sticker-reverse',
     params: '--enable / --disable / --rate n',
-    description: '开启或关闭当前会话的图片/表情包复读、图片镜像、表情包镜像能力，并可设置会话概率。'
+    description: '管理媒体复读、图片镜像和表情包镜像能力。'
   },
   {
     command: '/byte-style、/字节范',
     params: '[文案]、--enable、--disable、--rate n、--max n',
-    description: '把文案生成"字节范"图片；带文案时，命中话题消息会直接回复到话题里，否则发送到当前会话；不带参数时，普通消息会优先尝试用引用消息文字生图，话题里则直接发交互卡片；开关、rate 和 --max 控制随机生图。'
+    description: '生成“字节范”图片，并管理随机生图开关、概率和最大字符数。'
   },
   {
     command: '/scale-new-heights、/勇攀高峰',
     params: '[文案]、--enable、--disable、--rate n、--max n',
-    description: '把文案生成"勇攀高峰"图片；带文案时，命中话题消息会直接回复到话题里，否则发送到当前会话；不带参数时，普通消息会优先尝试用引用消息文字生图，话题里则直接发交互卡片；开关、rate 和 --max 控制随机生图。'
+    description: '生成“勇攀高峰”图片，并管理随机生图开关、概率和最大字符数。'
   }
 ];
 
+const BASIC_COMMAND_ROWS = [HELP_COMMAND_ROWS[0], HELP_COMMAND_ROWS[1], HELP_COMMAND_ROWS[10], HELP_COMMAND_ROWS[11]];
+const DOUYIN_COMMAND_ROWS = HELP_COMMAND_ROWS.slice(2, 8);
+const SETTINGS_COMMAND_ROWS = [HELP_COMMAND_ROWS[8], HELP_COMMAND_ROWS[9], ...HELP_COMMAND_ROWS.slice(12, 16)];
 
-function helpCommandsMarkdown() {
-  return [
-    '**命令总览**',
-    '',
-    '| 命令 | 参数 | 功能 |',
-    '| --- | --- | --- |',
-    ...HELP_COMMAND_ROWS.map((row) => `| \`${row.command}\` | ${row.params.replace(/\|/g, '\\|')} | ${row.description.replace(/\|/g, '\\|')} |`)
-  ].join('\n');
+type HelpCardBuildOptions = {
+  page?: HelpCardPage;
+  notice?: string;
+  selectedValues?: string[];
+};
+
+type HelpButtonOptions = {
+  text: string;
+  action: HelpCardAction;
+  page?: HelpCardPage;
+  selectedValues?: string[];
+  type?: 'default' | 'primary_filled' | 'danger_filled';
+  formSubmit?: boolean;
+  disabled?: boolean;
+};
+
+export function isHelpCardPage(value: unknown): value is HelpCardPage {
+  return typeof value === 'string' && HELP_CARD_PAGES.includes(value as HelpCardPage);
 }
 
-function helpOverviewMarkdown() {
-  return [
-    '下面是当前支持的斜杠命令。群聊里需要先 @ 机器人，单聊里可以直接发送。',
-    '',
-    helpCommandsMarkdown(),
-    '',
-    openApiHelpMarkdown(),
-    '',
-    '**概率能力配置**',
-    '当前会话的 `rate` 会优先覆盖环境变量默认值；单项 `rate` 不能超过全局默认值的 10 倍。输入支持 `0.05` 或 `5` 表示 5%；超出范围会按最大值保存，异常值会被忽略。',
-    '',
-    '**补充说明**',
-    '- 下方表单还支持设置 `/byte-style` 与 `/scale-new-heights` 的 `--max`。',
-    '- 也支持通过多选下拉，批量新增或取消 `/douyin` 订阅。',
-    '- 可设置未命中 `/users` 时，兜底指令是否弹出 @ 人员选择卡片。'
-  ].join('\n');
-}
-
-function openApiHelpMarkdown() {
-  const base = openApiBaseUrl();
-  return [
-    '**OpenAPI**',
-    '',
-    '| 地址 | 参数说明 | 返回 |',
-    '| --- | --- | --- |',
-    `| \`${base}/open-api/v1/mm\` | 无 | JSON：\`{ data: { url } }\` |`,
-    `| \`${base}/open-api/v1/mm/redirect\` | 无 | 302 重定向到随机抖音视频地址 |`,
-    `| \`${base}/open-api/v1/byte-style?text=xxx\` | \`text\` 必填；\`color1\` / \`color2\` 可选，支持 \`#RRGGBB\`；\`scale\` 可选；\`gradientAngle\` 或 \`ga\` 可选，范围 \`0-360\` | \`image/png\` |`,
-    `| \`${base}/open-api/v1/scale-new-heights?text=xxx\` | \`text\` 必填；\`color1\` / \`color2\` 可选，支持 \`#RRGGBB\`；\`scale\` 可选；\`gradientAngle\` 或 \`ga\` 可选，范围 \`0-360\` | \`image/png\` |`
-  ].join('\n');
-}
-
-export function helpRateSettingSummary(botId: number, chatId: string, descriptor: HelpRateDescriptor, config: PassiveInteractionConfig) {
+export function helpRateSettingSummary(
+  botId: number,
+  chatId: string,
+  descriptor: HelpRateDescriptor,
+  config: PassiveInteractionConfig
+) {
   const defaultRate = defaultRateForFeature(config, descriptor.feature);
   return descriptor.kind === 'passive'
     ? getPassiveFeatureSetting(botId, chatId, descriptor.feature, defaultRate)
-    : getStyleStickerSetting(botId, chatId, descriptor.feature, defaultRate, config.styleStickerDefaultMaxChars, config.styleStickerMaxCharsLimit);
+    : getStyleStickerSetting(
+      botId,
+      chatId,
+      descriptor.feature,
+      defaultRate,
+      config.styleStickerDefaultMaxChars,
+      config.styleStickerMaxCharsLimit
+    );
 }
 
 export function recentUnsubscribedDouyinClickTexts(bot: FeishuBot, chatId: string, limit = 10) {
@@ -216,6 +248,16 @@ export function currentChatDouyinSubscriptionsWithRecentUpdates(bot: FeishuBot, 
   `).all(bot.user_id, bot.id, chatId, limit) as DouyinClickTextOption[];
 }
 
+function currentChatDouyinSubscriptionCount(botId: number, chatId: string) {
+  if (!chatId) return 0;
+  const row = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM feishu_douyin_subscriptions
+    WHERE bot_id = ? AND chat_id = ?
+  `).get(botId, chatId) as { count: number } | undefined;
+  return Number(row?.count || 0);
+}
+
 export function formatEditableRateValue(rate: number) {
   return rate.toFixed(4).replace(/\.?0+$/, '');
 }
@@ -231,7 +273,6 @@ export function helpRateEnabledField(descriptor: HelpRateDescriptor) {
 function helpRateEnabledSelect(descriptor: HelpRateDescriptor, setting: PassiveChatSetting | StyleStickerChatSetting) {
   return {
     tag: 'select_static',
-    element_id: `help_rate_enabled_${descriptor.formField}`,
     name: helpRateEnabledField(descriptor),
     placeholder: plainText('选择状态'),
     initial_option: setting.enabled ? 'enabled' : 'disabled',
@@ -247,7 +288,6 @@ function helpRateEnabledSelect(descriptor: HelpRateDescriptor, setting: PassiveC
 function helpFallbackMentionEnabledSelect(enabled: boolean) {
   return {
     tag: 'select_static',
-    element_id: `help_fallback_mention_${HELP_FALLBACK_MENTION_FORM_FIELDS.enabled}`,
     name: HELP_FALLBACK_MENTION_FORM_FIELDS.enabled,
     initial_option: enabled ? 'enabled' : 'disabled',
     type: 'default',
@@ -263,119 +303,54 @@ function helpFallbackMentionEnabledSelect(enabled: boolean) {
 function helpRateInput(descriptor: HelpRateDescriptor, setting: PassiveChatSetting | StyleStickerChatSetting) {
   return {
     tag: 'input',
-    element_id: `help_rate_${descriptor.formField}`,
     name: descriptor.formField,
-    placeholder: plainText(`支持 0.05 或 5`),
+    placeholder: plainText('支持 0.05 或 5'),
     default_value: formatEditableRateValue(setting.rate),
     max_length: 8
-  };
-}
-
-function helpRateFormHeader() {
-  return {
-    tag: 'column_set',
-    element_id: 'help_rate_form_header',
-    flex_mode: 'none',
-    horizontal_spacing: '8px',
-    columns: [
-      {
-        tag: 'column',
-        width: 'weighted',
-        weight: 4,
-        elements: [
-          {
-            tag: 'markdown',
-            content: '**配置项**'
-          }
-        ]
-      },
-      {
-        tag: 'column',
-        width: 'weighted',
-        weight: 3,
-        elements: [
-          {
-            tag: 'markdown',
-            content: '**状态**'
-          }
-        ]
-      },
-      {
-        tag: 'column',
-        width: 'weighted',
-        weight: 3,
-        elements: [
-          {
-            tag: 'markdown',
-            content: '**rate**'
-          }
-        ]
-      }
-    ]
   };
 }
 
 function helpMaxInput(descriptor: HelpMaxDescriptor, maxChars: number) {
   return {
     tag: 'input',
-    element_id: `help_max_${descriptor.formField}`,
     name: descriptor.formField,
-    placeholder: plainText('输入最大字符数'),
+    placeholder: plainText('最大字符数'),
     default_value: String(maxChars),
     max_length: 4
   };
 }
 
-function helpMaxItem(descriptor: HelpMaxDescriptor, maxChars: number, maxLimit: number) {
+function helpRateFormHeader() {
   return {
     tag: 'column_set',
-    element_id: `help_max_item_${descriptor.formField}`,
     flex_mode: 'none',
     horizontal_spacing: '8px',
     columns: [
       {
         tag: 'column',
         width: 'weighted',
-        weight: 6,
-        elements: [
-          {
-            tag: 'markdown',
-            content: `**${descriptor.featureName}**\n命令：\`${descriptor.command}\`\n最大值：\`${maxLimit}\`；当前：\`${maxChars}\``
-          }
-        ]
+        weight: 4,
+        elements: [{ tag: 'markdown', content: '**配置项**' }]
       },
       {
         tag: 'column',
         width: 'weighted',
-        weight: 4,
-        elements: [helpMaxInput(descriptor, maxChars)]
+        weight: 3,
+        elements: [{ tag: 'markdown', content: '**状态**' }]
+      },
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 3,
+        elements: [{ tag: 'markdown', content: '**概率**' }]
       }
     ]
-  };
-}
-
-function helpDouyinMultiSelect(field: string, placeholderText: string, options: DouyinClickTextOption[], emptyText: string) {
-  return {
-    tag: 'multi_select_static',
-    element_id: `help_douyin_${field}`,
-    name: field,
-    type: 'default',
-    width: 'fill',
-    required: false,
-    disabled: options.length === 0,
-    placeholder: plainText(options.length > 0 ? placeholderText : emptyText),
-    selected_values: [],
-    options: options.map((option) => ({
-      text: plainText(`${option.clickText}（${formatDateTimeText(option.updatedAt)}）`),
-      value: option.clickText
-    }))
   };
 }
 
 function helpRateItem(descriptor: HelpRateDescriptor, setting: PassiveChatSetting | StyleStickerChatSetting) {
   return {
     tag: 'column_set',
-    element_id: `help_rate_item_${descriptor.formField}`,
     flex_mode: 'none',
     horizontal_spacing: '8px',
     columns: [
@@ -386,7 +361,7 @@ function helpRateItem(descriptor: HelpRateDescriptor, setting: PassiveChatSettin
         elements: [
           {
             tag: 'markdown',
-            content: `**${descriptor.featureName}**\n命令：\`${descriptor.command}\`\n最大值：\`${formatRatePercent(setting.maxRate)}\`；全局默认：\`${formatRatePercent(setting.defaultRate)}\`；当前：\`${setting.enabled ? '开启' : '关闭'} / ${formatRatePercent(setting.rate)}\`${setting.hasCustomRate ? '（会话配置）' : '（继承全局）'}`
+            content: `**${descriptor.featureName}**\n\`${descriptor.command}\`\n当前 ${formatRatePercent(setting.rate)}；上限 ${formatRatePercent(setting.maxRate)}`
           }
         ]
       },
@@ -406,78 +381,70 @@ function helpRateItem(descriptor: HelpRateDescriptor, setting: PassiveChatSettin
   };
 }
 
-function helpRateSummaryMarkdown(botId: number, chatId: string) {
-  const config = passiveInteractionConfig();
-  return HELP_RATE_DESCRIPTORS
-    .map((descriptor) => {
-      const setting = helpRateSettingSummary(botId, chatId, descriptor, config);
-      return `- \`${descriptor.command}\`：当前会话 \`${setting.enabled ? '开启' : '关闭'} / ${formatRatePercent(setting.rate)}\`${setting.hasCustomRate ? '（会话配置）' : '（继承全局）'}；全局默认 \`${formatRatePercent(setting.defaultRate)}\`；上限 \`${formatRatePercent(setting.maxRate)}\`${setting.isRateCapped ? '（历史值已按上限收敛）' : ''}`;
-    })
-    .join('\n');
+function helpStyleItem(
+  descriptor: HelpRateDescriptor,
+  maxDescriptor: HelpMaxDescriptor,
+  setting: StyleStickerChatSetting,
+  maxLimit: number
+) {
+  return {
+    tag: 'column_set',
+    flex_mode: 'none',
+    horizontal_spacing: '8px',
+    columns: [
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 4,
+        elements: [
+          {
+            tag: 'markdown',
+            content: `**${descriptor.featureName}**\n\`${descriptor.command}\`\n概率上限 ${formatRatePercent(setting.maxRate)}；字符上限 ${maxLimit}`
+          }
+        ]
+      },
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 2,
+        elements: [helpRateEnabledSelect(descriptor, setting)]
+      },
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 2,
+        elements: [helpRateInput(descriptor, setting)]
+      },
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 2,
+        elements: [helpMaxInput(maxDescriptor, setting.maxChars)]
+      }
+    ]
+  };
 }
 
-function helpMaxSummaryMarkdown(botId: number, chatId: string) {
-  const config = passiveInteractionConfig();
-  return [
-    '**当前最大字符数**',
-    ...HELP_MAX_DESCRIPTORS.map((descriptor) => {
-      const setting = getStyleStickerSetting(
-        botId,
-        chatId,
-        descriptor.feature,
-        defaultRateForFeature(config, descriptor.feature),
-        config.styleStickerDefaultMaxChars,
-        config.styleStickerMaxCharsLimit
-      );
-      return `- \`${descriptor.command}\`：当前 \`${setting.maxChars}\`${setting.hasCustomMax ? '（会话配置）' : '（默认）'}${setting.isCapped ? `（按上限 ${config.styleStickerMaxCharsLimit} 收敛）` : ''}`;
-    })
-  ].join('\n');
-}
-
-function helpDouyinSummaryMarkdown(bot: FeishuBot, chatId: string) {
-  const subscriptions = currentChatDouyinSubscriptionsWithRecentUpdates(bot, chatId);
-  return [
-    '**当前 /douyin 订阅**',
-    subscriptions.length > 0
-      ? subscriptions.map((item) => `- \`${item.clickText}\`（${formatDateTimeText(item.updatedAt)}）`).join('\n')
-      : '- 当前群聊暂无订阅'
-  ].join('\n');
-}
-
-function helpCronSummaryMarkdown(botId: number, chatId: string) {
-  const tasks = listChatCronTasks(botId, chatId);
-  return [
-    '**当前定时任务**',
-    tasks.length > 0
-      ? tasks.map((task, index) => `- ${cronTaskSummary(task, index)}`).join('\n')
-      : '- 当前会话暂无定时任务'
-  ].join('\n');
-}
-
-function helpFallbackMentionSummaryMarkdown(botId: number, chatId: string) {
-  return `**兜底 @ 人员收集**\n- 未命中 \`/users\` 且执行兜底指令时，弹出 @ 人员选择卡片：\`${fallbackMentionCardEnabled(botId, chatId) ? '开启' : '关闭'}\``;
-}
-
-export function helpReadonlySummaryMarkdown(bot: FeishuBot, chatId: string) {
-  return [
-    helpRateSummaryMarkdown(bot.id, chatId),
-    '',
-    helpMaxSummaryMarkdown(bot.id, chatId),
-    '',
-    helpDouyinSummaryMarkdown(bot, chatId),
-    '',
-    helpCronSummaryMarkdown(bot.id, chatId),
-    '',
-    helpFallbackMentionSummaryMarkdown(bot.id, chatId),
-    '',
-    '如需再次编辑，请重新发送 `/help`。'
-  ].join('\n');
+function helpDouyinMultiSelect(field: string, placeholderText: string, options: DouyinClickTextOption[], emptyText: string) {
+  return {
+    tag: 'multi_select_static',
+    name: field,
+    type: 'default',
+    width: 'fill',
+    required: false,
+    disabled: options.length === 0,
+    placeholder: plainText(options.length > 0 ? placeholderText : emptyText),
+    selected_values: [],
+    options: options.map((option) => ({
+      text: plainText(`${option.clickText}（${formatDateTimeText(option.updatedAt)}）`),
+      value: option.clickText
+    }))
+  };
 }
 
 function helpCronExprInput() {
   return {
     tag: 'input',
-    element_id: `help_cron_${HELP_CRON_FORM_FIELDS.cronExpr}`,
     name: HELP_CRON_FORM_FIELDS.cronExpr,
     placeholder: plainText('cron 表达式，例如 */5 * * * *'),
     max_length: 64
@@ -487,9 +454,8 @@ function helpCronExprInput() {
 function helpCronCommandTextInput(defaultCommand: string) {
   return {
     tag: 'input',
-    element_id: `help_cron_${HELP_CRON_FORM_FIELDS.commandText}`,
     name: HELP_CRON_FORM_FIELDS.commandText,
-    placeholder: plainText(defaultCommand ? `命令文本，留空则使用默认兜底：${defaultCommand}` : '命令文本，例如 /douyin 随机甜妹 --count 1'),
+    placeholder: plainText(defaultCommand ? `命令文本；留空使用默认：${defaultCommand}` : '命令文本，例如 /douyin 随机甜妹 --count 1'),
     max_length: 500
   };
 }
@@ -497,7 +463,6 @@ function helpCronCommandTextInput(defaultCommand: string) {
 function helpCronDeleteMultiSelect(tasks: ChatCronTask[]) {
   return {
     tag: 'multi_select_static',
-    element_id: `help_cron_${HELP_CRON_FORM_FIELDS.deleteTaskIds}`,
     name: HELP_CRON_FORM_FIELDS.deleteTaskIds,
     type: 'default',
     width: 'fill',
@@ -512,179 +477,564 @@ function helpCronDeleteMultiSelect(tasks: ChatCronTask[]) {
   };
 }
 
-function helpCardButton(action: HelpCardAction) {
+function helpCardButton(options: HelpButtonOptions) {
   return {
     tag: 'button',
-    name: `help_probability_${action}`,
-    text: plainText(action === 'submit' ? '提交' : action === 'withdraw' ? '撤回' : '取消'),
-    type: action === 'submit' ? 'primary_filled' : action === 'withdraw' ? 'danger_filled' : 'default',
+    name: `help_${options.action}_${options.page || 'legacy'}`,
+    text: plainText(options.text),
+    type: options.type || 'default',
     width: 'fill',
-    ...(action === 'withdraw' ? {} : { form_action_type: 'submit' }),
+    disabled: options.disabled || false,
+    ...(options.formSubmit ? { form_action_type: 'submit' } : {}),
     behaviors: [
       {
         type: 'callback',
         value: {
           kind: HELP_CARD_KIND,
-          action
+          action: options.action,
+          ...(options.page ? { page: options.page } : {}),
+          ...(options.selectedValues ? { selectedValues: options.selectedValues } : {})
         }
       }
     ]
   };
 }
 
-export function buildHelpCard(
-  bot: FeishuBot,
-  chatId: string,
-  options: { showRateForm?: boolean; notice?: string } = {}
-) {
-  const showRateForm = options.showRateForm !== false && Boolean(chatId);
-  const config = passiveInteractionConfig();
-    const currentCronTasks = listChatCronTasks(bot.id, chatId);
-    const defaultCommand = getDefaultCommand(bot.id);
-  const fallbackMentionEnabled = fallbackMentionCardEnabled(bot.id, chatId);
-  const elements: object[] = [
-    {
-      tag: 'markdown',
-      content: helpOverviewMarkdown()
-    }
-  ];
+function navigationButton(text: string, page: HelpCardPage) {
+  return helpCardButton({ text, action: 'navigate', page });
+}
 
-  elements.push({ tag: 'hr' });
-  if (options.notice) {
-    elements.push({
-      tag: 'markdown',
-      content: options.notice
-    });
-  }
-
-  if (showRateForm) {
-    elements.push({
-      tag: 'form',
-      element_id: HELP_RATE_FORM_NAME,
-      name: HELP_RATE_FORM_NAME,
-      direction: 'vertical',
-      vertical_spacing: '10px',
-        elements: [
-          helpRateFormHeader(),
-          { tag: 'hr' },
-          ...HELP_RATE_DESCRIPTORS.flatMap((descriptor, index) => {
-            const setting = helpRateSettingSummary(bot.id, chatId, descriptor, config);
-            const parts: object[] = [helpRateItem(descriptor, setting)];
-            if (index < HELP_RATE_DESCRIPTORS.length - 1) parts.push({ tag: 'hr' });
-            return parts;
-          }),
-          { tag: 'hr' },
-          {
-            tag: 'markdown',
-            content: '**随机生图最大字符数**'
-          },
-          ...HELP_MAX_DESCRIPTORS.flatMap((descriptor, index) => {
-            const setting = getStyleStickerSetting(
-              bot.id,
-              chatId,
-              descriptor.feature,
-              defaultRateForFeature(config, descriptor.feature),
-              config.styleStickerDefaultMaxChars,
-              config.styleStickerMaxCharsLimit
-            );
-            const parts: object[] = [helpMaxItem(descriptor, setting.maxChars, config.styleStickerMaxCharsLimit)];
-            if (index < HELP_MAX_DESCRIPTORS.length - 1) parts.push({ tag: 'hr' });
-            return parts;
-          }),
-          { tag: 'hr' },
-          {
-            tag: 'markdown',
-            content: '**/douyin 订阅管理**\n新增订阅：展示最近更新但当前群聊尚未订阅的 `click_text`；取消订阅：展示当前群聊已有订阅，并按对应数据最近更新时间从远到近排序。'
-          },
-          helpDouyinMultiSelect(
-            HELP_DOUYIN_FORM_FIELDS.subscribe,
-            '选择要订阅的模拟点击文案',
-            recentUnsubscribedDouyinClickTexts(bot, chatId),
-            '暂无可新增订阅项'
-          ),
-          helpDouyinMultiSelect(
-            HELP_DOUYIN_FORM_FIELDS.unsubscribe,
-            '选择要取消订阅的模拟点击文案',
-            currentChatDouyinSubscriptionsWithRecentUpdates(bot, chatId),
-            '当前群聊暂无可取消的订阅'
-          ),
-            { tag: 'hr' },
-            {
-              tag: 'markdown',
-              content: '**/add-cron 管理**\n新增任务时请填写 cron 表达式，命令文本可留空以使用当前 bot 的默认兜底指令；删除时可多选当前会话已有任务。'
-            },
-            helpCronExprInput(),
-            helpCronCommandTextInput(defaultCommand),
-            helpCronDeleteMultiSelect(currentCronTasks),
-            { tag: 'hr' },
-            {
-              tag: 'markdown',
-              content: '**兜底 @ 人员收集**\n未命中 `/users` 且执行兜底指令时，是否弹出 @ 人员选择卡片。'
-            },
-            helpFallbackMentionEnabledSelect(fallbackMentionEnabled),
-        {
-          tag: 'column_set',
-          flex_mode: 'none',
-          horizontal_spacing: '8px',
-          columns: [
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-              elements: [helpCardButton('withdraw')]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-                elements: [helpCardButton('cancel')]
-            },
-            {
-              tag: 'column',
-              width: 'weighted',
-              weight: 1,
-                elements: [helpCardButton('submit')]
-            }
-          ]
-        }
-      ]
-    });
-  } else {
-    elements.push({
-      tag: 'markdown',
-        content: helpReadonlySummaryMarkdown(bot, chatId)
-    });
-    elements.push({ tag: 'hr' });
-    elements.push({
+function buttonRows(buttons: object[]) {
+  const rows: object[] = [];
+  for (let index = 0; index < buttons.length; index += 2) {
+    rows.push({
       tag: 'column_set',
       flex_mode: 'none',
       horizontal_spacing: '8px',
-      columns: [
-        {
-          tag: 'column',
-          width: 'stretch',
-          elements: [helpCardButton('withdraw')]
-        }
-      ]
+      columns: buttons.slice(index, index + 2).map((button) => ({
+        tag: 'column',
+        width: 'weighted',
+        weight: 1,
+        elements: [button]
+      }))
     });
   }
+  return rows;
+}
 
+function formFooter(page: HelpCardPage, backPage: HelpCardPage, submitText: string, destructive = false) {
+  return {
+    tag: 'column_set',
+    flex_mode: 'none',
+    horizontal_spacing: '8px',
+    columns: [
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 1,
+        elements: [navigationButton('返回', backPage)]
+      },
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 1,
+        elements: [helpCardButton({
+          text: submitText,
+          action: 'submit',
+          page,
+          type: destructive ? 'danger_filled' : 'primary_filled',
+          formSubmit: true
+        })]
+      }
+    ]
+  };
+}
+
+function simpleBackFooter(backPage: HelpCardPage) {
+  return {
+    tag: 'column_set',
+    flex_mode: 'none',
+    columns: [
+      {
+        tag: 'column',
+        width: 'stretch',
+        elements: [navigationButton('返回', backPage)]
+      }
+    ]
+  };
+}
+
+function helpForm(elements: object[]) {
+  return {
+    tag: 'form',
+    direction: 'vertical',
+    vertical_spacing: '10px',
+    elements
+  };
+}
+
+function noticeElements(notice?: string) {
+  if (!notice) return [] as object[];
+  return [
+    { tag: 'markdown', content: notice },
+    { tag: 'hr' }
+  ];
+}
+
+function helpHomeSummaryMarkdown(bot: FeishuBot, chatId: string) {
+  const config = passiveInteractionConfig();
+  const interactionEnabled = HELP_INTERACTION_DESCRIPTORS.filter((descriptor) => (
+    helpRateSettingSummary(bot.id, chatId, descriptor, config).enabled
+  )).length;
+  const styleEnabled = HELP_STYLE_DESCRIPTORS.filter((descriptor) => (
+    helpRateSettingSummary(bot.id, chatId, descriptor, config).enabled
+  )).length;
+  const subscriptionCount = currentChatDouyinSubscriptionCount(bot.id, chatId);
+  const cronCount = listChatCronTasks(bot.id, chatId).length;
+  return [
+    '**当前会话概览**',
+    `- 智能互动：\`${interactionEnabled}/${HELP_INTERACTION_DESCRIPTORS.length}\` 项已开启`,
+    `- 随机生图：\`${styleEnabled}/${HELP_STYLE_DESCRIPTORS.length}\` 项已开启`,
+    `- 抖音订阅：\`${subscriptionCount}\` 个`,
+    `- 定时任务：\`${cronCount}\` 个`,
+    `- 兜底 @ 人员收集：\`${fallbackMentionCardEnabled(bot.id, chatId) ? '开启' : '关闭'}\``
+  ].join('\n');
+}
+
+export function helpReadonlySummaryMarkdown(bot: FeishuBot, chatId: string) {
+  return helpHomeSummaryMarkdown(bot, chatId);
+}
+
+function homePageElements(bot: FeishuBot, chatId: string, notice?: string) {
+  return [
+    ...noticeElements(notice),
+    {
+      tag: 'markdown',
+      content: [
+        '群聊里需要先 @ 机器人，单聊里可以直接发送命令。帮助内容与会话配置已分开，所有群成员都可以查看和修改当前会话配置。',
+        '',
+        helpHomeSummaryMarkdown(bot, chatId)
+      ].join('\n')
+    },
+    { tag: 'hr' },
+    { tag: 'markdown', content: '**使用帮助**\n按分类查看命令用法，或查看可直接调用的 OpenAPI。' },
+    ...buttonRows([
+      navigationButton('命令帮助', 'commands'),
+      navigationButton('开发者 OpenAPI', 'api')
+    ]),
+    { tag: 'hr' },
+    { tag: 'markdown', content: '**当前会话配置**\n每个页面独立保存，不会连带修改其他模块。' },
+    ...buttonRows([
+      navigationButton('智能互动', 'interaction'),
+      navigationButton('图片生成', 'style'),
+      navigationButton('抖音订阅', 'douyin'),
+      navigationButton('定时任务', 'cron'),
+      navigationButton('高级设置', 'advanced')
+    ])
+  ];
+}
+
+function commandRowsMarkdown(title: string, rows: HelpCommandRow[]) {
+  return [
+    `**${title}**`,
+    ...rows.flatMap((row) => [
+      '',
+      `**\`${row.command}\`**`,
+      `参数：${row.params}`,
+      row.description
+    ])
+  ].join('\n');
+}
+
+function commandHubElements() {
+  return [
+    {
+      tag: 'markdown',
+      content: '**命令帮助**\n每组最多展示 6 项，选择你要查看的命令类型。'
+    },
+    ...buttonRows([
+      navigationButton('基础与媒体命令', 'commands_basic'),
+      navigationButton('抖音命令', 'commands_douyin'),
+      navigationButton('配置与自动化命令', 'commands_settings')
+    ]),
+    { tag: 'hr' },
+    simpleBackFooter('home')
+  ];
+}
+
+function commandPageElements(title: string, rows: HelpCommandRow[]) {
+  return [
+    { tag: 'markdown', content: commandRowsMarkdown(title, rows) },
+    { tag: 'hr' },
+    simpleBackFooter('commands')
+  ];
+}
+
+function openApiHelpMarkdown() {
+  const base = openApiBaseUrl();
+  return [
+    '**开发者 OpenAPI**',
+    '',
+    `**随机抖音 JSON**\n\`${base}/open-api/v1/mm\`\n无参数；返回 \`{ data: { url } }\`。`,
+    '',
+    `**随机抖音跳转**\n\`${base}/open-api/v1/mm/redirect\`\n无参数；302 重定向到随机视频。`,
+    '',
+    `**字节范生图**\n\`${base}/open-api/v1/byte-style?text=xxx\`\n\`text\` 必填；颜色、缩放和渐变角度可选；返回 \`image/png\`。`,
+    '',
+    `**勇攀高峰生图**\n\`${base}/open-api/v1/scale-new-heights?text=xxx\`\n参数同字节范接口；返回 \`image/png\`。`
+  ].join('\n');
+}
+
+function interactionPageElements(bot: FeishuBot, chatId: string, notice?: string) {
+  const config = passiveInteractionConfig();
+  const items = HELP_INTERACTION_DESCRIPTORS.flatMap((descriptor, index) => {
+    const setting = helpRateSettingSummary(bot.id, chatId, descriptor, config);
+    return [
+      helpRateItem(descriptor, setting),
+      ...(index < HELP_INTERACTION_DESCRIPTORS.length - 1 ? [{ tag: 'hr' }] : [])
+    ];
+  });
+  return [
+    ...noticeElements(notice),
+    {
+      tag: 'markdown',
+      content: '**智能互动**\n配置 6 项被动互动能力。概率支持填写 `0.05` 或 `5` 表示 5%，超出单项上限时会按上限保存。'
+    },
+    helpForm([
+      helpRateFormHeader(),
+      { tag: 'hr' },
+      ...items,
+      { tag: 'hr' },
+      formFooter('interaction', 'home', '保存智能互动')
+    ])
+  ];
+}
+
+function stylePageElements(bot: FeishuBot, chatId: string, notice?: string) {
+  const config = passiveInteractionConfig();
+  const items = HELP_STYLE_DESCRIPTORS.flatMap((descriptor, index) => {
+    const setting = helpRateSettingSummary(bot.id, chatId, descriptor, config) as StyleStickerChatSetting;
+    const maxDescriptor = HELP_MAX_DESCRIPTORS.find((item) => item.feature === descriptor.feature);
+    if (!maxDescriptor) return [];
+    return [
+      helpStyleItem(descriptor, maxDescriptor, setting, config.styleStickerMaxCharsLimit),
+      ...(index < HELP_STYLE_DESCRIPTORS.length - 1 ? [{ tag: 'hr' }] : [])
+    ];
+  });
+  return [
+    ...noticeElements(notice),
+    {
+      tag: 'markdown',
+      content: '**图片生成**\n分别设置两种随机生图能力的状态、触发概率和最大字符数。'
+    },
+    helpForm([
+      ...items,
+      { tag: 'hr' },
+      formFooter('style', 'home', '保存图片生成')
+    ])
+  ];
+}
+
+function douyinSummaryMarkdown(bot: FeishuBot, chatId: string) {
+  const count = currentChatDouyinSubscriptionCount(bot.id, chatId);
+  const subscriptions = currentChatDouyinSubscriptionsWithRecentUpdates(bot, chatId, 6);
+  return [
+    `**当前订阅：${count} 个**`,
+    subscriptions.length > 0
+      ? subscriptions.map((item) => `- \`${item.clickText}\``).join('\n')
+      : '- 当前会话暂无订阅',
+    ...(count > subscriptions.length ? [`- 另有 ${count - subscriptions.length} 个未在此处展开`] : [])
+  ].join('\n');
+}
+
+function douyinHubElements(bot: FeishuBot, chatId: string, notice?: string) {
+  return [
+    ...noticeElements(notice),
+    { tag: 'markdown', content: douyinSummaryMarkdown(bot, chatId) },
+    { tag: 'hr' },
+    ...buttonRows([
+      navigationButton('新增订阅', 'douyin_subscribe'),
+      navigationButton('取消订阅', 'douyin_unsubscribe')
+    ]),
+    simpleBackFooter('home')
+  ];
+}
+
+function douyinSubscribeElements(bot: FeishuBot, chatId: string, notice?: string) {
+  const options = recentUnsubscribedDouyinClickTexts(bot, chatId);
+  return [
+    ...noticeElements(notice),
+    {
+      tag: 'markdown',
+      content: '**新增抖音订阅**\n展示最近更新、但当前会话尚未订阅的模拟点击文案。'
+    },
+    helpForm([
+      helpDouyinMultiSelect(
+        HELP_DOUYIN_FORM_FIELDS.subscribe,
+        '选择要新增的订阅',
+        options,
+        '暂无可新增订阅项'
+      ),
+      formFooter('douyin_subscribe', 'douyin', '确认新增')
+    ])
+  ];
+}
+
+function douyinUnsubscribeElements(bot: FeishuBot, chatId: string, notice?: string) {
+  const options = currentChatDouyinSubscriptionsWithRecentUpdates(bot, chatId);
+  return [
+    ...noticeElements(notice),
+    {
+      tag: 'markdown',
+      content: '**取消抖音订阅**\n选择订阅后进入独立确认页；当前页面不会直接取消。'
+    },
+    helpForm([
+      helpDouyinMultiSelect(
+        HELP_DOUYIN_FORM_FIELDS.unsubscribe,
+        '选择要取消的订阅',
+        options,
+        '当前会话暂无可取消的订阅'
+      ),
+      formFooter('douyin_unsubscribe', 'douyin', '下一步')
+    ])
+  ];
+}
+
+function confirmFooter(
+  page: HelpCardPage,
+  backPage: HelpCardPage,
+  selectedValues: string[],
+  text: string
+) {
+  return {
+    tag: 'column_set',
+    flex_mode: 'none',
+    horizontal_spacing: '8px',
+    columns: [
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 1,
+        elements: [navigationButton('返回', backPage)]
+      },
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 1,
+        elements: [helpCardButton({
+          text,
+          action: 'confirm',
+          page,
+          selectedValues,
+          type: 'danger_filled',
+          disabled: selectedValues.length === 0
+        })]
+      }
+    ]
+  };
+}
+
+function douyinUnsubscribeConfirmElements(selectedValues: string[]) {
+  return [
+    {
+      tag: 'markdown',
+      content: [
+        '**确认取消以下抖音订阅？**',
+        '',
+        ...(selectedValues.length > 0
+          ? selectedValues.map((value) => `- \`${value}\``)
+          : ['没有待取消的订阅，请返回重新选择。']),
+        '',
+        '取消后，当前会话将不再收到这些分组的新增视频通知。'
+      ].join('\n')
+    },
+    { tag: 'hr' },
+    confirmFooter('douyin_unsubscribe_confirm', 'douyin_unsubscribe', selectedValues, '确认取消订阅')
+  ];
+}
+
+function cronSummaryMarkdown(botId: number, chatId: string) {
+  const tasks = listChatCronTasks(botId, chatId);
+  const visibleTasks = tasks.slice(0, 6);
+  return [
+    `**当前定时任务：${tasks.length} 个**`,
+    visibleTasks.length > 0
+      ? visibleTasks.map((task, index) => `- ${cronTaskSummary(task, index)}`).join('\n')
+      : '- 当前会话暂无定时任务',
+    ...(tasks.length > visibleTasks.length ? [`- 另有 ${tasks.length - visibleTasks.length} 个未在此处展开`] : [])
+  ].join('\n');
+}
+
+function cronHubElements(bot: FeishuBot, chatId: string, notice?: string) {
+  return [
+    ...noticeElements(notice),
+    { tag: 'markdown', content: cronSummaryMarkdown(bot.id, chatId) },
+    { tag: 'hr' },
+    ...buttonRows([
+      navigationButton('新增定时任务', 'cron_add'),
+      navigationButton('删除定时任务', 'cron_delete')
+    ]),
+    simpleBackFooter('home')
+  ];
+}
+
+function cronAddElements(bot: FeishuBot, notice?: string) {
+  const defaultCommand = getDefaultCommand(bot.id);
+  return [
+    ...noticeElements(notice),
+    {
+      tag: 'markdown',
+      content: '**新增定时任务**\n填写 cron 表达式和命令。命令留空时使用当前 bot 的默认兜底指令。'
+    },
+    helpForm([
+      helpCronExprInput(),
+      helpCronCommandTextInput(defaultCommand),
+      formFooter('cron_add', 'cron', '新增任务')
+    ])
+  ];
+}
+
+function cronDeleteElements(bot: FeishuBot, chatId: string, notice?: string) {
+  const tasks = listChatCronTasks(bot.id, chatId);
+  return [
+    ...noticeElements(notice),
+    {
+      tag: 'markdown',
+      content: '**删除定时任务**\n选择任务后进入独立确认页；当前页面不会直接删除。'
+    },
+    helpForm([
+      helpCronDeleteMultiSelect(tasks),
+      formFooter('cron_delete', 'cron', '下一步')
+    ])
+  ];
+}
+
+function cronDeleteConfirmElements(bot: FeishuBot, chatId: string, selectedValues: string[]) {
+  const selectedSet = new Set(selectedValues);
+  const tasks = listChatCronTasks(bot.id, chatId).filter((task) => selectedSet.has(String(task.id)));
+  const validIds = tasks.map((task) => String(task.id));
+  return [
+    {
+      tag: 'markdown',
+      content: [
+        '**确认删除以下定时任务？**',
+        '',
+        ...(tasks.length > 0
+          ? tasks.map((task) => `- \`${task.cron_expr} -> ${task.command_text}\``)
+          : ['没有待删除的任务，请返回重新选择。']),
+        '',
+        '删除后任务将停止执行，此操作不会影响已经发送的消息。'
+      ].join('\n')
+    },
+    { tag: 'hr' },
+    confirmFooter('cron_delete_confirm', 'cron_delete', validIds, '确认删除任务')
+  ];
+}
+
+function advancedPageElements(bot: FeishuBot, chatId: string, notice?: string) {
+  return [
+    ...noticeElements(notice),
+    {
+      tag: 'markdown',
+      content: '**高级设置**\n未命中 `/users` 且执行兜底指令时，是否弹出 @ 人员选择卡片。'
+    },
+    helpForm([
+      helpFallbackMentionEnabledSelect(fallbackMentionCardEnabled(bot.id, chatId)),
+      formFooter('advanced', 'home', '保存高级设置')
+    ])
+  ];
+}
+
+function helpPageTitle(page: HelpCardPage) {
+  const titles: Record<HelpCardPage, string> = {
+    home: 'DogeBot 帮助中心',
+    commands: '命令帮助',
+    commands_basic: '基础与媒体命令',
+    commands_douyin: '抖音命令',
+    commands_settings: '配置与自动化命令',
+    api: '开发者 OpenAPI',
+    interaction: '智能互动配置',
+    style: '图片生成配置',
+    douyin: '抖音订阅管理',
+    douyin_subscribe: '新增抖音订阅',
+    douyin_unsubscribe: '取消抖音订阅',
+    douyin_unsubscribe_confirm: '确认取消订阅',
+    cron: '定时任务管理',
+    cron_add: '新增定时任务',
+    cron_delete: '删除定时任务',
+    cron_delete_confirm: '确认删除任务',
+    advanced: '高级设置'
+  };
+  return titles[page];
+}
+
+function helpPageElements(bot: FeishuBot, chatId: string, options: Required<HelpCardBuildOptions>) {
+  switch (options.page) {
+    case 'commands':
+      return commandHubElements();
+    case 'commands_basic':
+      return commandPageElements('基础与媒体命令', BASIC_COMMAND_ROWS);
+    case 'commands_douyin':
+      return commandPageElements('抖音命令', DOUYIN_COMMAND_ROWS);
+    case 'commands_settings':
+      return commandPageElements('配置与自动化命令', SETTINGS_COMMAND_ROWS);
+    case 'api':
+      return [
+        { tag: 'markdown', content: openApiHelpMarkdown() },
+        { tag: 'hr' },
+        simpleBackFooter('home')
+      ];
+    case 'interaction':
+      return interactionPageElements(bot, chatId, options.notice);
+    case 'style':
+      return stylePageElements(bot, chatId, options.notice);
+    case 'douyin':
+      return douyinHubElements(bot, chatId, options.notice);
+    case 'douyin_subscribe':
+      return douyinSubscribeElements(bot, chatId, options.notice);
+    case 'douyin_unsubscribe':
+      return douyinUnsubscribeElements(bot, chatId, options.notice);
+    case 'douyin_unsubscribe_confirm':
+      return douyinUnsubscribeConfirmElements(options.selectedValues);
+    case 'cron':
+      return cronHubElements(bot, chatId, options.notice);
+    case 'cron_add':
+      return cronAddElements(bot, options.notice);
+    case 'cron_delete':
+      return cronDeleteElements(bot, chatId, options.notice);
+    case 'cron_delete_confirm':
+      return cronDeleteConfirmElements(bot, chatId, options.selectedValues);
+    case 'advanced':
+      return advancedPageElements(bot, chatId, options.notice);
+    case 'home':
+    default:
+      return homePageElements(bot, chatId, options.notice);
+  }
+}
+
+export function buildHelpCard(bot: FeishuBot, chatId: string, options: HelpCardBuildOptions = {}) {
+  const normalizedOptions: Required<HelpCardBuildOptions> = {
+    page: options.page || 'home',
+    notice: options.notice || '',
+    selectedValues: options.selectedValues || []
+  };
+  const confirmPage = normalizedOptions.page === 'douyin_unsubscribe_confirm' || normalizedOptions.page === 'cron_delete_confirm';
   return {
     schema: '2.0',
     config: {
       wide_screen_mode: true,
       enable_forward: true,
-      summary: { content: 'DogeBot 命令帮助' }
+      summary: { content: helpPageTitle(normalizedOptions.page) }
     },
     header: {
-      title: plainText('DogeBot 命令帮助'),
-      template: 'blue'
+      title: plainText(helpPageTitle(normalizedOptions.page)),
+      template: confirmPage ? 'red' : 'blue'
     },
     body: {
       direction: 'vertical',
       padding: '12px 12px 12px 12px',
       vertical_spacing: '8px',
-      elements
+      elements: helpPageElements(bot, chatId, normalizedOptions)
     }
   };
 }
@@ -695,13 +1045,15 @@ export async function replyHelpCard(bot: FeishuBot, messageId: string, chatId: s
 
 export {
   HELP_CARD_KIND,
-  HELP_RATE_FORM_NAME,
+  HELP_CARD_PAGES,
   HELP_RATE_FORM_FIELDS,
   HELP_MAX_FORM_FIELDS,
   HELP_DOUYIN_FORM_FIELDS,
   HELP_CRON_FORM_FIELDS,
   HELP_FALLBACK_MENTION_FORM_FIELDS,
   HELP_RATE_DESCRIPTORS,
+  HELP_INTERACTION_DESCRIPTORS,
+  HELP_STYLE_DESCRIPTORS,
   HELP_MAX_DESCRIPTORS,
   HELP_COMMAND_ROWS
 };

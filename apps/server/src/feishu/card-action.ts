@@ -1,12 +1,12 @@
-import type { FeishuBot, StyleStickerFeature, StyleStickerCardAction, HelpCardAction, HelpRateDescriptor, ProbabilisticFeature } from '../types.js';
+import type { FeishuBot, StyleStickerFeature, StyleStickerCardAction, HelpCardAction, HelpCardPage, HelpRateDescriptor, ProbabilisticFeature } from '../types.js';
 import { passiveInteractionConfig, parseConfigurableRate } from '../config.js';
 import { deleteMessage, updateInteractiveMessage, replyMedia, fetchMessageById } from './api.js';
 import { rememberFeishuEventKey } from './event-dedup.js';
 import { idFromFeishuObject } from './message-parser.js';
 import { buildStyleStickerCard, buildStyleStickerHdrLink, renderStyleStickerCardState, STYLE_STICKER_FORM_FIELDS } from './cards/style-sticker-card.js';
-import { buildHelpCard, HELP_CARD_KIND, HELP_RATE_FORM_FIELDS, HELP_MAX_FORM_FIELDS, HELP_DOUYIN_FORM_FIELDS, HELP_CRON_FORM_FIELDS, HELP_FALLBACK_MENTION_FORM_FIELDS, HELP_RATE_DESCRIPTORS, HELP_MAX_DESCRIPTORS, helpRateSettingSummary, helpRateEnabledField, recentUnsubscribedDouyinClickTexts, currentChatDouyinSubscriptionsWithRecentUpdates } from './cards/help-card.js';
-import { styleStickerFeatureName, formatRatePercent, defaultRateForFeature, getPassiveFeatureSetting, setPassiveFeatureSetting, getStyleStickerSetting, setStyleStickerSetting } from './passive/settings.js';
-import { addDouyinSubscription, removeDouyinSubscription, getDefaultCommand } from './commands/douyin.js';
+import { buildHelpCard, HELP_CARD_KIND, HELP_DOUYIN_FORM_FIELDS, HELP_CRON_FORM_FIELDS, HELP_FALLBACK_MENTION_FORM_FIELDS, HELP_RATE_DESCRIPTORS, HELP_INTERACTION_DESCRIPTORS, HELP_STYLE_DESCRIPTORS, HELP_MAX_DESCRIPTORS, helpRateSettingSummary, helpRateEnabledField, recentUnsubscribedDouyinClickTexts, isHelpCardPage } from './cards/help-card.js';
+import { styleStickerFeatureName, formatRatePercent, defaultRateForFeature, setPassiveFeatureSetting, getStyleStickerSetting, setStyleStickerSetting } from './passive/settings.js';
+import { addDouyinSubscription, filterExistingDouyinSubscriptions, removeDouyinSubscription, getDefaultCommand } from './commands/douyin.js';
 import { addCronTask, listChatCronTasks, deleteCronTaskById } from './cron.js';
 import { fallbackMentionCandidates, fallbackMentionCardEnabled, setFallbackMentionCardEnabled } from './fallback-mentions.js';
 import { FALLBACK_MENTION_CARD_KIND, FALLBACK_MENTION_FORM_FIELD, FALLBACK_MENTION_SEND_TO_GROUP_FORM_FIELD, isFallbackMentionCardAction, replyFallbackMentionOperatorCard } from './cards/fallback-mention-card.js';
@@ -29,7 +29,7 @@ function isStyleStickerCardAction(value: unknown): value is StyleStickerCardActi
 }
 
 function isHelpCardAction(value: unknown): value is HelpCardAction {
-  return value === 'submit' || value === 'cancel' || value === 'withdraw';
+  return value === 'submit' || value === 'cancel' || value === 'withdraw' || value === 'navigate' || value === 'confirm';
 }
 
 function firstStringValue(value: unknown): string {
@@ -47,6 +47,16 @@ function formStringValues(formValue: Record<string, any>, field: string) {
   const seen = new Set<string>();
   for (const value of values) {
     const text = firstStringValue(value);
+    if (text) seen.add(text);
+  }
+  return [...seen];
+}
+
+function stringValues(value: unknown) {
+  const values = Array.isArray(value) ? value : value === undefined || value === null ? [] : [value];
+  const seen = new Set<string>();
+  for (const item of values) {
+    const text = firstStringValue(item);
     if (text) seen.add(text);
   }
   return [...seen];
@@ -142,8 +152,132 @@ function parseHelpCardActionPayload(payload: any) {
     chatId: context.chatId,
     operatorId: context.operatorId,
     action: actionValue.action,
+    page: isHelpCardPage(actionValue.page) ? actionValue.page : undefined,
+    selectedValues: stringValues(actionValue.selectedValues),
     formValue: context.formValue
   };
+}
+
+function helpUpdateNotice(diffs: string[], ignored: string[] = []) {
+  const lines = diffs.length > 0
+    ? ['**已更新当前会话配置**', ...diffs]
+    : ['未检测到有效变更，已保持当前配置。'];
+  if (ignored.length > 0) {
+    lines.push('', '**已忽略的输入**', ...ignored.map((item) => `- ${item}`));
+  }
+  return lines.join('\n');
+}
+
+function applyHelpFeatureSettings(
+  bot: FeishuBot,
+  chatId: string,
+  formValue: Record<string, any>,
+  descriptors: HelpRateDescriptor[],
+  includeMax: boolean
+) {
+  const config = passiveInteractionConfig();
+  const ignored: string[] = [];
+  const diffs: string[] = [];
+  const updates = new Map<ProbabilisticFeature, {
+    descriptor: HelpRateDescriptor;
+    enabled?: boolean;
+    rate?: number;
+    maxChars?: number;
+  }>();
+
+  for (const descriptor of descriptors) {
+    const current = helpRateSettingSummary(bot.id, chatId, descriptor, config);
+    const nextEnabledValue = parseHelpEnabledValue(formValue[helpRateEnabledField(descriptor)]);
+    const enabled = nextEnabledValue === undefined ? current.enabled : nextEnabledValue;
+    const enabledChanged = enabled !== current.enabled;
+    const raw = formStringValue(formValue, descriptor.formField);
+    let rate = current.rate;
+    let rateChanged = false;
+    let capped = false;
+    if (raw) {
+      const parsedRate = parseConfigurableRate(raw);
+      if (parsedRate === undefined) {
+        ignored.push(`${descriptor.command} 的异常 rate 已忽略`);
+      } else {
+        const limitedRate = Math.min(parsedRate, current.maxRate);
+        capped = limitedRate !== parsedRate;
+        rate = limitedRate;
+        rateChanged = Math.abs(rate - current.rate) > 1e-9;
+      }
+    }
+    if (!enabledChanged && !rateChanged) continue;
+
+    updates.set(descriptor.feature, {
+      descriptor,
+      enabled: enabledChanged ? enabled : undefined,
+      rate: rateChanged ? rate : undefined
+    });
+    const parts: string[] = [];
+    if (enabledChanged) {
+      parts.push(`状态 \`${current.enabled ? '开启' : '关闭'}\` -> \`${enabled ? '开启' : '关闭'}\``);
+    }
+    if (rateChanged) {
+      parts.push(`rate \`${formatRatePercent(current.rate)}\` -> \`${formatRatePercent(rate)}\`${capped ? `（超出范围，按最大值 ${formatRatePercent(current.maxRate)} 保存）` : ''}`);
+    }
+    diffs.push(`- \`${descriptor.command}\`：${parts.join('；')}`);
+  }
+
+  if (includeMax) {
+    const descriptorFeatures = new Set(descriptors.map((descriptor) => descriptor.feature));
+    for (const maxDescriptor of HELP_MAX_DESCRIPTORS.filter((descriptor) => descriptorFeatures.has(descriptor.feature))) {
+      const current = getStyleStickerSetting(
+        bot.id,
+        chatId,
+        maxDescriptor.feature,
+        defaultRateForFeature(config, maxDescriptor.feature),
+        config.styleStickerDefaultMaxChars,
+        config.styleStickerMaxCharsLimit
+      );
+      const raw = formStringValue(formValue, maxDescriptor.formField);
+      if (!raw) continue;
+      const parsed = Number(raw);
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        ignored.push(`${maxDescriptor.command} 的异常 max 已忽略`);
+        continue;
+      }
+      const nextMax = Math.min(parsed, config.styleStickerMaxCharsLimit);
+      if (nextMax === current.maxChars) continue;
+      const existing = updates.get(maxDescriptor.feature);
+      const rateDescriptor = descriptors.find((item) => item.feature === maxDescriptor.feature) ||
+        HELP_STYLE_DESCRIPTORS.find((item) => item.feature === maxDescriptor.feature)!;
+      updates.set(maxDescriptor.feature, {
+        descriptor: existing?.descriptor || rateDescriptor,
+        enabled: existing?.enabled,
+        rate: existing?.rate,
+        maxChars: nextMax
+      });
+      diffs.push(`- \`${maxDescriptor.command}\`：max \`${current.maxChars}\` -> \`${nextMax}\`${nextMax !== parsed ? `（超出范围，按最大值 ${config.styleStickerMaxCharsLimit} 保存）` : ''}`);
+    }
+  }
+
+  updates.forEach(({ descriptor, enabled, rate, maxChars }) => {
+    if (descriptor.kind === 'passive') {
+      setPassiveFeatureSetting(bot.id, chatId, descriptor.feature, { enabled, rate });
+      return;
+    }
+    setStyleStickerSetting(bot.id, chatId, descriptor.feature, { enabled, rate, maxChars });
+  });
+
+  return { diffs, ignored };
+}
+
+async function updateHelpCardPage(
+  bot: FeishuBot,
+  messageId: string,
+  chatId: string,
+  page: HelpCardPage,
+  options: { notice?: string; selectedValues?: string[] } = {}
+) {
+  await updateInteractiveMessage(bot, messageId, buildHelpCard(bot, chatId, {
+    page,
+    notice: options.notice,
+    selectedValues: options.selectedValues
+  }));
 }
 
 function parseFallbackMentionCardActionPayload(payload: any) {
@@ -464,6 +598,186 @@ export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
   if (!helpParsed) return;
   if (helpParsed.eventId && !rememberFeishuEventKey(`card:${helpParsed.eventId}`)) return;
 
+  if (helpParsed.action === 'navigate') {
+    await updateHelpCardPage(
+      bot,
+      helpParsed.messageId,
+      helpParsed.chatId,
+      helpParsed.page || 'home'
+    );
+    return;
+  }
+
+  if (helpParsed.action === 'submit' && helpParsed.page) {
+    if (helpParsed.page === 'interaction' || helpParsed.page === 'style') {
+      const descriptors = helpParsed.page === 'interaction'
+        ? HELP_INTERACTION_DESCRIPTORS
+        : HELP_STYLE_DESCRIPTORS;
+      const result = applyHelpFeatureSettings(
+        bot,
+        helpParsed.chatId,
+        helpParsed.formValue,
+        descriptors,
+        helpParsed.page === 'style'
+      );
+      await updateHelpCardPage(bot, helpParsed.messageId, helpParsed.chatId, helpParsed.page, {
+        notice: helpUpdateNotice(result.diffs, result.ignored)
+      });
+      return;
+    }
+
+    if (helpParsed.page === 'douyin_subscribe') {
+      const available = new Set(
+        recentUnsubscribedDouyinClickTexts(bot, helpParsed.chatId).map((item) => item.clickText)
+      );
+      const selected = formStringValues(helpParsed.formValue, HELP_DOUYIN_FORM_FIELDS.subscribe)
+        .filter((value) => available.has(value));
+      if (selected.length === 0) {
+        await updateHelpCardPage(bot, helpParsed.messageId, helpParsed.chatId, 'douyin_subscribe', {
+          notice: '请选择至少一个可新增的订阅。'
+        });
+        return;
+      }
+      selected.forEach((clickText) => addDouyinSubscription(bot.id, helpParsed.chatId, clickText));
+      await updateHelpCardPage(bot, helpParsed.messageId, helpParsed.chatId, 'douyin', {
+        notice: `**已新增抖音订阅**\n- \`${selected.join('`\n- `')}\``
+      });
+      return;
+    }
+
+    if (helpParsed.page === 'douyin_unsubscribe') {
+      const selected = filterExistingDouyinSubscriptions(
+        bot.id,
+        helpParsed.chatId,
+        formStringValues(helpParsed.formValue, HELP_DOUYIN_FORM_FIELDS.unsubscribe)
+      );
+      if (selected.length === 0) {
+        await updateHelpCardPage(bot, helpParsed.messageId, helpParsed.chatId, 'douyin_unsubscribe', {
+          notice: '请选择至少一个当前订阅后再继续。'
+        });
+        return;
+      }
+      await updateHelpCardPage(bot, helpParsed.messageId, helpParsed.chatId, 'douyin_unsubscribe_confirm', {
+        selectedValues: selected
+      });
+      return;
+    }
+
+    if (helpParsed.page === 'cron_add') {
+      const cronExpr = formStringValue(helpParsed.formValue, HELP_CRON_FORM_FIELDS.cronExpr);
+      const rawCommandText = formStringValue(helpParsed.formValue, HELP_CRON_FORM_FIELDS.commandText);
+      const commandText = rawCommandText || getDefaultCommand(bot.id);
+      if (!cronExpr) {
+        await updateHelpCardPage(bot, helpParsed.messageId, helpParsed.chatId, 'cron_add', {
+          notice: '请填写 cron 表达式。'
+        });
+        return;
+      }
+      if (!commandText) {
+        await updateHelpCardPage(bot, helpParsed.messageId, helpParsed.chatId, 'cron_add', {
+          notice: '请填写命令文本；当前 bot 尚未设置可供留空使用的默认兜底指令。'
+        });
+        return;
+      }
+      try {
+        const task = addCronTask(bot.id, helpParsed.chatId, cronExpr, commandText);
+        await updateHelpCardPage(bot, helpParsed.messageId, helpParsed.chatId, 'cron', {
+          notice: `**已新增定时任务**\n- \`${cronExpr} -> ${commandText}\`\n- 下次执行：\`${task.nextRunAt}\``
+        });
+      } catch (error) {
+        await updateHelpCardPage(bot, helpParsed.messageId, helpParsed.chatId, 'cron_add', {
+          notice: error instanceof Error ? `新增失败：${error.message}` : '新增定时任务失败。'
+        });
+      }
+      return;
+    }
+
+    if (helpParsed.page === 'cron_delete') {
+      const tasks = listChatCronTasks(bot.id, helpParsed.chatId);
+      const available = new Set(tasks.map((task) => String(task.id)));
+      const selected = formStringValues(helpParsed.formValue, HELP_CRON_FORM_FIELDS.deleteTaskIds)
+        .filter((value) => available.has(value));
+      if (selected.length === 0) {
+        await updateHelpCardPage(bot, helpParsed.messageId, helpParsed.chatId, 'cron_delete', {
+          notice: '请选择至少一个当前定时任务后再继续。'
+        });
+        return;
+      }
+      await updateHelpCardPage(bot, helpParsed.messageId, helpParsed.chatId, 'cron_delete_confirm', {
+        selectedValues: selected
+      });
+      return;
+    }
+
+    if (helpParsed.page === 'advanced') {
+      const enabled = parseHelpEnabledValue(
+        helpParsed.formValue[HELP_FALLBACK_MENTION_FORM_FIELDS.enabled]
+      );
+      if (enabled === undefined) {
+        await updateHelpCardPage(bot, helpParsed.messageId, helpParsed.chatId, 'advanced', {
+          notice: '未识别兜底 @ 人员收集状态，配置未变更。'
+        });
+        return;
+      }
+      const current = fallbackMentionCardEnabled(bot.id, helpParsed.chatId);
+      if (enabled !== current) {
+        setFallbackMentionCardEnabled(bot.id, helpParsed.chatId, enabled);
+      }
+      await updateHelpCardPage(bot, helpParsed.messageId, helpParsed.chatId, 'advanced', {
+        notice: enabled === current
+          ? '配置没有变化。'
+          : `**已更新高级设置**\n- 兜底 @ 人员收集：\`${current ? '开启' : '关闭'}\` -> \`${enabled ? '开启' : '关闭'}\``
+      });
+      return;
+    }
+
+    await updateHelpCardPage(bot, helpParsed.messageId, helpParsed.chatId, 'home', {
+      notice: '当前页面没有可提交的配置。'
+    });
+    return;
+  }
+
+  if (helpParsed.action === 'confirm' && helpParsed.page) {
+    if (helpParsed.page === 'douyin_unsubscribe_confirm') {
+      const deleted: string[] = [];
+      const missing: string[] = [];
+      for (const clickText of helpParsed.selectedValues) {
+        const result = removeDouyinSubscription(bot.id, helpParsed.chatId, clickText);
+        (result.deleted > 0 ? deleted : missing).push(clickText);
+      }
+      const noticeLines: string[] = [];
+      if (deleted.length > 0) {
+        noticeLines.push('**已取消抖音订阅**', ...deleted.map((clickText) => `- \`${clickText}\``));
+      }
+      if (missing.length > 0) {
+        if (noticeLines.length > 0) noticeLines.push('');
+        noticeLines.push('**已不存在，未重复取消**', ...missing.map((clickText) => `- \`${clickText}\``));
+      }
+      await updateHelpCardPage(bot, helpParsed.messageId, helpParsed.chatId, 'douyin', {
+        notice: noticeLines.length > 0
+          ? noticeLines.join('\n')
+          : '没有收到待取消的订阅。'
+      });
+      return;
+    }
+
+    if (helpParsed.page === 'cron_delete_confirm') {
+      const tasks = listChatCronTasks(bot.id, helpParsed.chatId);
+      const selected = new Set(helpParsed.selectedValues);
+      const targets = tasks.filter((task) => selected.has(String(task.id)));
+      const deleted = targets.filter((task) => deleteCronTaskById(bot.id, helpParsed.chatId, task.id));
+      await updateHelpCardPage(bot, helpParsed.messageId, helpParsed.chatId, 'cron', {
+        notice: deleted.length > 0
+          ? `**已删除定时任务**\n${deleted.map((task) => `- \`${task.cron_expr} -> ${task.command_text}\``).join('\n')}`
+          : '所选定时任务已不存在，没有执行删除操作。'
+      });
+      return;
+    }
+
+    await updateHelpCardPage(bot, helpParsed.messageId, helpParsed.chatId, 'home');
+    return;
+  }
+
   if (helpParsed.action === 'withdraw') {
     try {
       await deleteMessage(bot, helpParsed.messageId);
@@ -478,10 +792,9 @@ export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
   }
 
   if (helpParsed.action === 'cancel') {
-    await updateInteractiveMessage(bot, helpParsed.messageId, buildHelpCard(bot, helpParsed.chatId, {
-      showRateForm: false,
-      notice: '已取消本次概率修改。'
-    }));
+    await updateHelpCardPage(bot, helpParsed.messageId, helpParsed.chatId, 'home', {
+      notice: '已取消旧版卡片中的修改。'
+    });
     return;
   }
 
@@ -555,11 +868,9 @@ export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
   }
 
   const availableSubscribeSet = new Set(recentUnsubscribedDouyinClickTexts(bot, helpParsed.chatId).map((item) => item.clickText));
-  const availableUnsubscribeSet = new Set(currentChatDouyinSubscriptionsWithRecentUpdates(bot, helpParsed.chatId).map((item) => item.clickText));
   const subscribeSelections = formStringValues(helpParsed.formValue, HELP_DOUYIN_FORM_FIELDS.subscribe)
     .filter((value) => availableSubscribeSet.has(value));
-  const unsubscribeSelections = formStringValues(helpParsed.formValue, HELP_DOUYIN_FORM_FIELDS.unsubscribe)
-    .filter((value) => availableUnsubscribeSet.has(value));
+  const unsubscribeSelections = formStringValues(helpParsed.formValue, HELP_DOUYIN_FORM_FIELDS.unsubscribe);
   if (subscribeSelections.length > 0) {
     subscribeSelections.forEach((clickText) => {
       addDouyinSubscription(bot.id, helpParsed.chatId, clickText);
@@ -567,10 +878,7 @@ export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
     diffs.push(`- \`/douyin --subscribe\`：新增订阅 \`${subscribeSelections.join('`、`')}\``);
   }
   if (unsubscribeSelections.length > 0) {
-    unsubscribeSelections.forEach((clickText) => {
-      removeDouyinSubscription(bot.id, helpParsed.chatId, clickText);
-    });
-    diffs.push(`- \`/douyin --unsubscribe\`：取消订阅 \`${unsubscribeSelections.join('`、`')}\``);
+    ignored.push('旧版卡片中的取消订阅未执行，请重新发送 /help 并通过独立确认页操作');
   }
 
   const cronExpr = formStringValue(helpParsed.formValue, HELP_CRON_FORM_FIELDS.cronExpr);
@@ -598,17 +906,7 @@ export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
   const deleteCronTaskIds = formStringValues(helpParsed.formValue, HELP_CRON_FORM_FIELDS.deleteTaskIds)
     .filter((value) => currentCronTaskIds.has(value));
   if (deleteCronTaskIds.length > 0) {
-    const deletedSummaries: string[] = [];
-    for (const taskId of deleteCronTaskIds) {
-      const task = currentCronTasks.find((item) => String(item.id) === taskId);
-      if (!task) continue;
-      if (deleteCronTaskById(bot.id, helpParsed.chatId, task.id)) {
-        deletedSummaries.push(`${task.cron_expr} -> ${task.command_text}`);
-      }
-    }
-    if (deletedSummaries.length > 0) {
-      diffs.push(`- \`/add-cron --delete\`：删除任务 \`${deletedSummaries.join('`、`')}\``);
-    }
+    ignored.push('旧版卡片中的定时任务删除未执行，请重新发送 /help 并通过独立确认页操作');
   }
 
   const fallbackMentionEnabled = parseHelpEnabledValue(helpParsed.formValue[HELP_FALLBACK_MENTION_FORM_FIELDS.enabled]);
@@ -641,7 +939,7 @@ export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
   }
 
   await updateInteractiveMessage(bot, helpParsed.messageId, buildHelpCard(bot, helpParsed.chatId, {
-    showRateForm: false,
+    page: 'home',
     notice: noticeLines.join('\n')
   }));
 }
