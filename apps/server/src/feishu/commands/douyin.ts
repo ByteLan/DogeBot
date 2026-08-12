@@ -70,6 +70,19 @@ export function removeDouyinSubscription(botId: number, chatId: string, clickTex
   return { deleted: result.changes };
 }
 
+export function filterExistingDouyinSubscriptions(botId: number, chatId: string, clickTexts: string[]) {
+  const candidates = [...new Set(clickTexts.map((value) => value.trim()).filter(Boolean))];
+  if (candidates.length === 0) return [];
+  const placeholders = candidates.map(() => '?').join(', ');
+  const rows = db.prepare(`
+    SELECT click_text AS clickText
+    FROM feishu_douyin_subscriptions
+    WHERE bot_id = ? AND chat_id = ? AND click_text IN (${placeholders})
+  `).all(botId, chatId, ...candidates) as { clickText: string }[];
+  const existing = new Set(rows.map((row) => row.clickText));
+  return candidates.filter((clickText) => existing.has(clickText));
+}
+
 export function getDouyinSubscriptionsByUserAndClickText(userId: number, clickText: string) {
   return db.prepare(`
     SELECT s.id, s.bot_id, s.chat_id, s.click_text

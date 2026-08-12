@@ -253,7 +253,25 @@ export type PassiveChatSetting = {
 };
 
 export type StyleStickerCardAction = 'preview' | 'send' | 'withdraw' | 'hdr';
-export type HelpCardAction = 'submit' | 'cancel' | 'withdraw';
+export type HelpCardAction = 'submit' | 'cancel' | 'withdraw' | 'navigate' | 'confirm';
+export type HelpCardPage =
+  | 'home'
+  | 'commands'
+  | 'commands_basic'
+  | 'commands_douyin'
+  | 'commands_settings'
+  | 'api'
+  | 'interaction'
+  | 'style'
+  | 'douyin'
+  | 'douyin_subscribe'
+  | 'douyin_unsubscribe'
+  | 'douyin_unsubscribe_confirm'
+  | 'cron'
+  | 'cron_add'
+  | 'cron_delete'
+  | 'cron_delete_confirm'
+  | 'advanced';
 
 export type StyleStickerCardState = {
   feature: StyleStickerFeature;
