@@ -5,6 +5,7 @@ dist/
 release/
 .DS_Store
 .env
+.rush/
 # *.db
 # *.sqlite
 # apps/server/data/
