@@ -1,6 +1,6 @@
 import type { FeishuBot, StyleStickerFeature, StyleStickerCardAction, StyleStickerCardState } from '../../types.js';
-import type { StickerFlavor } from '../../styleStickerCore.js';
-import { renderStyleStickerImage } from '../../styleStickers.js';
+import type { StickerFlavor } from '../../styleStickers.js';
+import { STYLE_STICKER_COLOR_SWATCHES, STYLE_STICKER_HDR_EV_MAX, STYLE_STICKER_HDR_EV_DEFAULT, parseEvParam, renderStyleStickerImage } from '../../styleStickers.js';
 import { uploadImage, sendImageToChat, replyCard } from '../api.js';
 import { hexToRgba } from '../../utils/color.js';
 import { styleStickerFeatureName } from '../passive/settings.js';
@@ -17,26 +17,7 @@ const STYLE_STICKER_FORM_FIELDS = {
   gradientAngle: 'gradientAngle',
   hdrEv: 'hdrEv'
 } as const;
-const STYLE_STICKER_CARD_COLOR_OPTIONS = [
-  '#9af665',
-  '#44b305',
-  '#ef6cdf',
-  '#ed12d3',
-  '#ff975c',
-  '#fb5b00',
-  '#69d1f2',
-  '#0989b2',
-  '#fb609e',
-  '#fa0064',
-  '#73e8d7',
-  '#14a38e',
-  '#ffb65c',
-  '#ff8d00',
-  '#5eb4fc',
-  '#0089ff',
-  '#755df6',
-  '#2c06f9'
-] as const;
+const STYLE_STICKER_CARD_COLOR_OPTIONS = STYLE_STICKER_COLOR_SWATCHES;
 
 function styleStickerFlavor(feature: StyleStickerFeature): StickerFlavor {
   return feature === 'byte_style' ? 'bs' : 'snh';
@@ -136,6 +117,7 @@ function styleStickerCustomColorInput(field: 'customColor1' | 'customColor2', la
 
 export function buildStyleStickerCard(state: StyleStickerCardState) {
   const featureName = styleStickerFeatureName(state.feature);
+  const hdrEv = parseEvParam(state.hdrEv) ?? STYLE_STICKER_HDR_EV_DEFAULT;
   return {
     schema: '2.0',
     config: {
@@ -245,10 +227,9 @@ export function buildStyleStickerCard(state: StyleStickerCardState) {
                     tag: 'input',
                     element_id: 'style_sticker_hdr_ev',
                     name: STYLE_STICKER_FORM_FIELDS.hdrEv,
-                    label: plainText('HDR 高亮 EV（1-100）'),
-                    placeholder: plainText('例如 4'),
-                    default_value: state.hdrEv,
-                    max_length: 3
+                    label: plainText(`HDR 高亮 EV（大于 0 且不超过 ${STYLE_STICKER_HDR_EV_MAX}）`),
+                    placeholder: plainText(`支持小数，无效值使用 ${STYLE_STICKER_HDR_EV_DEFAULT}`),
+                    default_value: String(hdrEv)
                   }]
                 }
               ]
@@ -285,7 +266,7 @@ export function buildStyleStickerCard(state: StyleStickerCardState) {
               width: 'fill',
               behaviors: [{
                 type: 'open_url',
-                default_url: state.hdrLink || buildStyleStickerHdrLink(state, Number(state.hdrEv) || 4)
+                default_url: buildStyleStickerHdrLink(state, hdrEv)
               }]
             }
           ]
@@ -312,7 +293,7 @@ export async function renderStyleStickerCardState(
     color2: colors[1],
     gradientAngle,
     imageKey,
-    hdrEv: options.hdrEv ?? '4'
+    hdrEv: String(parseEvParam(options.hdrEv) ?? STYLE_STICKER_HDR_EV_DEFAULT)
   };
 }
 
@@ -333,14 +314,14 @@ export async function sendStyleStickerToChat(
   await sendImageToChat(bot, chatId, imageKey);
 }
 
-export function buildStyleStickerHdrLink(state: StyleStickerCardState, ev: number): string {
+export function buildStyleStickerHdrLink(state: StyleStickerCardState, ev: unknown = state.hdrEv): string {
   const endpoint = state.feature === 'byte_style' ? 'byte-style' : 'scale-new-heights';
   const params = new URLSearchParams({
     text: state.text,
     color1: state.color1,
     color2: state.color2,
     ga: String(state.gradientAngle),
-    ev: String(ev)
+    ev: String(parseEvParam(ev) ?? STYLE_STICKER_HDR_EV_DEFAULT)
   });
   return `${openApiBaseUrl()}/open-api/v1/${endpoint}?${params.toString()}`;
 }

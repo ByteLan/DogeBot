@@ -1,5 +1,5 @@
 import type { FeishuBot, ParsedFeishuMessage, RevertCommand, StyleStickerFeature } from '../../types.js';
-import type { StickerFlavor } from '../../styleStickerCore.js';
+import type { StickerFlavor } from '../../styleStickers.js';
 import { passiveInteractionConfig } from '../../config.js';
 import { replyText, replyMedia, replyCard, fetchMessageById, sendImageToChat, uploadImage, deleteMessage } from '../api.js';
 import { parseFeishuMessage, messageChatId, isThreadMessage, senderIdentity, referencedMessageIds, debugFeishu, mentionedUsers, isManualReverseCommand } from '../message-parser.js';
