@@ -1,5 +1,5 @@
 import type { FeishuBot, ParsedFeishuMessage, RecentChatMessage, StyleStickerFeature } from '../../types.js';
-import type { StickerFlavor } from '../../styleStickerCore.js';
+import type { StickerFlavor } from '../../styleStickers.js';
 import { passiveInteractionConfig } from '../../config.js';
 import { randomItem, triggerDecision } from '../../utils/random.js';
 import { replyText, replyMedia, sendTextToChat, sendImageToChat, sendStickerToChat, uploadImage } from '../api.js';
