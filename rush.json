@@ -2,7 +2,7 @@
   "$schema": "https://developer.microsoft.com/json-schemas/rush/v5/rush.schema.json",
   "rushVersion": "5.150.0",
   "pnpmVersion": "9.15.4",
-  "nodeSupportedVersionRange": ">=20.0.0",
+  "nodeSupportedVersionRange": ">=22.13.0 <23 || >=23.4.0",
   "ensureConsistentVersions": true,
   "projects": [
     {

@@ -21,6 +21,8 @@ DogeBot/
 
 ## 快速开始
 
+安装、构建和运行服务端推荐使用 Node.js `22.x`（至少 `22.13.0`）或 `24` 及以上版本。若使用 Node.js `23.x`，至少需要 `23.4.0`，以确保原生 `node:sqlite` 模块无需实验参数即可加载。
+
 安装并启动服务端：
 
 ```bash
@@ -129,7 +131,7 @@ DOGEBOT_DATA_DIR=/home/Code/DogeBot-data pnpm add-user admin 'change-me'
 - 启动文件：`dist/index.js`
 - 启动命令：`node dist/index.js`
 - 运行端口：`3000`，或自定义后同步设置 `PORT`
-- Node 版本：建议 `22.x`
+- Node 版本：推荐 `22.x`（至少 `22.13.0`）或 `24` 及以上；`23.x` 至少需 `23.4.0`。宝塔 / PM2 的运行版本也必须满足此要求。
 - 环境变量：`PORT=3000`
 - 环境变量：`DOGEBOT_DATA_DIR=/home/Code/DogeBot-data`
 - 环境变量：`DOGEBOT_AUTH_SECRET=<一段足够长的随机字符串>`
@@ -162,7 +164,7 @@ pm2 restart dogebot-server --update-env
 注意事项：
 
 - 不要在根目录执行 `pnpm install`，也不要让宝塔自动用 npm 安装依赖；服务端是独立项目，应在 `apps/server` 目录执行 `pnpm install`。构建完成后可执行 `pnpm prune --prod` 减少磁盘占用。
-- `better-sqlite3` 是 native 依赖，首次 `pnpm install` 需要服务器具备基础编译环境；如果安装失败，先在宝塔/系统里安装 `python3`、`make`、`gcc/g++`。
+- SQLite 访问使用原生 `node:sqlite` 模块，Node 运行版本需满足上述要求；仅上传构建产物时，也需检查服务器上的 Node 运行版本。
 - 如果只给桌面客户端内网访问，可以不配置宝塔反向代理；如果需要公网访问登录 API，再在宝塔里反向代理到 `http://127.0.0.1:3000`，并配置 HTTPS。
 - 飞书长连接只需要服务器能主动访问公网，不需要配置公网 webhook URL。
 

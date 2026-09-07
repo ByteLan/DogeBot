@@ -33,6 +33,8 @@ apps/server/
 
 ## 开发命令
 
+安装、构建和运行服务端推荐使用 Node.js `22.x`（至少 `22.13.0`）或 `24` 及以上版本。若使用 Node.js `23.x`，至少需要 `23.4.0`，以确保原生 `node:sqlite` 模块无需实验参数即可加载。
+
 ```bash
 pnpm dev
 ```
@@ -126,7 +128,7 @@ DOGEBOT_DATA_DIR=/www/wwwroot/DogeBot-data pnpm add-user admin 'change-me'
 - 启动文件：`dist/index.js`
 - 启动命令：`node dist/index.js`
 - 端口：`3000`
-- Node 版本：建议 `22.x`
+- Node 版本：推荐 `22.x`（至少 `22.13.0`）或 `24` 及以上；`23.x` 至少需 `23.4.0`。宝塔 / PM2 的运行版本也必须满足此要求。
 - 环境变量：`PORT=3000`
 - 环境变量：`DOGEBOT_DATA_DIR=/www/wwwroot/DogeBot-data`
 - 环境变量：`DOGEBOT_AUTH_SECRET=<一段足够长的随机字符串>`
@@ -168,7 +170,7 @@ pm2 restart dogebot-server --update-env
 - SQLite 数据目录建议固定为项目外的 `/www/wwwroot/DogeBot-data`，这样更新或重建项目不会丢数据库。
 - 飞书长连接是服务端主动连接飞书，不要求服务器有公网入口；但桌面客户端需要能访问 `PORT` 对应的 HTTP API。
 - 如果桌面客户端走公网访问，建议在宝塔里配置反向代理到 `http://127.0.0.1:3000` 并开启 HTTPS。
-- `better-sqlite3` 是 native 依赖，首次安装失败时，先安装 `python3`、`make`、`gcc/g++` 等基础编译工具。
+- SQLite 访问使用原生 `node:sqlite` 同步 binding，Node 运行版本需满足上述要求；仅上传构建产物时，也需检查服务器上的 Node 运行版本。
 
 ## 数据表
 

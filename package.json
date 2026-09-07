@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@11.3.0",
+  "engines": {
+    "node": ">=22.13.0 <23 || >=23.4.0"
+  },
   "description": "DogeBot repository root. Server and desktop apps are installed independently.",
   "scripts": {
     "rush": "rush",
