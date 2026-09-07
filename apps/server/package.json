@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=22.13.0 <23 || >=23.4.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && node -e \"const fs=require('fs'); const path=require('path'); const copyDir=(src,dst,filter)=>{ if(!fs.existsSync(src)) return; fs.mkdirSync(dst,{recursive:true}); for(const name of fs.readdirSync(src)){ const from=path.join(src,name); const to=path.join(dst,name); const stat=fs.statSync(from); if(stat.isDirectory()){ copyDir(from,to,filter); continue; } if(filter && !filter(name,from)) continue; fs.mkdirSync(path.dirname(to),{recursive:true}); fs.copyFileSync(from,to); } }; copyDir(path.join(process.cwd(),'scripts'), path.join(process.cwd(),'dist','scripts'), (name)=>name.endsWith('.py')); copyDir(path.join(process.cwd(),'assets'), path.join(process.cwd(),'dist','assets'));\"",
@@ -17,14 +17,12 @@
     "@larksuiteoapi/node-sdk": "^1.66.1",
     "@napi-rs/canvas": "^1.0.2",
     "@syru/byted-sticker-generator": "1.1.1",
-    "better-sqlite3": "^11.8.1",
     "colord": "^2.9.3",
     "cors": "^2.8.5",
     "express": "^4.21.2",
     "hdrify": "^0.12.1"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.7",
