@@ -94,7 +94,7 @@ const HELP_COMMAND_ROWS: HelpCommandRow[] = [
   {
     command: '/help',
     params: '无',
-    description: '打开帮助中心，按分类查看命令、OpenAPI 和当前会话配置。'
+    description: '打开帮助中心，按分类查看斜杠命令、可填参数、OpenAPI，并配置当前会话的各项能力。'
   },
   {
     command: '/users',
@@ -129,7 +129,7 @@ const HELP_COMMAND_ROWS: HelpCommandRow[] = [
   {
     command: '视频无效 / 视频失效',
     params: '关键词触发；从当前消息或引用消息取最后一串大于 10 位的数字作为 aweme_id',
-    description: '联网检测抖音视频是否失效；疑似失效时私聊 /set-default 管理员确认，不会直接删除。'
+    description: '联网检测抖音视频是否失效；疑似失效时不直接删除，而是私聊 /set-default 管理员发送确认卡片（取消/删除），删除才会标记该 aweme_id 为删除。发送抖音链接的各入口也会自动校验，失效则重抽最多 5 次并私聊上报管理员。'
   },
   {
     command: '/set-default',
@@ -139,12 +139,12 @@ const HELP_COMMAND_ROWS: HelpCommandRow[] = [
   {
     command: '/add-cron',
     params: '"*/5 * * * *" "[命令]"、--list、--delete n',
-    description: '给当前会话添加定时任务；支持列出当前任务并按序号删除。'
+    description: '给当前会话添加定时任务；支持列出当前任务并按序号删除；命令可省略，省略时使用 /set-default 配置。'
   },
   {
     command: '/reverse、/反转',
-    params: '当前消息首图，或引用消息里的图片/表情包',
-    description: '将找到的图片或表情包做一次镜像反转。'
+    params: '也支持直接发送 reverse / 反转 / 翻转 / 镜像 / 对称；优先取当前消息首图，否则取引用消息里的图片或表情包',
+    description: '将找到的图片或表情包做一次镜像反转；如果命中话题消息，则直接回复到话题里，否则发送到当前会话。'
   },
   {
     command: '/revert、/撤回',
@@ -154,22 +154,22 @@ const HELP_COMMAND_ROWS: HelpCommandRow[] = [
   {
     command: '/reaction、/repeat、/llm-reply',
     params: '--enable / --disable / --rate n',
-    description: '管理贴表情、文本复读、大模型接话等被动能力。'
+    description: '开启或关闭当前会话的贴表情、文本复读、大模型接话等被动能力，并可设置会话概率。'
   },
   {
     command: '/media-repeat、/image-reverse、/sticker-reverse',
     params: '--enable / --disable / --rate n',
-    description: '管理媒体复读、图片镜像和表情包镜像能力。'
+    description: '开启或关闭当前会话的图片/表情包复读、图片镜像、表情包镜像能力，并可设置会话概率。'
   },
   {
     command: '/byte-style、/字节范',
     params: '[文案]、--enable、--disable、--rate n、--max n',
-    description: '生成“字节范”图片，并管理随机生图开关、概率和最大字符数。'
+    description: '把文案生成"字节范"图片；带文案时，命中话题消息会直接回复到话题里，否则发送到当前会话；不带参数时，普通消息会优先尝试用引用消息文字生图，话题里则直接发交互卡片；开关、rate 和 --max 控制随机生图。'
   },
   {
     command: '/scale-new-heights、/勇攀高峰',
     params: '[文案]、--enable、--disable、--rate n、--max n',
-    description: '生成“勇攀高峰”图片，并管理随机生图开关、概率和最大字符数。'
+    description: '把文案生成"勇攀高峰"图片；带文案时，命中话题消息会直接回复到话题里，否则发送到当前会话；不带参数时，普通消息会优先尝试用引用消息文字生图，话题里则直接发交互卡片；开关、rate 和 --max 控制随机生图。'
   }
 ];
 
@@ -361,7 +361,7 @@ function helpRateItem(descriptor: HelpRateDescriptor, setting: PassiveChatSettin
         elements: [
           {
             tag: 'markdown',
-            content: `**${descriptor.featureName}**\n\`${descriptor.command}\`\n当前 ${formatRatePercent(setting.rate)}；上限 ${formatRatePercent(setting.maxRate)}`
+            content: `**${descriptor.featureName}**\n\`${descriptor.command}\`\n当前 ${setting.enabled ? '开启' : '关闭'} / ${formatRatePercent(setting.rate)}${setting.hasCustomRate ? '（会话配置）' : '（继承全局）'}\n全局默认 ${formatRatePercent(setting.defaultRate)}；上限 ${formatRatePercent(setting.maxRate)}${setting.isRateCapped ? '（历史值已按上限收敛）' : ''}`
           }
         ]
       },
@@ -399,7 +399,7 @@ function helpStyleItem(
         elements: [
           {
             tag: 'markdown',
-            content: `**${descriptor.featureName}**\n\`${descriptor.command}\`\n概率上限 ${formatRatePercent(setting.maxRate)}；字符上限 ${maxLimit}`
+            content: `**${descriptor.featureName}**\n\`${descriptor.command}\`\n当前 ${setting.enabled ? '开启' : '关闭'} / ${formatRatePercent(setting.rate)}${setting.hasCustomRate ? '（会话配置）' : '（继承全局）'}\n概率上限 ${formatRatePercent(setting.maxRate)}；字符当前 ${setting.maxChars}${setting.hasCustomMax ? '（会话配置）' : '（默认）'}，上限 ${maxLimit}`
           }
         ]
       },
@@ -564,9 +564,10 @@ function simpleBackFooter(backPage: HelpCardPage) {
   };
 }
 
-function helpForm(elements: object[]) {
+function helpForm(page: HelpCardPage, elements: object[]) {
   return {
     tag: 'form',
+    name: `help_form_${page}`,
     direction: 'vertical',
     vertical_spacing: '10px',
     elements
@@ -630,7 +631,19 @@ function homePageElements(bot: FeishuBot, chatId: string, notice?: string) {
       navigationButton('抖音订阅', 'douyin'),
       navigationButton('定时任务', 'cron'),
       navigationButton('高级设置', 'advanced')
-    ])
+    ]),
+    { tag: 'hr' },
+    {
+      tag: 'column_set',
+      flex_mode: 'none',
+      columns: [
+        {
+          tag: 'column',
+          width: 'stretch',
+          elements: [helpCardButton({ text: '撤回卡片', action: 'withdraw', type: 'danger_filled' })]
+        }
+      ]
+    }
   ];
 }
 
@@ -675,13 +688,13 @@ function openApiHelpMarkdown() {
   return [
     '**开发者 OpenAPI**',
     '',
-    `**随机抖音 JSON**\n\`${base}/open-api/v1/mm\`\n无参数；返回 \`{ data: { url } }\`。`,
+    `**随机抖音 JSON**\n\`${base}/open-api/v1/mm\`\n无参数；返回 JSON \`{ data: { url } }\`。`,
     '',
-    `**随机抖音跳转**\n\`${base}/open-api/v1/mm/redirect\`\n无参数；302 重定向到随机视频。`,
+    `**随机抖音跳转**\n\`${base}/open-api/v1/mm/redirect\`\n无参数；302 重定向到随机抖音视频地址。`,
     '',
-    `**字节范生图**\n\`${base}/open-api/v1/byte-style?text=xxx\`\n\`text\` 必填；颜色、缩放和渐变角度可选；返回 \`image/png\`。`,
+    `**字节范生图**\n\`${base}/open-api/v1/byte-style?text=xxx\`\n\`text\` 必填；\`color1\` / \`color2\` 可选，支持 \`#RRGGBB\`；\`scale\` 可选；\`gradientAngle\` 或 \`ga\` 可选，范围 \`0-360\`；返回 \`image/png\`。`,
     '',
-    `**勇攀高峰生图**\n\`${base}/open-api/v1/scale-new-heights?text=xxx\`\n参数同字节范接口；返回 \`image/png\`。`
+    `**勇攀高峰生图**\n\`${base}/open-api/v1/scale-new-heights?text=xxx\`\n参数同字节范接口（\`text\` 必填，\`color1\`/\`color2\`/\`scale\`/\`gradientAngle\` 或 \`ga\` 可选）；返回 \`image/png\`。`
   ].join('\n');
 }
 
@@ -700,7 +713,7 @@ function interactionPageElements(bot: FeishuBot, chatId: string, notice?: string
       tag: 'markdown',
       content: '**智能互动**\n配置 6 项被动互动能力。概率支持填写 `0.05` 或 `5` 表示 5%，超出单项上限时会按上限保存。'
     },
-    helpForm([
+    helpForm('interaction', [
       helpRateFormHeader(),
       { tag: 'hr' },
       ...items,
@@ -727,7 +740,7 @@ function stylePageElements(bot: FeishuBot, chatId: string, notice?: string) {
       tag: 'markdown',
       content: '**图片生成**\n分别设置两种随机生图能力的状态、触发概率和最大字符数。'
     },
-    helpForm([
+    helpForm('style', [
       ...items,
       { tag: 'hr' },
       formFooter('style', 'home', '保存图片生成')
@@ -741,7 +754,7 @@ function douyinSummaryMarkdown(bot: FeishuBot, chatId: string) {
   return [
     `**当前订阅：${count} 个**`,
     subscriptions.length > 0
-      ? subscriptions.map((item) => `- \`${item.clickText}\``).join('\n')
+      ? subscriptions.map((item) => `- \`${item.clickText}\`（${formatDateTimeText(item.updatedAt)}）`).join('\n')
       : '- 当前会话暂无订阅',
     ...(count > subscriptions.length ? [`- 另有 ${count - subscriptions.length} 个未在此处展开`] : [])
   ].join('\n');
@@ -768,7 +781,7 @@ function douyinSubscribeElements(bot: FeishuBot, chatId: string, notice?: string
       tag: 'markdown',
       content: '**新增抖音订阅**\n展示最近更新、但当前会话尚未订阅的模拟点击文案。'
     },
-    helpForm([
+    helpForm('douyin_subscribe', [
       helpDouyinMultiSelect(
         HELP_DOUYIN_FORM_FIELDS.subscribe,
         '选择要新增的订阅',
@@ -788,7 +801,7 @@ function douyinUnsubscribeElements(bot: FeishuBot, chatId: string, notice?: stri
       tag: 'markdown',
       content: '**取消抖音订阅**\n选择订阅后进入独立确认页；当前页面不会直接取消。'
     },
-    helpForm([
+    helpForm('douyin_unsubscribe', [
       helpDouyinMultiSelect(
         HELP_DOUYIN_FORM_FIELDS.unsubscribe,
         '选择要取消的订阅',
@@ -886,7 +899,7 @@ function cronAddElements(bot: FeishuBot, notice?: string) {
       tag: 'markdown',
       content: '**新增定时任务**\n填写 cron 表达式和命令。命令留空时使用当前 bot 的默认兜底指令。'
     },
-    helpForm([
+    helpForm('cron_add', [
       helpCronExprInput(),
       helpCronCommandTextInput(defaultCommand),
       formFooter('cron_add', 'cron', '新增任务')
@@ -902,7 +915,7 @@ function cronDeleteElements(bot: FeishuBot, chatId: string, notice?: string) {
       tag: 'markdown',
       content: '**删除定时任务**\n选择任务后进入独立确认页；当前页面不会直接删除。'
     },
-    helpForm([
+    helpForm('cron_delete', [
       helpCronDeleteMultiSelect(tasks),
       formFooter('cron_delete', 'cron', '下一步')
     ])
@@ -938,7 +951,7 @@ function advancedPageElements(bot: FeishuBot, chatId: string, notice?: string) {
       tag: 'markdown',
       content: '**高级设置**\n未命中 `/users` 且执行兜底指令时，是否弹出 @ 人员选择卡片。'
     },
-    helpForm([
+    helpForm('advanced', [
       helpFallbackMentionEnabledSelect(fallbackMentionCardEnabled(bot.id, chatId)),
       formFooter('advanced', 'home', '保存高级设置')
     ])
