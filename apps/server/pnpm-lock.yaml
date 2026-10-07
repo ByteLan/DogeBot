@@ -12,8 +12,8 @@ importers:
         specifier: ^1.66.1
         version: 1.66.1(debug@2.6.9)
       '@syru/byted-sticker-generator':
-        specifier: 1.0.1
-        version: 1.0.1
+        specifier: 1.1.0
+        version: 1.1.0
       better-sqlite3:
         specifier: ^13.0.3
         version: 13.0.3
@@ -309,8 +309,8 @@ packages:
   '@protobufjs/utf8@1.1.1':
     resolution: {integrity: sha512-oOAWABowe8EAbMyWKM0tYDKi8Yaox52D+HWZhAIJqQXbqe0xI/GV7FhLWqlEKreMkfDjshR5FKgi3mnle0h6Eg==}
 
-  '@syru/byted-sticker-generator@1.0.1':
-    resolution: {integrity: sha512-10VjeSGXqNuCnV5G1llEwKmGwga2VdohSYzoQTSu8GEk/1TEIyunjR6iKvK5dXD4GOkf6pT7LfdlmoXIfT5S+w==}
+  '@syru/byted-sticker-generator@1.1.0':
+    resolution: {integrity: sha512-ZJwdrWcCYEGKzXr5ar6Wcpk+zloienxgcmNLsxeQBNUlFp9VQHO0g0af071XGXgkk7HZ6sF71Tj1QFJkBPjNeA==}
     engines: {node: '>=24.0.0'}
 
   '@types/better-sqlite3@7.6.13':
@@ -555,10 +555,6 @@ packages:
 
   inherits@2.0.4:
     resolution: {integrity: sha512-k/vGaX4/Yla3WzyMCvTQOXYeIHvqOKtnqBduzTHpzpQZzAskKMhZ2K+EnBiSM9zGSoIFeMpXKxa4dYeZIQqewQ==}
-
-  inter-ui@4.1.1:
-    resolution: {integrity: sha512-451h0J29HyOmA+JXgSi/6M12tL7ZCZ8arYKZUXiOXTJpJbAKqJvFh3k5SiV3x7tKe0C0KyrKUUiQIvvZ2PQDcA==}
-    engines: {node: '>=16.0.0'}
 
   ipaddr.js@1.9.1:
     resolution: {integrity: sha512-0KI/607xoxSToH7GjN1FfSbLoU0+btTicjsQSWQlh/hZykN8KpmMf7uYwPW3R+akZ6R/w18ZlXSHBYXiYUPO3g==}
@@ -909,11 +905,10 @@ snapshots:
 
   '@protobufjs/utf8@1.1.1': {}
 
-  '@syru/byted-sticker-generator@1.0.1':
+  '@syru/byted-sticker-generator@1.1.0':
     dependencies:
       culori: 4.0.2
       hdrify: 0.12.1
-      inter-ui: 4.1.1
     optionalDependencies:
       '@napi-rs/canvas': 1.0.8
 
@@ -1234,8 +1229,6 @@ snapshots:
   ieee754@1.2.1: {}
 
   inherits@2.0.4: {}
-
-  inter-ui@4.1.1: {}
 
   ipaddr.js@1.9.1: {}
 

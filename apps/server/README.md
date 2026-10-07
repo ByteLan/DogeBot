@@ -2,7 +2,7 @@
 
 `@dogebot/server` 是 DogeBot 的 Node.js 服务端应用，负责用户认证、SQLite 数据存储、飞书机器人绑定，以及为每个已启用 bot 维护独立飞书 WebSocket 长连接。
 
-服务端安装、构建和运行需要 Node.js `24` 及以上版本，与 `@syru/byted-sticker-generator@1.0.0` 的运行要求保持一致。
+服务端安装、构建和运行需要 Node.js `24` 及以上版本，与 `@syru/byted-sticker-generator@1.1.0` 的运行要求保持一致。
 
 ## 主要能力
 
