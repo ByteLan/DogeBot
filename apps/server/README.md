@@ -89,6 +89,12 @@ pnpm add-user <用户名> <密码>
 - `DOGEBOT_STYLE_STICKER_RENDER_CONCURRENCY`：字节范/勇攀高峰生图的全局并发数，默认 `2`；`/open-api/v1/byte-style`、`/open-api/v1/scale-new-heights`、飞书命令生图、随机生图、卡片预览共用这一组并发额度。
 - `DOGEBOT_STYLE_STICKER_RENDER_QUEUE_MAX`：字节范/勇攀高峰生图的等待队列上限，默认 `20`；超过后新任务会立即抛出 `QUEUE_FULL` 错误，避免请求堆积占用内存。
 - `DOGEBOT_STYLE_STICKER_RENDER_TIMEOUT_MS`：单个字节范/勇攀高峰生图任务的最大执行时间（毫秒），默认 `20000`；超时后会立即释放并发额度并抛出 `TASK_TIMEOUT` 错误，避免卡死后续任务。
+- `DOGEBOT_STYLE_STICKER_OUTPUT_SCALE_MULTIPLIER`：输出倍率乘数（支持小数），默认 `3`；补偿包内固定的 72px 基准字高，使出图尺寸接近旧版 220px 效果。
+- `DOGEBOT_STYLE_STICKER_LINE_HEIGHT`：行间距倍率（支持小数），默认 `1.1`；包默认 `1`，旧版为 `1.1`。
+- `DOGEBOT_STYLE_STICKER_ANTIALIAS_SCALE`：内部超采样倍率（支持小数），默认 `1`；包默认 `1.5`，旧版无超采样。设为 `1.5` 或更高可获得更平滑的边缘。
+- `DOGEBOT_STYLE_STICKER_PADDING_X`：左右留白（像素），默认 `8`；包默认 `4`。
+- `DOGEBOT_STYLE_STICKER_PADDING_Y`：上下留白（像素），默认 `24`；包默认 `8`。
+- `DOGEBOT_STYLE_STICKER_OUTLINE_STROKE_WIDTH`：描边厚度（像素），默认 `20`；包对 bs 默认 `14`。
 - `DOGEBOT_PYTHON_TASK_CONCURRENCY`：服务端调用 `python3` 子进程任务的全局并发数，默认 `2`；当前主要用于图片/表情包镜像反转。
 - `DOGEBOT_PYTHON_TASK_QUEUE_MAX`：`python3` 子进程任务的等待队列上限，默认 `20`；超过后新任务会立即抛出 `QUEUE_FULL` 错误。
 - `DOGEBOT_PYTHON_TASK_TIMEOUT_MS`：单个 `python3` 子进程任务的最大执行时间（毫秒），默认 `20000`；超时后会通过 `AbortSignal` 结束子进程并抛出 `TASK_TIMEOUT` 错误。

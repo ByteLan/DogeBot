@@ -148,10 +148,7 @@ async function renderStyleStickerFile(input: ResolvedStyleStickerInput): Promise
     };
   } else {
     const { renderStickerToImage } = await import('@syru/byted-sticker-generator/node');
-    // 包内 OUTPUT_FONT_SIZE=72 且 OUTPUT_MAX_PIXELS=512² 不可配置，
-    // 默认 outputScale=1 的出图尺寸远小于 legacy（~130px vs ~440px）。
-    // 用 outputScale=3 补偿，使文字高度接近 legacy 的 BASE_FONT_SIZE=220。
-    const compatScale = input.renderScale * 3;
+    const { outputScaleMultiplier, lineHeight, antialiasScale, paddingX, paddingY, outlineStrokeWidth } = stickerRenderConfig;
     const rendered = await runStyleStickerRenderTask(() =>
       renderStickerToImage(
         {
@@ -159,18 +156,18 @@ async function renderStyleStickerFile(input: ResolvedStyleStickerInput): Promise
           flavor: input.flavor,
           flash: input.flashStops !== null,
           flashStops: input.flashStops ?? undefined,
-          lineHeight: 1.1,
-          antialiasScale: 1,
-          padding: { x: 8, y: 24 },
+          lineHeight,
+          antialiasScale,
+          padding: { x: paddingX, y: paddingY },
           envelope: {
             colors: [...input.colors],
             gradientAngle: input.gradientAngle,
-            outlineStrokeWidth: 20
+            outlineStrokeWidth
           }
         },
         {
           fontFiles: STYLE_STICKER_FONT_FILES,
-          outputScale: compatScale,
+          outputScale: input.renderScale * outputScaleMultiplier,
           maxOutputEdge: Math.round(MAX_OUTPUT_EDGE * input.renderScale)
         }
       )
