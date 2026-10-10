@@ -111,13 +111,13 @@ export const stickerRenderConfig = {
   /** 输出倍率乘数，补偿包内固定的 72px 基准字高；3 ≈ legacy 的 220px 效果 */
   outputScaleMultiplier: parsePositiveNumber(process.env.DOGEBOT_STYLE_STICKER_OUTPUT_SCALE_MULTIPLIER, 3),
   /** 行间距倍率，legacy 为 1.1，包默认 1 */
-  lineHeight: parsePositiveNumber(process.env.DOGEBOT_STYLE_STICKER_LINE_HEIGHT, 1.1),
+  lineHeight: parsePositiveNumber(process.env.DOGEBOT_STYLE_STICKER_LINE_HEIGHT, 1),
   /** 内部超采样倍率，legacy 为 1（无超采样），包默认 1.5 */
   antialiasScale: parsePositiveNumber(process.env.DOGEBOT_STYLE_STICKER_ANTIALIAS_SCALE, 1),
   /** 左右留白 px，legacy 为 8，包默认 4 */
-  paddingX: parsePositiveInt(process.env.DOGEBOT_STYLE_STICKER_PADDING_X, 8),
+  paddingX: parsePositiveInt(process.env.DOGEBOT_STYLE_STICKER_PADDING_X, 4),
   /** 上下留白 px，legacy 为 24，包默认 8 */
-  paddingY: parsePositiveInt(process.env.DOGEBOT_STYLE_STICKER_PADDING_Y, 24),
+  paddingY: parsePositiveInt(process.env.DOGEBOT_STYLE_STICKER_PADDING_Y, 8),
   /** 描边厚度 px，legacy 统一 20，包对 bs 默认 14 */
-  outlineStrokeWidth: parsePositiveInt(process.env.DOGEBOT_STYLE_STICKER_OUTLINE_STROKE_WIDTH, 20)
+  outlineStrokeWidth: parsePositiveInt(process.env.DOGEBOT_STYLE_STICKER_OUTLINE_STROKE_WIDTH, 14)
 };
