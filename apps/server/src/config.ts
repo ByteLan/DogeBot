@@ -109,7 +109,7 @@ export const stickerRenderConfig = {
    * 只能通过 outputScale 间接补偿尺寸。
    */
   /** 输出倍率乘数，补偿包内固定的 72px 基准字高；3 ≈ legacy 的 220px 效果 */
-  outputScaleMultiplier: parsePositiveNumber(process.env.DOGEBOT_STYLE_STICKER_OUTPUT_SCALE_MULTIPLIER, 1),
+  outputScaleMultiplier: parsePositiveNumber(process.env.DOGEBOT_STYLE_STICKER_OUTPUT_SCALE_MULTIPLIER, 2),
   /** 行间距倍率，legacy 为 1.1，包默认 1 */
   lineHeight: parsePositiveNumber(process.env.DOGEBOT_STYLE_STICKER_LINE_HEIGHT, 1.2),
   /** 内部超采样倍率，legacy 为 1（无超采样），包默认 1.5 */
