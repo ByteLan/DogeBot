@@ -83,6 +83,7 @@ pnpm add-user <用户名> <密码>
 - `DOGEBOT_LLM_MAX_TOKENS`：大模型回复 token 上限，默认 `160`。
 - `DOGEBOT_LLM_DISABLE_THINKING`：设为 `1` 时，请求 OpenAI 兼容接口会额外带 `enable_thinking: false`，用于关闭支持该参数的模型思考模式。
 - `/open-api/v1/byte-style` 与 `/open-api/v1/scale-new-heights` 通过 `@syru/byted-sticker-generator` 在服务端出图；DogeBot 负责传入字体资源，以及 HTTP、飞书发送、并发限流与短缓存。
+- `DOGEBOT_STYLE_STICKER_LEGACY_RENDERER`：设为 `1` 时回退到旧版 `@napi-rs/canvas` 直接渲染管线（`styleStickerLegacy.ts` + `styleStickerCore.ts` + `utils/ultraHdr.ts`），不使用 `@syru/byted-sticker-generator` 包。用于新包出现兼容性问题时快速回退。
 - HDR 参数 `ev` 支持 `0 < ev <= 5`（允许小数）；省略、非法或超出范围时返回普通 PNG。飞书卡片中的无效 EV 会回退到 `4`，并同步更新输入框和 HDR 链接。
 - `pnpm test:sticker-hdr`：验证 HDR 参数边界、响应头和图片元数据，以及飞书卡片输入与链接的一致性；测试只使用临时数据库并模拟飞书请求。
 - `DOGEBOT_STYLE_STICKER_RENDER_CONCURRENCY`：字节范/勇攀高峰生图的全局并发数，默认 `2`；`/open-api/v1/byte-style`、`/open-api/v1/scale-new-heights`、飞书命令生图、随机生图、卡片预览共用这一组并发额度。

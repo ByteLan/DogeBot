@@ -2,17 +2,20 @@ import { Buffer } from 'node:buffer';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  renderStickerToImage,
-  type NodeStickerFontFiles,
-  type StickerFlavor,
-  type StickerImageResult
+import type {
+  NodeStickerFontFiles,
+  StickerFlavor,
+  StickerImageResult
 } from '@syru/byted-sticker-generator/node';
-import { DEFAULT_STICKER_CONTROLS, randomStickerColors, resolveGradientStops } from '@syru/byted-sticker-generator';
 import type { Request, Response } from 'express';
 import { passiveInteractionConfig, stickerRenderConfig } from './config.js';
 import { createConcurrencyLimiter } from './utils/concurrency.js';
 import { normalizeHexColor } from './utils/color.js';
+
+const USE_LEGACY_RENDERER = process.env.DOGEBOT_STYLE_STICKER_LEGACY_RENDERER === '1';
+if (USE_LEGACY_RENDERER) {
+  console.info('[style-sticker] legacy renderer enabled via DOGEBOT_STYLE_STICKER_LEGACY_RENDERER=1');
+}
 
 /** 限制导出图片最长边，避免机器人上传过大图片 */
 const MAX_OUTPUT_EDGE = 4096;
@@ -38,7 +41,7 @@ export interface StyleStickerOptions {
   ev?: unknown;
 }
 
-type ResolvedStyleStickerInput = ReturnType<typeof resolveStyleStickerInput>;
+type ResolvedStyleStickerInput = Awaited<ReturnType<typeof resolveStyleStickerInput>>;
 type StyleStickerResult = Pick<StickerImageResult, 'mime' | 'extension'> &
   Pick<ResolvedStyleStickerInput, 'colors' | 'renderScale' | 'gradientAngle'> & { image: Buffer };
 const renderResultCache = new Map<string, { result: StyleStickerResult; expiresAt: number }>();
@@ -77,19 +80,22 @@ export function parseEvParam(value: unknown): number | null {
   return parsed;
 }
 
-function resolveGradientColors(color1: unknown, color2: unknown, flavor: StickerFlavor): readonly [string, string] {
+function resolveGradientColors(color1: unknown, color2: unknown, flavor: StickerFlavor): readonly [string, string] | Promise<readonly [string, string]> {
   const first = normalizeHexColor(color1);
   const second = normalizeHexColor(color2);
   if (first && second) return [first, second];
-  if (!first && !second) {
-    const [start, end] = randomStickerColors(DEFAULT_STICKER_CONTROLS.envelope.colors[0], { flavor, count: 2 });
-    return [start, end];
-  }
-  const [base, highlight] = resolveGradientStops([first || second], flavor);
-  return first ? [base, highlight] : [highlight, base];
+  return (async () => {
+    const { DEFAULT_STICKER_CONTROLS, randomStickerColors, resolveGradientStops } = await import('@syru/byted-sticker-generator');
+    if (!first && !second) {
+      const [start, end] = randomStickerColors(DEFAULT_STICKER_CONTROLS.envelope.colors[0], { flavor, count: 2 });
+      return [start, end] as const;
+    }
+    const [base, highlight] = resolveGradientStops([first || second], flavor);
+    return (first ? [base, highlight] : [highlight, base]) as readonly [string, string];
+  })();
 }
 
-function resolveStyleStickerInput(
+async function resolveStyleStickerInput(
   text: string,
   flavor: StickerFlavor,
   options: StyleStickerOptions
@@ -97,7 +103,7 @@ function resolveStyleStickerInput(
   return {
     text,
     flavor,
-    colors: resolveGradientColors(options.color1, options.color2, flavor),
+    colors: await resolveGradientColors(options.color1, options.color2, flavor),
     renderScale: normalizeRenderScale(options.scale),
     gradientAngle: normalizeGradientAngle(options.gradientAngle),
     flashStops: parseEvParam(options.ev)
@@ -122,31 +128,63 @@ async function renderStyleStickerFile(input: ResolvedStyleStickerInput): Promise
     return cached.result;
   }
 
-  const rendered = await runStyleStickerRenderTask(() =>
-    renderStickerToImage(
-      {
-        text: input.text,
-        flavor: input.flavor,
-        flash: input.flashStops !== null,
-        flashStops: input.flashStops ?? undefined,
-        envelope: { colors: [...input.colors], gradientAngle: input.gradientAngle }
-      },
-      {
-        fontFiles: STYLE_STICKER_FONT_FILES,
-        outputScale: input.renderScale,
-        maxOutputEdge: Math.round(MAX_OUTPUT_EDGE * input.renderScale)
-      }
-    )
-  );
+  let result: StyleStickerResult;
 
-  const result = {
-    image: rendered.buffer,
-    mime: rendered.mime,
-    extension: rendered.extension,
-    colors: input.colors,
-    renderScale: input.renderScale,
-    gradientAngle: input.gradientAngle
-  };
+  if (USE_LEGACY_RENDERER) {
+    const { renderStickerLegacy } = await import('./styleStickerLegacy.js');
+    const legacyResult = await runStyleStickerRenderTask(() =>
+      renderStickerLegacy(
+        input.text, input.flavor, input.colors,
+        input.renderScale, input.gradientAngle, input.flashStops,
+      )
+    );
+    result = {
+      image: legacyResult.image,
+      mime: legacyResult.mime,
+      extension: legacyResult.extension,
+      colors: input.colors,
+      renderScale: input.renderScale,
+      gradientAngle: input.gradientAngle
+    };
+  } else {
+    const { renderStickerToImage } = await import('@syru/byted-sticker-generator/node');
+    // 包内 OUTPUT_FONT_SIZE=72 且 OUTPUT_MAX_PIXELS=512² 不可配置，
+    // 默认 outputScale=1 的出图尺寸远小于 legacy（~130px vs ~440px）。
+    // 用 outputScale=3 补偿，使文字高度接近 legacy 的 BASE_FONT_SIZE=220。
+    const compatScale = input.renderScale * 3;
+    const rendered = await runStyleStickerRenderTask(() =>
+      renderStickerToImage(
+        {
+          text: input.text,
+          flavor: input.flavor,
+          flash: input.flashStops !== null,
+          flashStops: input.flashStops ?? undefined,
+          lineHeight: 1.1,
+          antialiasScale: 1,
+          padding: { x: 8, y: 24 },
+          envelope: {
+            colors: [...input.colors],
+            gradientAngle: input.gradientAngle,
+            outlineStrokeWidth: 20
+          }
+        },
+        {
+          fontFiles: STYLE_STICKER_FONT_FILES,
+          outputScale: compatScale,
+          maxOutputEdge: Math.round(MAX_OUTPUT_EDGE * input.renderScale)
+        }
+      )
+    );
+    result = {
+      image: rendered.buffer,
+      mime: rendered.mime,
+      extension: rendered.extension,
+      colors: input.colors,
+      renderScale: input.renderScale,
+      gradientAngle: input.gradientAngle
+    };
+  }
+
   pruneRenderCache();
   renderResultCache.set(cacheKey, { result, expiresAt: Date.now() + RENDER_CACHE_TTL_MS });
   return result;
@@ -157,7 +195,7 @@ export async function renderStyleStickerImage(
   flavor: StickerFlavor,
   options: StyleStickerOptions = {}
 ) {
-  return renderStyleStickerFile(resolveStyleStickerInput(text, flavor, options));
+  return renderStyleStickerFile(await resolveStyleStickerInput(text, flavor, options));
 }
 
 async function handleStyleSticker(req: Request, res: Response, flavor: StickerFlavor) {
