@@ -17,7 +17,7 @@
     "@larksuiteoapi/node-sdk": "^1.66.1",
     "@napi-rs/canvas": "^1.0.2",
     "@syru/byted-sticker-generator": "1.1.1",
-    "better-sqlite3": "^13.0.3",
+    "better-sqlite3": "^11.8.1",
     "colord": "^2.9.3",
     "cors": "^2.8.5",
     "express": "^4.21.2",
