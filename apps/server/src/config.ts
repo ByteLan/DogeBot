@@ -1,4 +1,11 @@
+import type { StickerFlavor } from '@syru/byted-sticker-generator';
 import type { PassiveInteractionConfig } from './types.js';
+
+/** 贴纸入口共用的名称、命令和生成器风格。 */
+export const STYLE_STICKER_FEATURES = {
+  byte_style: { name: '字节范', command: '/byte-style', flavor: 'bs' },
+  scale_new_heights: { name: '勇攀高峰', command: '/scale-new-heights', flavor: 'snh' }
+} as const satisfies Record<string, { name: string; command: string; flavor: StickerFlavor }>;
 
 const DEFAULT_REACTION_EMOJIS = ['OK', 'DONE', 'THUMBSUP', 'HEART', 'LAUGH'];
 

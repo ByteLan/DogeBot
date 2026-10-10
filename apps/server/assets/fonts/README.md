@@ -3,8 +3,8 @@ Style sticker font assets
 
 This directory is copied to `dist/assets/fonts` during `apps/server` builds.
 
-- `DouyinSansBold.woff2`: style sticker display font.
-- `YouSheBiaoTiHei.ttf`: style sticker display font.
+中文展示字体由 `@syru/byted-sticker-generator` npm 包提供；这里仅保留 emoji 和符号回退字体。
+
 - `AppleColorEmoji.ttf`: subsetted Apple emoji fallback font with only the 160 ppem strike kept, loaded first. Glyphs outside the subset fall back to Noto emoji fonts.
 - `AppleSymbols.ttf`: Apple symbol fallback font, loaded first.
 - `NotoColorEmoji.ttf`: emoji fallback font from Google Noto Emoji.

@@ -1,6 +1,6 @@
-import type { UsersCommand, DouyinCommand, SetDefaultCommand, RevertCommand, AddCronCommand, PassiveToggleCommand, StyleStickerCommand } from '../../types.js';
+import type { UsersCommand, DouyinCommand, SetDefaultCommand, RevertCommand, AddCronCommand, PassiveToggleCommand, StyleStickerCommand, StyleStickerFeature } from '../../types.js';
 import { unquoteCommand, readQuotedToken } from '../../utils/text.js';
-import { parseConfigurableRate } from '../../config.js';
+import { parseConfigurableRate, STYLE_STICKER_FEATURES } from '../../config.js';
 
 export const PASSIVE_TOGGLE_COMMANDS = [
   { command: '/reaction', feature: 'reaction', featureName: '贴表情' },
@@ -11,12 +11,9 @@ export const PASSIVE_TOGGLE_COMMANDS = [
   { command: '/sticker-reverse', feature: 'sticker_reverse', featureName: '表情包镜像反转' }
 ] as const;
 
-export const STYLE_STICKER_COMMANDS = [
-  { command: '/byte-style', feature: 'byte_style', featureName: '字节范', flavor: 'bs' },
-  { command: '/字节范', feature: 'byte_style', featureName: '字节范', flavor: 'bs' },
-  { command: '/scale-new-heights', feature: 'scale_new_heights', featureName: '勇攀高峰', flavor: 'snh' },
-  { command: '/勇攀高峰', feature: 'scale_new_heights', featureName: '勇攀高峰', flavor: 'snh' }
-] as const;
+export const STYLE_STICKER_COMMANDS = Object.entries(STYLE_STICKER_FEATURES).flatMap(([feature, { name, command, flavor }]) =>
+  [command, `/${name}`].map(command => ({ command, feature: feature as StyleStickerFeature, featureName: name, flavor }))
+);
 
 export function parseUsersCommand(text: string): UsersCommand {
   const commandIndex = text.indexOf('/users');

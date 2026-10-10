@@ -1,9 +1,10 @@
+import { normalizeHexColor } from '../utils/color.js';
 import type { FeishuBot, StyleStickerFeature, StyleStickerCardAction, HelpCardAction, HelpCardPage, HelpRateDescriptor, ProbabilisticFeature } from '../types.js';
-import { passiveInteractionConfig, parseConfigurableRate } from '../config.js';
+import { passiveInteractionConfig, parseConfigurableRate, STYLE_STICKER_FEATURES } from '../config.js';
 import { deleteMessage, updateInteractiveMessage, replyMedia, fetchMessageById } from './api.js';
 import { rememberFeishuEventKey } from './event-dedup.js';
 import { idFromFeishuObject } from './message-parser.js';
-import { buildStyleStickerCard, buildStyleStickerHdrLink, renderStyleStickerCardState, STYLE_STICKER_FORM_FIELDS } from './cards/style-sticker-card.js';
+import { buildStyleStickerCard, renderStyleStickerCardState, STYLE_STICKER_FORM_FIELDS, STYLE_STICKER_CARD_KIND } from './cards/style-sticker-card.js';
 import { buildHelpCard, HELP_CARD_KIND, HELP_DOUYIN_FORM_FIELDS, HELP_CRON_FORM_FIELDS, HELP_FALLBACK_MENTION_FORM_FIELDS, HELP_RATE_DESCRIPTORS, HELP_INTERACTION_DESCRIPTORS, HELP_STYLE_DESCRIPTORS, HELP_MAX_DESCRIPTORS, helpRateSettingSummary, helpRateEnabledField, recentUnsubscribedDouyinClickTexts, isHelpCardPage } from './cards/help-card.js';
 import { styleStickerFeatureName, formatRatePercent, defaultRateForFeature, setPassiveFeatureSetting, getStyleStickerSetting, setStyleStickerSetting } from './passive/settings.js';
 import { addDouyinSubscription, filterExistingDouyinSubscriptions, removeDouyinSubscription, getDefaultCommand } from './commands/douyin.js';
@@ -14,14 +15,12 @@ import { listMentions, replyUsersCard, sendUsersCardToChat, upsertMentions } fro
 import { DOUYIN_INVALID_CARD_KIND, isDouyinInvalidCardAction, renderDouyinCardState, type DouyinCardContext, type DouyinCardVariant } from './cards/douyin-invalid-card.js';
 import { softDeleteAweme, softRestoreAweme } from './douyin-guard.js';
 
-const STYLE_STICKER_CARD_KIND = 'style_sticker_generator';
-
 function isRecord(value: unknown): value is Record<string, any> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
 function isStyleStickerFeature(value: unknown): value is StyleStickerFeature {
-  return value === 'byte_style' || value === 'scale_new_heights';
+  return typeof value === 'string' && Object.hasOwn(STYLE_STICKER_FEATURES, value);
 }
 
 function isStyleStickerCardAction(value: unknown): value is StyleStickerCardAction {
@@ -62,25 +61,10 @@ function stringValues(value: unknown) {
   return [...seen];
 }
 
-function normalizeCardHexColor(value: unknown) {
-  const text = firstStringValue(value);
-  if (!text) return '';
-  const normalized = text.startsWith('#') ? text : `#${text}`;
-  return /^#[0-9a-fA-F]{6}$/.test(normalized) ? normalized.toLowerCase() : '';
-}
-
 function normalizeCardGradientAngle(value: unknown) {
   const parsed = Number(firstStringValue(value));
   if (!Number.isFinite(parsed)) return undefined;
   return Math.min(360, Math.max(0, Math.round(parsed)));
-}
-
-function parseHdrEvValue(value: unknown): number | null {
-  const text = firstStringValue(value);
-  if (!text) return null;
-  const parsed = Number(text);
-  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 100) return null;
-  return parsed;
 }
 
 function parseHelpEnabledValue(value: unknown) {
@@ -544,9 +528,9 @@ export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
     }
 
     const text = formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.text) || styleStickerFeatureName(parsed.feature);
-    const color1 = normalizeCardHexColor(formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.customColor1)) ||
+    const color1 = normalizeHexColor(formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.customColor1)) ||
       formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.color1);
-    const color2 = normalizeCardHexColor(formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.customColor2)) ||
+    const color2 = normalizeHexColor(formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.customColor2)) ||
       formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.color2);
     const gradientAngle = normalizeCardGradientAngle(formStringValue(parsed.formValue, STYLE_STICKER_FORM_FIELDS.gradientAngle));
 
@@ -559,14 +543,8 @@ export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
         gradientAngle,
         hdrEv: hdrEvRaw
       });
-      const ev = parseHdrEvValue(hdrEvRaw) ?? 4;
-      const hdrLink = buildStyleStickerHdrLink(state, ev);
-
       if (parsed.action === 'preview' || parsed.action === 'hdr') {
-        await updateInteractiveMessage(bot, parsed.messageId, buildStyleStickerCard({
-          ...state,
-          hdrLink
-        }));
+        await updateInteractiveMessage(bot, parsed.messageId, buildStyleStickerCard(state));
         return;
       }
 

@@ -7,7 +7,7 @@ import { feishuWebhook } from './feishu/webhook.js';
 import { startFeishuCronScheduler, stopFeishuCronScheduler } from './feishu/cron.js';
 import { feishuConnectionManager } from './feishu/connection.js';
 import { beginFeishuQrRegistration, pollFeishuQrRegistration } from './feishu/onboard.js';
-import { closeStyleStickerRenderer, renderByteStyle, renderScaleNewHeights } from './styleStickers.js';
+import { renderByteStyle, renderScaleNewHeights } from './styleStickers.js';
 import { setDouyinAwemeNotifier } from './douyin.js';
 import { notifyDouyinSubscriptions } from './feishu/commands/douyin.js';
 import { notifyAdminDouyinInvalid } from './feishu/cards/douyin-invalid-card.js';
@@ -99,13 +99,11 @@ app.listen(port, () => {
 process.on('SIGINT', () => {
   stopFeishuCronScheduler();
   feishuConnectionManager.stopAll();
-    void closeStyleStickerRenderer();
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
   stopFeishuCronScheduler();
   feishuConnectionManager.stopAll();
-    void closeStyleStickerRenderer();
   process.exit(0);
 });

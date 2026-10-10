@@ -1,23 +1,14 @@
 import type { FeishuBot, ParsedFeishuMessage, RecentChatMessage, StyleStickerFeature } from '../../types.js';
-import type { StickerFlavor } from '../../styleStickerCore.js';
 import { passiveInteractionConfig } from '../../config.js';
 import { randomItem, triggerDecision } from '../../utils/random.js';
 import { replyText, replyMedia, sendTextToChat, sendImageToChat, sendStickerToChat, uploadImage } from '../api.js';
 import { messageChatId, messageThreadId, messageMentionsBot } from '../message-parser.js';
-import { renderStyleStickerImage } from '../../styleStickers.js';
+import { uploadStyleStickerImage } from '../cards/style-sticker-card.js';
 import { getPassiveFeatureSetting, getStyleStickerSetting } from './settings.js';
 import { generateImitationReply } from './llm-reply.js';
 import { resolvePassiveMediaResource } from '../media/resource-cache.js';
 import { buildMirroredImage } from '../media/mirror.js';
 import { promises as fs } from 'node:fs';
-
-function styleStickerFlavor(feature: StyleStickerFeature): StickerFlavor {
-  return feature === 'byte_style' ? 'bs' : 'snh';
-}
-
-function styleStickerCommandName(feature: StyleStickerFeature) {
-  return feature === 'byte_style' ? '/byte-style' : '/scale-new-heights';
-}
 
 async function sendPassiveText(bot: FeishuBot, event: any, messageId: string, text: string) {
   if (messageThreadId(event?.message)) {
@@ -61,8 +52,7 @@ async function sendPassiveStyleSticker(
   feature: StyleStickerFeature,
   text: string
 ) {
-  const { image } = await renderStyleStickerImage(text, styleStickerFlavor(feature));
-  const imageKey = await uploadImage(bot, image, `${styleStickerCommandName(feature).slice(1)}.png`);
+  const { imageKey } = await uploadStyleStickerImage(bot, feature, text);
   await sendPassiveMedia(bot, event, messageId, { type: 'image', key: imageKey });
 }
 

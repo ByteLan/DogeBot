@@ -81,14 +81,3 @@ function smoothstep(edge0: number, edge1: number, value: number): number {
 function contentBoostMask(alpha: number): number {
   return smoothstep(0.08, 0.4, alpha);
 }
-
-/**
- * Parse and validate the EV parameter from a request query.
- * Returns a positive number <= 100, or null if invalid/absent.
- */
-export function parseEvParam(value: unknown): number | null {
-  if (value === undefined || value === null || value === '') return null;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 100) return null;
-  return parsed;
-}

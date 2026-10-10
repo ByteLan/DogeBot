@@ -2,6 +2,8 @@
 
 DogeBot 仓库当前包含一个 Node.js 服务端和一个 Electron 桌面客户端。两者按独立项目管理，各自有自己的 `package.json`、`pnpm-lock.yaml` 和 `node_modules`；服务端负责用户登录、SQLite 数据持久化、飞书机器人绑定，以及为每个已绑定机器人维护独立的飞书长连接；桌面客户端用于登录服务端并管理飞书机器人绑定。
 
+服务端安装、构建和运行需要 Node.js `24` 及以上版本，与 `@syru/byted-sticker-generator@1.0.0` 的运行要求保持一致。
+
 ## 项目结构
 
 ```text

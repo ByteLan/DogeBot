@@ -1,7 +1,6 @@
-import type { FeishuBot, ParsedFeishuMessage, RevertCommand, StyleStickerFeature } from '../../types.js';
-import type { StickerFlavor } from '../../styleStickerCore.js';
+import type { FeishuBot, ParsedFeishuMessage, RevertCommand } from '../../types.js';
 import { passiveInteractionConfig } from '../../config.js';
-import { replyText, replyMedia, replyCard, fetchMessageById, sendImageToChat, uploadImage, deleteMessage } from '../api.js';
+import { replyText, replyMedia, replyCard, fetchMessageById, uploadImage, deleteMessage } from '../api.js';
 import { parseFeishuMessage, messageChatId, isThreadMessage, senderIdentity, referencedMessageIds, debugFeishu, mentionedUsers, isManualReverseCommand } from '../message-parser.js';
 import { parseUsersCommand, parseDouyinCommand, parseSetDefaultCommand, parseRevertCommand, isHelpCommand, parseAddCronCommand, parsePassiveToggleCommand, parseStyleStickerCommand } from './parsers.js';
 import { sendDouyinMessages, getDefaultCommandRecord, getDefaultCommand, setDefaultCommand, addDouyinSubscription, removeDouyinSubscription } from './douyin.js';
@@ -11,36 +10,12 @@ import { resolveAwemeIdFromMessage, botAdminUserId } from '../douyin-guard.js';
 import { searchDouyinByTitle, searchDouyinByTitleRandom, checkDouyinAwemeValidityCached, SEARCH_RESULT_COUNT } from '../../douyin.js';
 import { formatDouyinCheckStages } from '../../douyin-check.js';
 import { buildDouyinDeleteConfirmCard, notifyAdminDouyinInvalid, notifyAdminDouyinResult } from '../cards/douyin-invalid-card.js';
-import { renderStyleStickerImage } from '../../styleStickers.js';
 import { resolvePassiveMediaResource } from '../media/resource-cache.js';
 import { buildMirroredImage, sendMirroredMediaResource } from '../media/mirror.js';
 import { promises as fs } from 'node:fs';
-import { replyHelpCard as _replyHelpCard } from '../cards/help-card.js';
-import { replyStyleStickerGeneratorCard as _replyStyleStickerGeneratorCard } from '../cards/style-sticker-card.js';
+import { replyHelpCard } from '../cards/help-card.js';
+import { replyStyleStickerGeneratorCard, sendStyleStickerToChat, uploadStyleStickerImage } from '../cards/style-sticker-card.js';
 import { addCronTask, listChatCronTasks, deleteCronTaskById, cronTaskSummary } from '../cron.js';
-
-// --- Style sticker command helpers ---
-
-function styleStickerFlavor(feature: StyleStickerFeature): StickerFlavor {
-  return feature === 'byte_style' ? 'bs' : 'snh';
-}
-
-function styleStickerCommandName(feature: StyleStickerFeature) {
-  return feature === 'byte_style' ? '/byte-style' : '/scale-new-heights';
-}
-
-async function sendStyleStickerToChat(
-  bot: FeishuBot,
-  chatId: string,
-  feature: StyleStickerFeature,
-  text: string,
-  options: { color1?: unknown; color2?: unknown; gradientAngle?: unknown } = {}
-) {
-  const { image } = await renderStyleStickerImage(text, styleStickerFlavor(feature), options);
-  const imageKey = await uploadImage(bot, image, `${styleStickerCommandName(feature).slice(1)}.png`);
-  await sendImageToChat(bot, chatId, imageKey);
-}
-
 
 // --- Referenced message text helper ---
 
@@ -158,16 +133,6 @@ async function handleManualReverseCommand(bot: FeishuBot, event: any, messageId:
     await replyText(bot, messageId, error instanceof Error ? `反转失败：${error.message}` : '反转失败');
   }
   return true;
-}
-
-// --- Help card and style sticker card ---
-
-async function replyHelpCard(bot: FeishuBot, messageId: string, chatId: string) {
-  await _replyHelpCard(bot, messageId, chatId);
-}
-
-async function replyStyleStickerGeneratorCard(bot: FeishuBot, messageId: string, feature: StyleStickerFeature) {
-  await _replyStyleStickerGeneratorCard(bot, messageId, feature);
 }
 
 // --- Main command dispatcher ---
@@ -338,8 +303,7 @@ export async function handleFeishuCommand(bot: FeishuBot, event: any, messageId:
       const stickerText = styleStickerCommand.text.slice(0, config.styleStickerMaxCharsLimit);
       try {
         if (isThreadMessage(message)) {
-          const { image } = await renderStyleStickerImage(stickerText, styleStickerFlavor(styleStickerCommand.feature));
-          const imageKey = await uploadImage(bot, image, `${styleStickerCommandName(styleStickerCommand.feature).slice(1)}.png`);
+          const { imageKey } = await uploadStyleStickerImage(bot, styleStickerCommand.feature, stickerText);
           await replyMedia(bot, messageId, { type: 'image', key: imageKey }, true);
         } else {
           await sendStyleStickerToChat(bot, chatId, styleStickerCommand.feature, stickerText);

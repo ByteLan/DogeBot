@@ -1,4 +1,5 @@
-import type { StickerFlavor } from './styleStickerCore.js';
+import type { StickerFlavor } from '@syru/byted-sticker-generator';
+import type { STYLE_STICKER_FEATURES } from './config.js';
 
 export type FeishuBot = {
   id: number;
@@ -111,7 +112,7 @@ export type PassiveToggleCommand =
     hasUnknownArgs: boolean;
   };
 
-export type StyleStickerFeature = 'byte_style' | 'scale_new_heights';
+export type StyleStickerFeature = keyof typeof STYLE_STICKER_FEATURES;
 
 export type StyleStickerCommand =
   | { isStyleSticker: false }

@@ -1,8 +1,9 @@
 import type { PassiveFeature, ProbabilisticFeature, StyleStickerFeature, PassiveChatSetting, StyleStickerChatSetting, PassiveInteractionConfig } from '../../types.js';
+import { STYLE_STICKER_FEATURES } from '../../config.js';
 import { db } from '../../db.js';
 
 export function styleStickerFeatureName(feature: StyleStickerFeature) {
-  return feature === 'byte_style' ? '字节范' : '勇攀高峰';
+  return STYLE_STICKER_FEATURES[feature].name;
 }
 
 export function formatRatePercent(rate: number) {
