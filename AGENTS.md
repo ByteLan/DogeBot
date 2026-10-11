@@ -6,7 +6,7 @@
 
 DogeBot 是多项目仓库(Rush 管理),但**各应用是独立的 pnpm 项目**,各自持有 `package.json` / lockfile / `node_modules`:
 
-- `apps/server` —— Node.js 服务端(Express + better-sqlite3 + 飞书长连接)。本文件的规范主要面向它。
+- `apps/server` —— Node.js 服务端(Express + node:sqlite + 飞书长连接)。本文件的规范主要面向它。
 - `apps/desktop` —— Electron 桌面客户端。
 - `apps/cli` —— 命令行工具。
 - `common/` —— 保留的 Rush 配置。
@@ -25,7 +25,7 @@ cd apps/server && npx tsc -p tsconfig.json --noEmit
 - `pnpm build` —— `tsc` 编译到 `dist/` 并拷贝 `scripts/*.py`、`assets/`。
 - `pnpm start` —— 运行 `dist/index.js`。
 
-当前仓库**没有测试框架**。不要凭空引入 `jest`/`vitest` 依赖来"验证";用 `tsc --noEmit` 和必要时的最小可运行脚本自证。如需新增测试体系,先与维护者确认。
+贴纸测试使用 Node.js 内置 `node:test`：`pnpm test:sticker`（包含 HDR 测试）。不要引入 `jest`/`vitest`；修改渲染行为时补充现有测试，并运行类型检查。安装、构建和测试均需要 Node.js `24` 及以上。
 
 ## TypeScript 约定
 
@@ -39,6 +39,7 @@ cd apps/server && npx tsc -p tsconfig.json --noEmit
 - 集中解析:数值型配置一律走 [`config.ts`](apps/server/src/config.ts) 的解析器,不要在业务代码里裸 `Number(process.env.X)`。
   - `parsePositiveInt(raw, fallback)` —— 正整数,非法回退默认值。
   - `parsePositiveNumber(raw, fallback)` —— **正小数**(QPS、TTL 等允许小数的场景用它)。
+  - `parseOptionalRenderNumber(raw, allowZero)` —— 可选视觉覆盖；未配置/非法返回 `undefined`，留白与描边允许 `0`。
   - `parseRate` / `parseConfigurableRate` —— 0~1 比率(支持传百分数,>1 自动 /100)。
   - `parseBooleanFlag`、`splitCsv`、`envString`(多别名取首个非空)。
 - 变量单位写进注释,并在变量名/文档里体现:秒用 `_SECONDS`,小时用 `_HOURS`,毫秒用 `_MS`,并发用 `_CONCURRENCY`,队列上限用 `_QUEUE_MAX`。
@@ -65,7 +66,7 @@ cd apps/server && npx tsc -p tsconfig.json --noEmit
 
 ## 数据库约定
 
-- SQLite 通过 better-sqlite3,schema 与迁移集中在 [`db.ts`](apps/server/src/db.ts),用 `CREATE TABLE IF NOT EXISTS` + 幂等的列迁移(检测列是否存在再 `ALTER`)。新增列走同样的幂等迁移方式,不要假设旧库已有新列。
+- SQLite 通过原生 node:sqlite,schema 与迁移集中在 [`db.ts`](apps/server/src/db.ts),用 `CREATE TABLE IF NOT EXISTS` + 幂等的列迁移(检测列是否存在再 `ALTER`)。新增列走同样的幂等迁移方式,不要假设旧库已有新列。
 - 软删除用 `status = 'delete'` + `deleted_at`,查询活跃记录统一用 `ACTIVE_DOUYIN_RECORD_FILTER` 之类的共享过滤片段,不要各处手写。
 - SQL 一律参数化(`?` 占位),禁止字符串拼接用户输入。
 
@@ -95,3 +96,7 @@ cd apps/server && npx tsc -p tsconfig.json --noEmit
 
 - 遵循现有 Conventional Commits 风格(`feat(scope): ...` / `fix(scope): ...` / `refactor(scope): ...`),scope 用模块名(如 `douyin`、`feishu message handler`)。可用中文描述正文。
 - 仅在用户明确要求时才提交或推送。
+
+## 贴纸渲染配置
+
+视觉默认值归 `@syru/byted-sticker-generator` 管理，不在服务端复制。可选覆盖变量：`DOGEBOT_STYLE_STICKER_LINE_HEIGHT`、`DOGEBOT_STYLE_STICKER_ANTIALIAS_SCALE`、`DOGEBOT_STYLE_STICKER_PADDING_X`、`DOGEBOT_STYLE_STICKER_PADDING_Y`、`DOGEBOT_STYLE_STICKER_OUTLINE_STROKE_WIDTH`。留白与描边允许零。输出 `scale` 默认 2，显式值直接传递（范围 1～3）；不再使用 `DOGEBOT_STYLE_STICKER_OUTPUT_SCALE_MULTIPLIER` 或旧渲染器开关。并发、队列、超时与短缓存仍由 DogeBot 管理。

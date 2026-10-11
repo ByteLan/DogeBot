@@ -2,7 +2,7 @@
 
 DogeBot 仓库当前包含一个 Node.js 服务端和一个 Electron 桌面客户端。两者按独立项目管理，各自有自己的 `package.json`、`pnpm-lock.yaml` 和 `node_modules`；服务端负责用户登录、SQLite 数据持久化、飞书机器人绑定，以及为每个已绑定机器人维护独立的飞书长连接；桌面客户端用于登录服务端并管理飞书机器人绑定。
 
-服务端安装、构建和运行需要 Node.js `24` 及以上版本，与 `@syru/byted-sticker-generator@1.0.0` 的运行要求保持一致。
+服务端安装、构建和运行需要 Node.js `24` 及以上版本，与 `@syru/byted-sticker-generator@1.1.1` 的运行要求保持一致。
 
 ## 项目结构
 
@@ -23,7 +23,7 @@ DogeBot/
 
 ## 快速开始
 
-安装、构建和运行服务端推荐使用 Node.js `22.x`（至少 `22.13.0`）或 `24` 及以上版本。若使用 Node.js `23.x`，至少需要 `23.4.0`，以确保原生 `node:sqlite` 模块无需实验参数即可加载。
+安装、构建和运行服务端需要 Node.js `24` 及以上版本，同时满足贴纸生成器与原生 `node:sqlite` 的运行要求。
 
 安装并启动服务端：
 
@@ -61,6 +61,8 @@ pnpm dev
 - Webhook 兜底：保留 `/feishu/webhook/:botId` 作为飞书事件回调的备用调试入口。
 
 环境变量：
+
+贴纸视觉参数默认继承生成器，仅在显式设置时覆盖；`scale` 为实际输出倍率（默认 `2`，范围 `1`～`3`）。参数与旧配置迁移说明见 [服务端贴纸配置](apps/server/README.md#环境变量)。
 
 - `PORT`：服务端 HTTP 端口，默认 `3000`。
 - `DOGEBOT_DATA_DIR`：SQLite 数据目录，默认 `apps/server/data`。
@@ -143,7 +145,7 @@ DOGEBOT_DATA_DIR=/home/Code/DogeBot-data pnpm add-user admin 'change-me'
 - 启动文件：`dist/index.js`
 - 启动命令：`node dist/index.js`
 - 运行端口：`3000`，或自定义后同步设置 `PORT`
-- Node 版本：推荐 `22.x`（至少 `22.13.0`）或 `24` 及以上；`23.x` 至少需 `23.4.0`。宝塔 / PM2 的运行版本也必须满足此要求。
+- Node 版本：`24` 及以上。宝塔 / PM2 的运行版本也必须满足此要求。
 - 环境变量：`PORT=3000`
 - 环境变量：`DOGEBOT_DATA_DIR=/home/Code/DogeBot-data`
 - 环境变量：`DOGEBOT_AUTH_SECRET=<一段足够长的随机字符串>`

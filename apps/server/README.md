@@ -2,7 +2,7 @@
 
 `@dogebot/server` 是 DogeBot 的 Node.js 服务端应用，负责用户认证、SQLite 数据存储、飞书机器人绑定，以及为每个已启用 bot 维护独立飞书 WebSocket 长连接。
 
-服务端安装、构建和运行需要 Node.js `24` 及以上版本，与 `@syru/byted-sticker-generator@1.1.0` 的运行要求保持一致。
+服务端安装、构建和运行需要 Node.js `24` 及以上版本，与 `@syru/byted-sticker-generator@1.1.1` 的运行要求保持一致。
 
 ## 主要能力
 
@@ -35,7 +35,7 @@ apps/server/
 
 ## 开发命令
 
-安装、构建和运行服务端推荐使用 Node.js `22.x`（至少 `22.13.0`）或 `24` 及以上版本。若使用 Node.js `23.x`，至少需要 `23.4.0`，以确保原生 `node:sqlite` 模块无需实验参数即可加载。
+安装、构建和运行服务端需要 Node.js `24` 及以上版本，同时满足贴纸生成器与原生 `node:sqlite` 的运行要求。
 
 ```bash
 pnpm dev
@@ -85,18 +85,19 @@ pnpm add-user <用户名> <密码>
 - `DOGEBOT_LLM_MAX_TOKENS`：大模型回复 token 上限，默认 `160`。
 - `DOGEBOT_LLM_DISABLE_THINKING`：设为 `1` 时，请求 OpenAI 兼容接口会额外带 `enable_thinking: false`，用于关闭支持该参数的模型思考模式。
 - `/open-api/v1/byte-style` 与 `/open-api/v1/scale-new-heights` 通过 `@syru/byted-sticker-generator` 在服务端出图；DogeBot 负责传入字体资源，以及 HTTP、飞书发送、并发限流与短缓存。
-- `DOGEBOT_STYLE_STICKER_LEGACY_RENDERER`：设为 `1` 时回退到旧版 `@napi-rs/canvas` 直接渲染管线（`styleStickerLegacy.ts` + `styleStickerCore.ts` + `utils/ultraHdr.ts`），不使用 `@syru/byted-sticker-generator` 包。用于新包出现兼容性问题时快速回退。
 - HDR 参数 `ev` 支持 `0 < ev <= 5`（允许小数）；省略、非法或超出范围时返回普通 PNG。飞书卡片中的无效 EV 会回退到 `4`，并同步更新输入框和 HDR 链接。
 - `pnpm test:sticker-hdr`：验证 HDR 参数边界、响应头和图片元数据，以及飞书卡片输入与链接的一致性；测试只使用临时数据库并模拟飞书请求。
 - `DOGEBOT_STYLE_STICKER_RENDER_CONCURRENCY`：字节范/勇攀高峰生图的全局并发数，默认 `2`；`/open-api/v1/byte-style`、`/open-api/v1/scale-new-heights`、飞书命令生图、随机生图、卡片预览共用这一组并发额度。
 - `DOGEBOT_STYLE_STICKER_RENDER_QUEUE_MAX`：字节范/勇攀高峰生图的等待队列上限，默认 `20`；超过后新任务会立即抛出 `QUEUE_FULL` 错误，避免请求堆积占用内存。
 - `DOGEBOT_STYLE_STICKER_RENDER_TIMEOUT_MS`：单个字节范/勇攀高峰生图任务的最大执行时间（毫秒），默认 `20000`；超时后会立即释放并发额度并抛出 `TASK_TIMEOUT` 错误，避免卡死后续任务。
-- `DOGEBOT_STYLE_STICKER_OUTPUT_SCALE_MULTIPLIER`：输出倍率乘数（支持小数），默认 `3`；补偿包内固定的 72px 基准字高，使出图尺寸接近旧版 220px 效果。
-- `DOGEBOT_STYLE_STICKER_LINE_HEIGHT`：行间距倍率（支持小数），默认 `1.1`；包默认 `1`，旧版为 `1.1`。
-- `DOGEBOT_STYLE_STICKER_ANTIALIAS_SCALE`：内部超采样倍率（支持小数），默认 `1`；包默认 `1.5`，旧版无超采样。设为 `1.5` 或更高可获得更平滑的边缘。
-- `DOGEBOT_STYLE_STICKER_PADDING_X`：左右留白（像素），默认 `8`；包默认 `4`。
-- `DOGEBOT_STYLE_STICKER_PADDING_Y`：上下留白（像素），默认 `24`；包默认 `8`。
-- `DOGEBOT_STYLE_STICKER_OUTLINE_STROKE_WIDTH`：描边厚度（像素），默认 `20`；包对 bs 默认 `14`。
+- 输出参数 `scale` 直接传给生成器，支持 `1`～`3`（含小数），超出范围时截断；省略、空白或非法值默认 `2`。`X-Render-Scale` 返回实际倍率。
+- 视觉参数未配置或非法时继承生成器的对应风格默认值；DogeBot 不再维护第二套默认值。显式覆盖仍由生成器校验范围：
+  - `DOGEBOT_STYLE_STICKER_LINE_HEIGHT`：行间距倍率，支持正小数。
+  - `DOGEBOT_STYLE_STICKER_ANTIALIAS_SCALE`：内部超采样倍率，支持正小数。
+  - `DOGEBOT_STYLE_STICKER_PADDING_X` / `DOGEBOT_STYLE_STICKER_PADDING_Y`：左右/上下留白（像素），支持非负小数与 `0`。
+  - `DOGEBOT_STYLE_STICKER_OUTLINE_STROKE_WIDTH`：描边厚度（像素），支持非负小数与 `0`。
+- 迁移说明：已移除 `DOGEBOT_STYLE_STICKER_OUTPUT_SCALE_MULTIPLIER` 和 `DOGEBOT_STYLE_STICKER_LEGACY_RENDERER`，部署配置中可删除这两项；所有出图统一使用生成器。请求中的 `scale` 现在表示实际输出倍率，不再叠乘。
+- `pnpm test:sticker`：验证默认视觉效果与生成器一致、倍率区别、显式覆盖和零值，以及现有 HDR 与卡片行为。
 - `DOGEBOT_PYTHON_TASK_CONCURRENCY`：服务端调用 `python3` 子进程任务的全局并发数，默认 `2`；当前主要用于图片/表情包镜像反转。
 - `DOGEBOT_PYTHON_TASK_QUEUE_MAX`：`python3` 子进程任务的等待队列上限，默认 `20`；超过后新任务会立即抛出 `QUEUE_FULL` 错误。
 - `DOGEBOT_PYTHON_TASK_TIMEOUT_MS`：单个 `python3` 子进程任务的最大执行时间（毫秒），默认 `20000`；超时后会通过 `AbortSignal` 结束子进程并抛出 `TASK_TIMEOUT` 错误。
@@ -139,7 +140,7 @@ DOGEBOT_DATA_DIR=/www/wwwroot/DogeBot-data pnpm add-user admin 'change-me'
 - 启动文件：`dist/index.js`
 - 启动命令：`node dist/index.js`
 - 端口：`3000`
-- Node 版本：推荐 `22.x`（至少 `22.13.0`）或 `24` 及以上；`23.x` 至少需 `23.4.0`。宝塔 / PM2 的运行版本也必须满足此要求。
+- Node 版本：`24` 及以上。宝塔 / PM2 的运行版本也必须满足此要求。
 - 环境变量：`PORT=3000`
 - 环境变量：`DOGEBOT_DATA_DIR=/www/wwwroot/DogeBot-data`
 - 环境变量：`DOGEBOT_AUTH_SECRET=<一段足够长的随机字符串>`
