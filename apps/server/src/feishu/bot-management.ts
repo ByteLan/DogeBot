@@ -4,6 +4,7 @@ import type { FeishuBot } from '../types.js';
 import { db } from '../db.js';
 import { clearTokenCache, tenantAccessToken } from './client.js';
 import { feishuJson, openBase } from './client.js';
+import { botAdminUserId } from './douyin-guard.js';
 
 export function getBot(id: number) {
   return db.prepare('SELECT * FROM feishu_bots WHERE id = ?').get(id) as FeishuBot | undefined;
@@ -24,6 +25,7 @@ export function publicBot(row: FeishuBot) {
     botName: row.bot_name,
     botOpenId: row.bot_open_id,
     enabled: Boolean(row.enabled),
+    hasAdmin: Boolean(botAdminUserId(row.id)),
     webhookPath: `/feishu/webhook/${row.id}`,
     createdAt: row.created_at,
     updatedAt: row.updated_at
@@ -125,4 +127,21 @@ export async function probeFeishuBot(req: AuthenticatedRequest, res: ExpressResp
   } catch (error) {
     res.status(502).json({ error: error instanceof Error ? error.message : 'probe failed' });
   }
+}
+
+export function clearBotAdmin(botId: number, userId: number) {
+  if (!getOwnedBot(botId, userId)) return false;
+  db.prepare(
+    "UPDATE feishu_bot_default_commands SET admin_user_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE bot_id = ?"
+  ).run(botId);
+  return true;
+}
+
+export function clearFeishuBotAdmin(req: AuthenticatedRequest, res: ExpressResponse) {
+  const botId = Number(req.params.id);
+  if (!req.user || !clearBotAdmin(botId, req.user.id)) {
+    res.status(404).json({ error: 'bot not found' });
+    return;
+  }
+  res.json({ ok: true });
 }

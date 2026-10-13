@@ -16,6 +16,7 @@ export function FeishuBotsCard(props: {
   apiUrl: (path: string) => string;
   onProbe: (bot: Bot) => void | Promise<void>;
   onDelete: (bot: Bot) => void | Promise<void>;
+  onClearAdmin: (bot: Bot) => void | Promise<void>;
 }) {
   const {
     botForm,
@@ -27,7 +28,8 @@ export function FeishuBotsCard(props: {
     connectionMap,
     apiUrl,
     onProbe,
-    onDelete
+    onDelete,
+    onClearAdmin
   } = props;
   return (
     <Card title="飞书机器人">
@@ -113,6 +115,7 @@ export function FeishuBotsCard(props: {
             <List.Item
               actions={[
                 <Button key="probe" size="small" onClick={() => void onProbe(bot)}>探测</Button>,
+                ...(bot.hasAdmin ? [<Button key="clear-admin" size="small" status="warning" onClick={() => void onClearAdmin(bot)}>清除管理员</Button>] : []),
                 <Button key="delete" size="small" status="danger" onClick={() => void onDelete(bot)}>删除</Button>
               ]}
             >

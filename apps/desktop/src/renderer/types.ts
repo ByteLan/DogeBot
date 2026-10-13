@@ -10,6 +10,7 @@ export type Bot = {
   domain: string;
   botName: string | null;
   botOpenId: string | null;
+  hasAdmin: boolean;
   webhookPath: string;
 };
 

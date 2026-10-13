@@ -195,6 +195,12 @@ export function App() {
     await loadBots();
   };
 
+  const clearAdmin = async (bot: Bot) => {
+    await api(`/api/feishu/bots/${bot.id}/clear-admin`, { method: 'POST' });
+    setMessage('已清除管理员，下一个执行 /set-default 的用户将成为新管理员');
+    await loadBots();
+  };
+
   const beginQrRegistration = async () => {
     try {
       const registration = await api<QrBegin>('/api/feishu/qr-registration/begin', {
@@ -415,6 +421,7 @@ export function App() {
             apiUrl={apiUrl}
             onProbe={probeBot}
             onDelete={deleteBot}
+            onClearAdmin={clearAdmin}
           />
 
           <DouyinMonitorCard

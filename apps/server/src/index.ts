@@ -2,7 +2,7 @@ import cors from 'cors';
 import express from 'express';
 import { authenticate, createToken, requireAuth, type AuthenticatedRequest } from './auth.js';
 import { getRandomMmVideo, redirectRandomMmVideo, setOpenApiInvalidNotifier, uploadDouyinAwemeRecords } from './douyin.js';
-import { createFeishuBotForUser, deleteOwnedFeishuBot, listFeishuBots, probeFeishuBot, publicBot } from './feishu/bot-management.js';
+import { createFeishuBotForUser, deleteOwnedFeishuBot, listFeishuBots, probeFeishuBot, clearFeishuBotAdmin, publicBot } from './feishu/bot-management.js';
 import { feishuWebhook } from './feishu/webhook.js';
 import { startFeishuCronScheduler, stopFeishuCronScheduler } from './feishu/cron.js';
 import { feishuConnectionManager } from './feishu/connection.js';
@@ -53,6 +53,7 @@ app.post('/api/feishu/bots', requireAuth, async (req: AuthenticatedRequest, res)
   res.status(201).json({ bot: publicBot(result.bot) });
 });
 app.post('/api/feishu/bots/:id/probe', requireAuth, probeFeishuBot);
+app.post('/api/feishu/bots/:id/clear-admin', requireAuth, clearFeishuBotAdmin);
 app.post('/api/feishu/qr-registration/begin', requireAuth, async (req: AuthenticatedRequest, res) => {
   try {
     res.json(await beginFeishuQrRegistration(req.body?.domain || 'feishu'));
