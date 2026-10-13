@@ -206,6 +206,9 @@ const defaultCommandColumns = db.prepare('PRAGMA table_info(feishu_bot_default_c
 if (!defaultCommandColumns.some((column) => column.name === 'admin_user_id')) {
   db.exec('ALTER TABLE feishu_bot_default_commands ADD COLUMN admin_user_id TEXT');
 }
+if (!defaultCommandColumns.some((column) => column.name === 'passive_enabled')) {
+  db.exec('ALTER TABLE feishu_bot_default_commands ADD COLUMN passive_enabled INTEGER NOT NULL DEFAULT 1');
+}
 
 const douyinAwemeColumns = db.prepare('PRAGMA table_info(douyin_aweme_records)').all() as Array<{ name: string }>;
 if (!douyinAwemeColumns.some((column) => column.name === 'status')) {

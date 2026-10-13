@@ -2,6 +2,24 @@ import type { PassiveFeature, ProbabilisticFeature, StyleStickerFeature, Passive
 import { STYLE_STICKER_FEATURES } from '../../config.js';
 import { db } from '../../db.js';
 
+// --- Bot-level passive global toggle ---
+
+export function getBotPassiveEnabled(botId: number): boolean {
+  const row = db.prepare(
+    'SELECT passive_enabled FROM feishu_bot_default_commands WHERE bot_id = ?'
+  ).get(botId) as { passive_enabled: number | null } | undefined;
+  // Default to enabled if no row exists or column is null
+  return row?.passive_enabled !== 0;
+}
+
+export function setBotPassiveEnabled(botId: number, enabled: boolean) {
+  db.prepare(
+    'UPDATE feishu_bot_default_commands SET passive_enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE bot_id = ?'
+  ).run(enabled ? 1 : 0, botId);
+}
+
+// --- Per-feature helpers ---
+
 export function styleStickerFeatureName(feature: StyleStickerFeature) {
   return STYLE_STICKER_FEATURES[feature].name;
 }

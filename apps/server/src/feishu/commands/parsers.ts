@@ -1,4 +1,4 @@
-import type { UsersCommand, DouyinCommand, SetDefaultCommand, RevertCommand, AddCronCommand, PassiveToggleCommand, StyleStickerCommand, StyleStickerFeature } from '../../types.js';
+import type { UsersCommand, DouyinCommand, SetDefaultCommand, RevertCommand, AddCronCommand, AdminCommand, PassiveToggleCommand, StyleStickerCommand, StyleStickerFeature } from '../../types.js';
 import { unquoteCommand, readQuotedToken } from '../../utils/text.js';
 import { parseConfigurableRate, STYLE_STICKER_FEATURES } from '../../config.js';
 
@@ -134,6 +134,20 @@ export function parseSetDefaultCommand(text: string): SetDefaultCommand {
   return {
     isSetDefault: true,
     defaultCommand: unquoteCommand(text.slice(commandIndex + '/set-default'.length))
+  };
+}
+
+export function parseAdminCommand(text: string): AdminCommand {
+  const commandIndex = text.indexOf('/admin');
+  if (commandIndex < 0) return { isAdmin: false };
+  const rest = text.slice(commandIndex + '/admin'.length).trim();
+  const shouldEnable = /(?:^|\s|^)--passive-enable(?:\s|$)/.test(rest) || rest === '--passive-enable';
+  const shouldDisable = /(?:^|\s|^)--passive-disable(?:\s|$)/.test(rest) || rest === '--passive-disable';
+  return {
+    isAdmin: true,
+    shouldEnablePassive: shouldEnable,
+    shouldDisablePassive: shouldDisable,
+    hasConflictingAction: shouldEnable && shouldDisable
   };
 }
 

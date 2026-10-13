@@ -2,10 +2,10 @@ import type { FeishuBot, ParsedFeishuMessage, RevertCommand } from '../../types.
 import { passiveInteractionConfig } from '../../config.js';
 import { replyText, replyMedia, replyCard, fetchMessageById, uploadImage, deleteMessage } from '../api.js';
 import { parseFeishuMessage, messageChatId, isThreadMessage, senderIdentity, referencedMessageIds, debugFeishu, mentionedUsers, isManualReverseCommand } from '../message-parser.js';
-import { parseUsersCommand, parseDouyinCommand, parseSetDefaultCommand, parseRevertCommand, isHelpCommand, parseAddCronCommand, parsePassiveToggleCommand, parseStyleStickerCommand } from './parsers.js';
+import { parseUsersCommand, parseDouyinCommand, parseSetDefaultCommand, parseAdminCommand, parseRevertCommand, isHelpCommand, parseAddCronCommand, parsePassiveToggleCommand, parseStyleStickerCommand } from './parsers.js';
 import { sendDouyinMessages, getDefaultCommandRecord, getDefaultCommand, setDefaultCommand, addDouyinSubscription, removeDouyinSubscription } from './douyin.js';
 import { replyUsersCard, softDeleteMentions, upsertMentions, topMentions, listMentions } from './users.js';
-import { getPassiveFeatureSetting, setPassiveFeatureSetting, getStyleStickerSetting, setStyleStickerSetting, passiveFeatureUsage, styleStickerUsage, describePassiveFeatureSetting, describeStyleStickerSetting, formatRatePercent, maxRateForDefault, defaultRateForFeature } from '../passive/settings.js';
+import { getPassiveFeatureSetting, setPassiveFeatureSetting, getStyleStickerSetting, setStyleStickerSetting, getBotPassiveEnabled, setBotPassiveEnabled, passiveFeatureUsage, styleStickerUsage, describePassiveFeatureSetting, describeStyleStickerSetting, formatRatePercent, maxRateForDefault, defaultRateForFeature } from '../passive/settings.js';
 import { resolveAwemeIdFromMessage, botAdminUserId } from '../douyin-guard.js';
 import { searchDouyinByTitle, searchDouyinByTitleRandom, checkDouyinAwemeValidityCached, SEARCH_RESULT_COUNT } from '../../douyin.js';
 import { formatDouyinCheckStages } from '../../douyin-check.js';
@@ -146,6 +146,38 @@ export async function handleFeishuCommand(bot: FeishuBot, event: any, messageId:
     return true;
   }
   if (options.allowSetDefault) {
+    const adminCommand = parseAdminCommand(text);
+    if (adminCommand.isAdmin) {
+      const chatType = String(event?.message?.chat_type || '').trim();
+      if (chatType !== 'p2p') {
+        await replyText(bot, messageId, '/admin 仅限管理员私聊使用');
+        return true;
+      }
+      const sender = senderIdentity(event);
+      const adminUserId = getDefaultCommandRecord(bot.id)?.adminUserId || '';
+      if (!adminUserId) {
+        await replyText(bot, messageId, '当前机器人还没有管理员，请先通过 /set-default 设置管理员。');
+        return true;
+      }
+      if (sender.id !== adminUserId) {
+        await replyText(bot, messageId, '只有该机器人的管理员可以使用 /admin');
+        return true;
+      }
+      if (adminCommand.hasConflictingAction) {
+        await replyText(bot, messageId, '用法：/admin [--passive-enable|--passive-disable]');
+        return true;
+      }
+      if (adminCommand.shouldEnablePassive || adminCommand.shouldDisablePassive) {
+        setBotPassiveEnabled(bot.id, adminCommand.shouldEnablePassive);
+      }
+      const passiveEnabled = getBotPassiveEnabled(bot.id);
+      await replyText(
+        bot,
+        messageId,
+        `🤖 机器人管理面板\n被动互动总开关：${passiveEnabled ? '✅ 已开启' : '❌ 已关闭'}\n\n用法：/admin --passive-enable 或 /admin --passive-disable`
+      );
+      return true;
+    }
     const addCron = parseAddCronCommand(text);
     if (addCron.isAddCron) {
         if (addCron.hasConflictingAction || addCron.hasInvalidDelete) {

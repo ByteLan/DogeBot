@@ -72,6 +72,15 @@ export type SetDefaultCommandResult =
   | { ok: true; assignedAdmin: boolean }
   | { ok: false; adminUserId: string };
 
+export type AdminCommand =
+  | { isAdmin: false }
+  | {
+      isAdmin: true;
+      shouldEnablePassive: boolean;
+      shouldDisablePassive: boolean;
+      hasConflictingAction: boolean;
+    };
+
 export type AddCronCommand = {
   isAddCron: boolean;
   cronExpr: string;

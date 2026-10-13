@@ -4,7 +4,7 @@ import { randomItem, triggerDecision } from '../../utils/random.js';
 import { replyText, replyMedia, sendTextToChat, sendImageToChat, sendStickerToChat, uploadImage } from '../api.js';
 import { messageChatId, messageThreadId, messageMentionsBot } from '../message-parser.js';
 import { uploadStyleStickerImage } from '../cards/style-sticker-card.js';
-import { getPassiveFeatureSetting, getStyleStickerSetting } from './settings.js';
+import { getPassiveFeatureSetting, getStyleStickerSetting, getBotPassiveEnabled } from './settings.js';
 import { generateImitationReply } from './llm-reply.js';
 import { resolvePassiveMediaResource } from '../media/resource-cache.js';
 import { buildMirroredImage } from '../media/mirror.js';
@@ -88,6 +88,7 @@ async function sendPassiveMediaReverse(bot: FeishuBot, event: any, messageId: st
 }
 
 export async function runPassiveInteractions(bot: FeishuBot, event: any, messageId: string, parsedMessage: ParsedFeishuMessage, history: RecentChatMessage[]) {
+  if (!getBotPassiveEnabled(bot.id)) return;
   const config = passiveInteractionConfig();
   const tasks: Array<Promise<void>> = [];
   const chatId = messageChatId(event?.message);
