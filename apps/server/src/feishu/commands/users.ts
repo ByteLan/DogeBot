@@ -4,6 +4,7 @@ import { feishuSdkClient } from '../client.js';
 import { createChatMessage } from '../api.js';
 
 const USERS_CARD_PERSON_LIST_CHUNK_SIZE = 100;
+const USERS_CARD_MAX_RECORDS = 1000;
 const CARD_REFERENCE_READY_DELAY_MS = 1000;
 
 function sleep(ms: number) {
@@ -125,6 +126,16 @@ function chunkUsersRecords(records: AtRecord[]) {
   return chunks;
 }
 
+/** 按每张卡片最多 USERS_CARD_MAX_RECORDS 条拆成多组,至少返回一组(空记录时返回 `[[]]`) */
+function splitIntoCardGroups(records: AtRecord[]): AtRecord[][] {
+  if (records.length === 0) return [[]];
+  const groups: AtRecord[][] = [];
+  for (let i = 0; i < records.length; i += USERS_CARD_MAX_RECORDS) {
+    groups.push(records.slice(i, i + USERS_CARD_MAX_RECORDS));
+  }
+  return groups;
+}
+
 async function createCardEntity(client: Awaited<ReturnType<typeof feishuSdkClient>>, card: object) {
   const createResult = await client.cardkit.v1.card.create({
     data: {
@@ -177,41 +188,89 @@ export async function replyUsersCard(
   replyMarkdownInThread = true
 ) {
   const client = await feishuSdkClient(bot);
-  const chunks = chunkUsersRecords(records);
+  const cardGroups = splitIntoCardGroups(records);
 
-  const personListCardId = await createCardEntity(client, usersPersonListCard(records));
+  // --- Person List 卡片 ---
+  const firstPlChunks = chunkUsersRecords(cardGroups[0]);
+  const personListCardId = await createCardEntity(client, usersPersonListCard(cardGroups[0]));
   const personListReply = await replyCardReference(client, messageId, personListCardId, replyInThread);
-  await appendUsersCardElements(client, personListCardId, chunks, (chunk, index) => [
+  await appendUsersCardElements(client, personListCardId, firstPlChunks, (chunk, index) => [
     usersDividerElement(index),
     usersPersonListElement(chunk, index)
   ]);
 
   const personListMessageId = personListReply.data?.message_id;
   if (!personListMessageId) throw new Error('failed to get person list message id');
-  const markdownCardId = await createCardEntity(client, usersMarkdownCard(records));
+
+  // 超出 1000 条的 person list 卡片 → reply in thread
+  for (let g = 1; g < cardGroups.length; g++) {
+    const chunks = chunkUsersRecords(cardGroups[g]);
+    const cardId = await createCardEntity(client, usersPersonListCard(cardGroups[g]));
+    await replyCardReference(client, personListMessageId, cardId, true);
+    await appendUsersCardElements(client, cardId, chunks, (chunk, index) => [
+      usersDividerElement(index),
+      usersPersonListElement(chunk, index)
+    ]);
+  }
+
+  // --- Markdown 卡片 ---
+  const firstMdChunks = chunkUsersRecords(cardGroups[0]);
+  const markdownCardId = await createCardEntity(client, usersMarkdownCard(cardGroups[0]));
   await replyCardReference(
     client,
     replyMarkdownInThread ? personListMessageId : messageId,
     markdownCardId,
     replyMarkdownInThread
   );
-  await appendUsersCardElements(client, markdownCardId, chunks, (chunk, index) => [usersMarkdownElement(chunk, index)]);
+  await appendUsersCardElements(client, markdownCardId, firstMdChunks, (chunk, index) => [usersMarkdownElement(chunk, index)]);
+
+  // 超出 1000 条的 markdown 卡片 → reply in thread
+  for (let g = 1; g < cardGroups.length; g++) {
+    const chunks = chunkUsersRecords(cardGroups[g]);
+    const cardId = await createCardEntity(client, usersMarkdownCard(cardGroups[g]));
+    await replyCardReference(client, personListMessageId, cardId, true);
+    await appendUsersCardElements(client, cardId, chunks, (chunk, index) => [usersMarkdownElement(chunk, index)]);
+  }
 }
 
 export async function sendUsersCardToChat(bot: FeishuBot, chatId: string, records: AtRecord[]) {
   const client = await feishuSdkClient(bot);
-  const chunks = chunkUsersRecords(records);
+  const cardGroups = splitIntoCardGroups(records);
 
-  const personListCardId = await createCardEntity(client, usersPersonListCard(records));
+  // --- Person List 卡片 ---
+  const personListCardId = await createCardEntity(client, usersPersonListCard(cardGroups[0]));
   const personListMessageId = await sendCardReferenceToChat(bot, chatId, personListCardId);
-  await appendUsersCardElements(client, personListCardId, chunks, (chunk, index) => [
+  const firstPlChunks = chunkUsersRecords(cardGroups[0]);
+  await appendUsersCardElements(client, personListCardId, firstPlChunks, (chunk, index) => [
     usersDividerElement(index),
     usersPersonListElement(chunk, index)
   ]);
 
-  const markdownCardId = await createCardEntity(client, usersMarkdownCard(records));
+  // 超出 1000 条的 person list 卡片 → reply in thread
+  for (let g = 1; g < cardGroups.length; g++) {
+    const chunks = chunkUsersRecords(cardGroups[g]);
+    const cardId = await createCardEntity(client, usersPersonListCard(cardGroups[g]));
+    await replyCardReference(client, personListMessageId, cardId, true);
+    await appendUsersCardElements(client, cardId, chunks, (chunk, index) => [
+      usersDividerElement(index),
+      usersPersonListElement(chunk, index)
+    ]);
+  }
+
+  // --- Markdown 卡片 ---
+  const markdownCardId = await createCardEntity(client, usersMarkdownCard(cardGroups[0]));
   const markdownReply = await replyCardReference(client, personListMessageId, markdownCardId, true);
-  await appendUsersCardElements(client, markdownCardId, chunks, (chunk, index) => [usersMarkdownElement(chunk, index)]);
+  const firstMdChunks = chunkUsersRecords(cardGroups[0]);
+  await appendUsersCardElements(client, markdownCardId, firstMdChunks, (chunk, index) => [usersMarkdownElement(chunk, index)]);
+
+  // 超出 1000 条的 markdown 卡片 → reply in thread
+  for (let g = 1; g < cardGroups.length; g++) {
+    const chunks = chunkUsersRecords(cardGroups[g]);
+    const cardId = await createCardEntity(client, usersMarkdownCard(cardGroups[g]));
+    await replyCardReference(client, personListMessageId, cardId, true);
+    await appendUsersCardElements(client, cardId, chunks, (chunk, index) => [usersMarkdownElement(chunk, index)]);
+  }
+
   const markdownMessageId = String(markdownReply.data?.message_id || '').trim();
   if (!markdownMessageId) throw new Error('failed to get users markdown card message id');
   return { personListMessageId, markdownMessageId };
