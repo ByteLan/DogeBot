@@ -44,6 +44,13 @@ export function parsePositiveNumber(raw: string | undefined, fallback: number) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+/** Unset/invalid overrides inherit generator defaults; zero is valid for padding/stroke. */
+export function parseOptionalRenderNumber(raw: string | undefined, allowZero = false) {
+  if (!raw?.trim()) return undefined;
+  const value = Number(raw);
+  return Number.isFinite(value) && (allowZero ? value >= 0 : value > 0) ? value : undefined;
+}
+
 export function parseBooleanFlag(raw: string | undefined, fallback = false) {
   if (!raw?.trim()) return fallback;
   return ['1', 'true', 'yes', 'on'].includes(raw.trim().toLowerCase());
@@ -102,22 +109,10 @@ export const stickerRenderConfig = {
   concurrency: parsePositiveInt(process.env.DOGEBOT_STYLE_STICKER_RENDER_CONCURRENCY, 2),
   queueMax: parsePositiveInt(process.env.DOGEBOT_STYLE_STICKER_RENDER_QUEUE_MAX, 20),
   timeoutMs: parsePositiveInt(process.env.DOGEBOT_STYLE_STICKER_RENDER_TIMEOUT_MS, 20_000),
-  /**
-   * 以下参数覆盖 @syru/byted-sticker-generator 的默认值，
-   * 使新包出图尺寸和视觉效果对齐旧版 legacy 渲染器。
-   * 包内 OUTPUT_FONT_SIZE=72、OUTPUT_MAX_PIXELS=512² 是硬编码常量，
-   * 只能通过 outputScale 间接补偿尺寸。
-   */
-  /** 输出倍率乘数，补偿包内固定的 72px 基准字高；3 ≈ legacy 的 220px 效果 */
-  outputScaleMultiplier: parsePositiveNumber(process.env.DOGEBOT_STYLE_STICKER_OUTPUT_SCALE_MULTIPLIER, 2),
-  /** 行间距倍率，legacy 为 1.1，包默认 1 */
-  lineHeight: parsePositiveNumber(process.env.DOGEBOT_STYLE_STICKER_LINE_HEIGHT, 1.2),
-  /** 内部超采样倍率，legacy 为 1（无超采样），包默认 1.5 */
-  antialiasScale: parsePositiveNumber(process.env.DOGEBOT_STYLE_STICKER_ANTIALIAS_SCALE, 1),
-  /** 左右留白 px，legacy 为 8，包默认 4 */
-  paddingX: parsePositiveInt(process.env.DOGEBOT_STYLE_STICKER_PADDING_X, 4),
-  /** 上下留白 px，legacy 为 24，包默认 8 */
-  paddingY: parsePositiveInt(process.env.DOGEBOT_STYLE_STICKER_PADDING_Y, 8),
-  /** 描边厚度 px，legacy 统一 20，包对 bs 默认 14 */
-  outlineStrokeWidth: parsePositiveInt(process.env.DOGEBOT_STYLE_STICKER_OUTLINE_STROKE_WIDTH, 14)
+  // Only explicit visual overrides are passed; the generator owns per-flavor defaults.
+  lineHeight: parseOptionalRenderNumber(process.env.DOGEBOT_STYLE_STICKER_LINE_HEIGHT),
+  antialiasScale: parseOptionalRenderNumber(process.env.DOGEBOT_STYLE_STICKER_ANTIALIAS_SCALE),
+  paddingX: parseOptionalRenderNumber(process.env.DOGEBOT_STYLE_STICKER_PADDING_X, true),
+  paddingY: parseOptionalRenderNumber(process.env.DOGEBOT_STYLE_STICKER_PADDING_Y, true),
+  outlineStrokeWidth: parseOptionalRenderNumber(process.env.DOGEBOT_STYLE_STICKER_OUTLINE_STROKE_WIDTH, true)
 };
