@@ -114,7 +114,7 @@ pnpm dev
 
 ## 宝塔面板部署
 
-推荐用宝塔的 Node 项目或 PM2 管理器长期运行 `apps/server/dist/index.js`。飞书事件接收走服务端主动发起的 WebSocket 长连接，不要求服务器有公网入口；但桌面客户端如果不在同一台机器上，需要能访问服务端 HTTP API。
+推荐用宝塔的 Node 项目或 PM2 管理器长期运行 `apps/server/dist/src/index.js`。飞书事件接收走服务端主动发起的 WebSocket 长连接，不要求服务器有公网入口；但桌面客户端如果不在同一台机器上，需要能访问服务端 HTTP API。
 
 服务器准备：
 
@@ -140,8 +140,8 @@ DOGEBOT_DATA_DIR=/home/Code/DogeBot-data pnpm add-user admin 'change-me'
 宝塔 Node 项目配置：
 
 - 项目目录：`/home/Code/DogeBot/apps/server`
-- 启动文件：`dist/index.js`
-- 启动命令：`node dist/index.js`
+- 启动文件：`dist/src/index.js`
+- 启动命令：`node dist/src/index.js`
 - 运行端口：`3000`，或自定义后同步设置 `PORT`
 - Node 版本：推荐 `22.x`（至少 `22.13.0`）或 `24` 及以上；`23.x` 至少需 `23.4.0`。宝塔 / PM2 的运行版本也必须满足此要求。
 - 环境变量：`PORT=3000`
@@ -157,7 +157,7 @@ PORT=3000 \
 DOGEBOT_DATA_DIR=/home/Code/DogeBot-data \
 DOGEBOT_AUTH_SECRET='<一段足够长的随机字符串>' \
 DOGEBOT_FEISHU_DEBUG=0 \
-pm2 start dist/index.js --name dogebot-server --update-env
+pm2 start dist/src/index.js --name dogebot-server --update-env
 pm2 save
 ```
 
