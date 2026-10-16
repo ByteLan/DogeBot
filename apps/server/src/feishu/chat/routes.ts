@@ -10,6 +10,7 @@ import { uploadImage } from '../api.js';
 import { publishMessageResult, subscribeChatEvents } from './events.js';
 import { ChatAccessError, chatSummary, getChat, getHistory, getMessage, readFeishu } from './history.js';
 import { normalizeMessage, record, string } from './normalize.js';
+import { RecallMessageError, recallOwnMessage } from './recall.js';
 import type { ChatEvent } from './types.js';
 
 type ChatRequest = AuthenticatedRequest & { chatBot?: FeishuBot };
@@ -38,14 +39,15 @@ function operation(handler: (req: ChatRequest, res: Response, signal: AbortSigna
       if (res.destroyed || controller.signal.aborted) return;
       if (res.headersSent) { res.destroy(); return; }
       const upstream = error instanceof FeishuApiError ? error : undefined;
+      const recallError = error instanceof RecallMessageError ? error : undefined;
       const resourceUnavailable = error instanceof ChatAccessError;
       const unavailable = upstream && [230002, 230013, 230017, 230027, 231203].includes(upstream.code);
       const limited = upstream?.httpStatus === 429 || upstream?.code === 99991400;
-      const status = error instanceof InputError ? 400 : unavailable || resourceUnavailable ? 403 : limited ? 429 : 502;
+      const status = recallError?.status ?? (error instanceof InputError ? 400 : unavailable || resourceUnavailable ? 403 : limited ? 429 : 502);
       res.status(status).json({ error: error instanceof Error ? error.message : '飞书请求失败',
-        code: unavailable ? 'CHAT_UNAVAILABLE' : resourceUnavailable ? 'RESOURCE_UNAVAILABLE' : limited ? 'RATE_LIMITED' : 'CHAT_REQUEST_FAILED',
-        upstreamCode: upstream?.code, retryAfterMs: limited ? 2000 : undefined });
-      console.error('[feishu] chat request failed', { botId: req.chatBot?.id, status, upstreamCode: upstream?.code,
+        code: recallError ? 'RECALL_REJECTED' : unavailable ? 'CHAT_UNAVAILABLE' : resourceUnavailable ? 'RESOURCE_UNAVAILABLE' : limited ? 'RATE_LIMITED' : 'CHAT_REQUEST_FAILED',
+        upstreamCode: recallError?.upstreamCode ?? upstream?.code, retryAfterMs: limited ? 2000 : undefined });
+      console.error('[feishu] chat request failed', { botId: req.chatBot?.id, status, upstreamCode: recallError?.upstreamCode ?? upstream?.code,
         error: error instanceof Error ? error.message : String(error) });
     }).finally(() => res.removeListener('close', abort));
   };
@@ -127,6 +129,10 @@ export function createFeishuChatRouter() {
   chats.get('/:chatId/threads/:threadId/messages', history);
   chats.get('/:chatId/messages/:messageId', operation(async (req, res, signal) => {
     res.json({ message: await getMessage(req.chatBot!, identifier(req.params.chatId), identifier(req.params.messageId), signal) });
+  }));
+  chats.delete('/:chatId/messages/:messageId', operation(async (req, res, signal) => {
+    const result = await recallOwnMessage(req.chatBot!, identifier(req.params.chatId), identifier(req.params.messageId), signal);
+    if (!res.destroyed) res.json(result);
   }));
   chats.post('/:chatId/messages', operation(async (req, res, signal) => {
     const bot = req.chatBot!;

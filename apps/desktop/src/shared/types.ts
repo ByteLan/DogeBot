@@ -1,4 +1,18 @@
-// 在 main 与 renderer 之间共享的抖音监听相关类型。
+// 在 main 与 renderer 之间共享的窗口与抖音监听类型。
+
+export type DesktopWindowState = {
+  maximized: boolean;
+  focused: boolean;
+};
+
+export type DesktopWindowBridge = {
+  platform: 'darwin' | 'win32' | 'linux' | 'other';
+  minimize: () => Promise<void>;
+  toggleMaximize: () => Promise<void>;
+  close: () => Promise<void>;
+  getState: () => Promise<DesktopWindowState>;
+  onStateChanged: (listener: (state: DesktopWindowState) => void) => () => void;
+};
 
 // 主进程接收的单任务配置（每任务自持 partition / 定时 / 显隐 / 窗口回收策略）。
 export type DouyinTaskConfig = {

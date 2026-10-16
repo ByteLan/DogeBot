@@ -1,8 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { Alert, Avatar, Button, Checkbox, Dropdown, Empty, Image, Input, Menu, Modal, Select, Spin, Tooltip } from '@arco-design/web-react';
+import { IconArrowDown, IconCheck, IconClockCircle, IconClose, IconCopy, IconDown, IconImage, IconMessage, IconMore, IconRefresh, IconReply, IconRight, IconRobot, IconSend, IconUndo, IconUserGroup } from '@arco-design/web-react/icon';
+import type { RefTextAreaType } from '@arco-design/web-react/es/Input/textarea';
 import type { Bot } from '../../types';
-import type { ChatMessage, SendMessageInput } from './types';
+import type { ChatMessage, OwnMessageAlignment, SendMessageInput } from './types';
 import type { ChatEntry, Timeline } from './cache';
-import { MAX_CACHED_CHATS } from './cache';
 import { useChat, type ChatController } from './use-chat';
 import './chat.css';
 
@@ -11,6 +13,7 @@ function object(value: unknown): Record<string, unknown> {
 }
 
 export function messageText(message: ChatMessage) {
+  if (message.deleted) return '消息已撤回';
   let nodes = 0;
   const read = (value: unknown, depth: number): string => {
     if (++nodes > 200 || depth > 10) return '';
@@ -42,11 +45,36 @@ function imageKeys(value: unknown) {
   return [...keys];
 }
 
+const avatarColors = ['#4c83ed', '#36a590', '#8e6bd1', '#d58b42', '#5889ad'];
+function avatarColor(name: string) {
+  return avatarColors[Array.from(name).reduce((sum, character) => sum + character.charCodeAt(0), 0) % avatarColors.length];
+}
+
+function senderName(message: ChatMessage, entry: ChatEntry, bot?: Bot) {
+  if (message.sender.id && (message.sender.id === bot?.appId || message.sender.id === bot?.botOpenId)) return bot?.botName || bot?.name || '机器人';
+  return message.sender.displayName || entry.memberNames.get(message.sender.id)
+    || (message.sender.type === 'app' ? '机器人' : message.sender.id ? `成员 ${message.sender.id.slice(-6)}` : '群成员');
+}
+
+function timeLabel(time: number) {
+  const date = new Date(time);
+  const today = new Date();
+  const yesterday = new Date(); yesterday.setDate(today.getDate() - 1);
+  const day = date.toDateString() === today.toDateString() ? '今天'
+    : date.toDateString() === yesterday.toDateString() ? '昨天'
+    : date.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', ...(date.getFullYear() === today.getFullYear() ? {} : { year: 'numeric' }) });
+  return `${day} ${date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })}`;
+}
+
+function threadReply(entry: ChatEntry, reply: SendMessageInput['reply']) {
+  return reply?.mode === 'thread' && Boolean(entry.openedThread && (reply.messageId === entry.openedThread.rootMessageId
+    || entry.messages.get(reply.messageId)?.threadId === entry.openedThread.threadId));
+}
+
 function MessageImage({ controller, entry, message, imageKey }: { controller: ChatController; entry: ChatEntry; message: ChatMessage; imageKey: string }) {
   const key = `${entry.key}:${message.messageId}:${imageKey}`;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [expanded, setExpanded] = useState(false);
   const host = useRef<HTMLDivElement>(null);
   const request = useRef<AbortController | undefined>(undefined);
   const mounted = useRef(true);
@@ -74,46 +102,75 @@ function MessageImage({ controller, entry, message, imageKey }: { controller: Ch
     return () => { mounted.current = false; observer.disconnect(); request.current?.abort(); };
   }, [key]);
   return <div ref={host} className="chat-message-image">
-    {url ? <button type="button" className="chat-image-button" onClick={() => setExpanded(true)}><img src={url} alt="消息图片" loading="lazy" onError={() => setError('预览已释放，请重新加载')} /></button>
-      : <button type="button" disabled={loading} onClick={() => void load()}>{loading ? '加载图片…' : error || '点击加载图片'}</button>}
-    {expanded && url && <div className="chat-image-overlay" role="dialog" aria-label="图片预览" onClick={() => setExpanded(false)}>
-      <button type="button" onClick={() => setExpanded(false)}>关闭预览</button><img src={url} alt="消息图片大图" />
-    </div>}
+    {url ? <Image className="chat-image" src={url} alt="消息图片" loader={<Spin size={16} />} onError={() => setError('图片预览已释放，请重新加载')} />
+      : <Button type="text" size="small" icon={<IconImage />} loading={loading} onClick={() => void load()}>{error || '加载图片'}</Button>}
   </div>;
 }
 
-function MessageItem({ controller, entry, message, bot, onReference }: {
+function MessageItem({ controller, entry, message, bot, onReference, onRecall, ownMessageAlignment, grouped = false, inThread = false }: {
   controller: ChatController; entry: ChatEntry; message: ChatMessage; bot?: Bot; onReference: (id: string) => void;
+  onRecall: (message: ChatMessage) => void; ownMessageAlignment: OwnMessageAlignment; grouped?: boolean; inThread?: boolean;
 }) {
-  const self = message.sender.id === bot?.appId || message.sender.id === bot?.botOpenId;
-  const label = self ? bot?.botName || bot?.name : message.sender.displayName || entry.memberNames.get(message.sender.id) || (message.sender.type === 'app' ? `机器人 ${message.sender.id}` : message.sender.id || '未知成员');
+  const [copied, setCopied] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(copyTimer.current), []);
+  const self = Boolean(message.sender.type === 'app' && message.sender.id && (message.sender.id === bot?.appId || message.sender.id === bot?.botOpenId));
+  const side = self ? ownMessageAlignment : 'left';
+  const label = senderName(message, entry, bot);
   const quote = (mode: 'chat' | 'thread') => {
-    entry.reply = { messageId: message.messageId, mode }; controller.cache.changed();
+    entry.reply = { messageId: message.messageId, mode };
+    if (mode === 'thread') {
+      if (message.threadId) controller.openThread(entry, message);
+      else entry.openedThread = undefined;
+    }
+    controller.cache.changed();
   };
-  return <article className={`chat-message ${self ? 'chat-message-self' : ''}`} data-message-id={message.messageId}>
-    <header><strong>{label}</strong><time>{message.createTimeMs ? new Date(message.createTimeMs).toLocaleString('zh-CN', { hour12: false }) : '时间待同步'}</time></header>
-    <div className="chat-message-body">
-      {message.deleted ? <span className="chat-muted">消息已撤回</span> : <>
-        {message.parentId && <button className="chat-reference" type="button" onClick={() => onReference(message.parentId!)}>查看引用消息</button>}
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(messageText(message));
+      clearTimeout(copyTimer.current); setCopied(true);
+      copyTimer.current = setTimeout(() => setCopied(false), 1500);
+    }
+    catch { controller.setNotice('复制失败，请检查剪贴板权限'); }
+  };
+  if (message.msgType === 'system') return <div className="chat-system-message" data-message-id={message.messageId}>{message.deleted ? '消息已撤回' : messageText(message) === '[system]' ? '一条系统消息' : messageText(message)}</div>;
+  return <article className={`chat-message ${self ? 'chat-message-self' : ''} ${grouped ? 'chat-message-grouped' : ''}`} data-side={side} data-message-id={message.messageId}>
+    <div className="chat-message-avatar">{!grouped && <Tooltip content={label}><Avatar size={32} shape="square" style={{ backgroundColor: self ? '#4c83ed' : avatarColor(label) }}>{message.sender.type === 'app' ? <IconRobot /> : Array.from(label)[0]}</Avatar></Tooltip>}</div>
+    <div className="chat-message-content">
+      {!grouped && <header><strong title={message.sender.id}>{label}</strong></header>}
+      <div className={`chat-message-body ${message.deleted ? 'chat-message-deleted' : ''}`} tabIndex={message.deleted ? -1 : 0} aria-label={`${label}的消息`}>
+        {message.deleted ? <span className="chat-muted">消息已撤回</span> : <>
+        {message.parentId && <Button className="chat-reference" type="text" size="mini" icon={<IconReply />} onClick={() => onReference(message.parentId!)}>
+          {entry.messages.has(message.parentId) ? messageText(entry.messages.get(message.parentId)!).slice(0, 72) : '引用一条消息'}</Button>}
         {(message.msgType !== 'image' || message.contentState !== 'full') && <div className="chat-message-text">{messageText(message).split(/(https?:\/\/[^\s<>]+)/g).map((part, i) => /^https?:\/\//.test(part)
           ? <a key={i} href={part} target="_blank" rel="noreferrer">{part}</a> : part)}</div>}
         {imageKeys(message.content).map((key) => <MessageImage key={key} controller={controller} entry={entry} message={message} imageKey={key} />)}
-        <div className="chat-message-actions">
-          <button type="button" onClick={() => quote(message.threadId || entry.chat.chatMode === 'topic' ? 'thread' : 'chat')}>引用回复</button>
-          <button type="button" onClick={() => quote('thread')}>话题回复</button>
-          {message.threadId && <button type="button" onClick={() => controller.openThread(entry, message)}>查看话题</button>}
-          {message.msgType !== 'image' && <button type="button" onClick={() => {
-            if (!navigator.clipboard) { controller.setNotice('当前环境无法访问剪贴板'); return; }
-            void navigator.clipboard.writeText(messageText(message)).catch(() => controller.setNotice('复制失败'));
-          }}>复制</button>}
+        <div className="chat-message-sidecar" data-open={moreOpen}>
+        <div className="chat-message-actions" role="toolbar" aria-label="消息操作">
+          <Tooltip content="引用回复"><Button type="text" size="mini" icon={<IconReply />} aria-label="引用回复" onClick={() => quote(inThread || entry.chat.chatMode === 'topic' ? 'thread' : 'chat')} /></Tooltip>
+          {message.msgType !== 'image' && <Tooltip content={copied ? '已复制' : '复制'}><Button type="text" size="mini" icon={copied ? <IconCheck /> : <IconCopy />} aria-label="复制消息" onClick={() => void copy()} /></Tooltip>}
+          {self && <Tooltip content="撤回"><Button type="text" size="mini" icon={<IconUndo />} aria-label="撤回消息" loading={controller.isRecalling(entry, message.messageId)} onClick={() => onRecall(message)} /></Tooltip>}
+          <Dropdown trigger="click" position={side === 'right' ? 'bl' : 'br'} onVisibleChange={setMoreOpen} droplist={<Menu onClickMenuItem={(key) => {
+            if (key === 'reply') quote('thread');
+            if (key === 'open') controller.openThread(entry, message);
+          }}><Menu.Item key="reply"><IconMessage /> 话题回复</Menu.Item>{message.threadId && <Menu.Item key="open"><IconMessage /> 查看话题</Menu.Item>}</Menu>}>
+            <Button type="text" size="mini" icon={<IconMore />} aria-label="更多消息操作" />
+          </Dropdown>
+        </div>
+        {message.createTimeMs > 0 && <time title={new Date(message.createTimeMs).toLocaleString('zh-CN')}>
+          {new Date(message.createTimeMs).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })}</time>}
         </div>
       </>}
+      </div>
+      {message.threadId && !message.deleted && !inThread && <Button type="text" size="mini" className="chat-thread-link" icon={<IconMessage />} onClick={() => controller.openThread(entry, message)}>查看话题 <IconRight /></Button>}
     </div>
   </article>;
 }
 
-function MessageList({ controller, entry, view, bot, thread = false }: {
-  controller: ChatController; entry: ChatEntry; view: Timeline; bot?: Bot; thread?: boolean;
+function MessageList({ controller, entry, view, bot, onRecall, ownMessageAlignment, thread = false }: {
+  controller: ChatController; entry: ChatEntry; view: Timeline; bot?: Bot;
+  onRecall: (entry: ChatEntry, message: ChatMessage) => void; ownMessageAlignment: OwnMessageAlignment; thread?: boolean;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const contentHost = useRef<HTMLDivElement>(null);
@@ -159,14 +216,22 @@ function MessageList({ controller, entry, view, bot, thread = false }: {
   };
   const showReference = (id: string) => {
     const existing = [...host.current?.querySelectorAll<HTMLElement>('[data-message-id]') ?? []].find((item) => item.dataset.messageId === id);
-    if (existing) { existing.scrollIntoView({ block: 'center' }); return; }
+    if (existing) {
+      existing.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      existing.querySelector('.chat-message-body')?.animate([{ boxShadow: '0 0 0 3px #a7c5ff' }, { boxShadow: '0 0 0 0 transparent' }], { duration: 1500 });
+      return;
+    }
     setReference(id); void controller.detail(entry, id);
   };
-  return <>
-    {view.error && <div className="chat-error" role="alert">{view.error}</div>}
-    {reference && <aside className="chat-quoted-detail"><button type="button" onClick={() => setReference(undefined)}>关闭引用</button>
-      {entry.messages.has(reference) ? messageText(entry.messages.get(reference)!) : '正在读取引用消息…'}
-    </aside>}
+  const referenceMessage = reference ? entry.messages.get(reference) : undefined;
+  return <div className="chat-timeline-stage">
+    {view.error && <Alert className="chat-error" type="error" content={view.error} />}
+    <Modal visible={Boolean(reference)} title="引用的消息" footer={null} onCancel={() => setReference(undefined)} className="chat-reference-modal">
+      {referenceMessage ? <><div className="chat-reference-sender">{senderName(referenceMessage, entry, bot)}</div>
+        <div className="chat-message-text">{referenceMessage.deleted ? '消息已撤回' : messageText(referenceMessage)}</div>
+        {!referenceMessage.deleted && imageKeys(referenceMessage.content).map((key) => <MessageImage key={key} controller={controller} entry={entry} message={referenceMessage} imageKey={key} />)}</>
+        : <Spin tip="正在读取引用消息…" />}
+    </Modal>
     <div className="chat-message-list" ref={host} onScroll={() => {
       const element = host.current;
       if (!element) return;
@@ -177,22 +242,39 @@ function MessageList({ controller, entry, view, bot, thread = false }: {
       if (first?.dataset.messageId) entry.scrollAnchors.set(scrollKey, { id: first.dataset.messageId, offset: first.getBoundingClientRect().top - top });
     }}>
       <div className="chat-history-action">
-        {last?.hasMore && <button type="button" onClick={older} disabled={view.loading || !last.nextPageToken}>加载更早消息</button>}
-        {view.loading && <span role="status">正在读取消息…</span>}
+        {last?.hasMore && <Button type="text" size="mini" onClick={older} disabled={view.loading || !last.nextPageToken}>加载更早消息</Button>}
+        {view.loading && <Spin size={14} tip="正在读取消息" />}
         {!view.loading && view.pages.length > 0 && !last?.hasMore && <span>已到可读取的最早消息</span>}
       </div>
-      {!messages.length && !view.loading && <div className="chat-empty">暂无可显示消息</div>}
-      <div ref={contentHost}>{messages.map((message) => <MessageItem key={message.messageId} controller={controller} entry={entry} message={message} bot={bot} onReference={showReference} />)}</div>
+      {!messages.length && !view.loading && <Empty className="chat-empty" description="暂无消息，发送第一条消息吧" />}
+      <div className="chat-message-items" ref={contentHost}>{messages.map((message, index) => {
+        const previous = messages[index - 1];
+        const separate = Boolean(message.createTimeMs && (!previous || message.createTimeMs - previous.createTimeMs >= 5 * 60_000
+          || new Date(message.createTimeMs).toDateString() !== new Date(previous.createTimeMs).toDateString()));
+        const grouped = !separate && Boolean(message.sender.id && previous?.sender.id === message.sender.id && previous.msgType !== 'system');
+        return <React.Fragment key={message.messageId}>
+          {separate && <div className="chat-time-divider">{timeLabel(message.createTimeMs)}</div>}
+          <MessageItem controller={controller} entry={entry} message={message} bot={bot} onReference={showReference} onRecall={(message) => onRecall(entry, message)} ownMessageAlignment={ownMessageAlignment} grouped={grouped} inThread={thread} />
+        </React.Fragment>;
+      })}</div>
     </div>
-  </>;
+    {!thread && (entry.needsResync || entry.newMessages > 0 || view.newerTruncated) && <Button className="chat-new-hint" size="small" icon={<IconArrowDown />} onClick={() => controller.latest(entry)}>
+      {entry.newMessages > 0 ? `${entry.newMessages} 条新消息` : '返回最新消息'}</Button>}
+  </div>;
 }
 
-function Composer({ controller, entry, bot }: { controller: ChatController; entry: ChatEntry; bot?: Bot }) {
+function Composer({ controller, entry, bot, thread = false }: { controller: ChatController; entry: ChatEntry; bot?: Bot; thread?: boolean }) {
   const [file, setFile] = useState<File>();
   const [uploading, setUploading] = useState(false);
   const [preview, setPreview] = useState<string>();
+  const [threadDraft, setThreadDraft] = useState('');
+  const input = useRef<RefTextAreaType>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
   const uploadingController = useRef<AbortController | undefined>(undefined);
   const mounted = useRef(true);
+  const draft = thread ? threadDraft : entry.draft;
+  const reply = entry.reply && (thread ? threadReply(entry, entry.reply) : !threadReply(entry, entry.reply)) ? entry.reply : undefined;
+  useEffect(() => { if (reply) input.current?.focus(); }, [reply?.messageId, reply?.mode]);
   useEffect(() => {
     if (!file) { setPreview(undefined); return; }
     const url = URL.createObjectURL(file); setPreview(url);
@@ -207,85 +289,134 @@ function Composer({ controller, entry, bot }: { controller: ChatController; entr
     setFile(chosen);
   };
   const submit = async () => {
-    if (uploading || entry.pending.size >= 3 || !entry.draft.trim() && !file) return;
+    if (uploading || entry.pending.size >= 3 || !draft.trim() && !file) return;
+    const target = reply ?? (thread && entry.openedThread ? { messageId: entry.openedThread.rootMessageId, mode: 'thread' as const } : undefined);
     const controllerAbort = new AbortController(); uploadingController.current = controllerAbort;
     entry.controllers.add(controllerAbort);
     try {
       setUploading(true);
       const message: SendMessageInput['message'] = file
         ? { type: 'image', imageKey: (await controller.api.upload(entry.chat.botId, entry.chat.chatId, file, controllerAbort.signal)).imageKey }
-        : { type: 'text', text: entry.draft.trim() };
+        : { type: 'text', text: draft.trim() };
       if (!controller.cache.current(entry) || controllerAbort.signal.aborted) return;
-      const reply = entry.reply ?? (entry.openedThread ? { messageId: entry.openedThread.rootMessageId, mode: 'thread' as const } : undefined);
-      const input: SendMessageInput = { clientRequestId: crypto.randomUUID(), message, reply };
-      if (!file) entry.draft = '';
+      const input: SendMessageInput = { clientRequestId: crypto.randomUUID(), message, reply: target };
+      if (!file) { if (thread) setThreadDraft(''); else entry.draft = ''; }
       setFile(undefined);
       await controller.send(entry, input);
     } catch (error) { if (!controllerAbort.signal.aborted) controller.report(error, entry); }
-    finally { entry.controllers.delete(controllerAbort); if (mounted.current) setUploading(false); }
+    finally { entry.controllers.delete(controllerAbort); if (mounted.current) { setUploading(false); input.current?.focus(); } }
   };
-  return <div className="chat-composer" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); choose(event.dataTransfer.files[0]); }}>
-    <div className="chat-composer-heading">以 <strong>{bot?.botName || bot?.name || '机器人'}</strong> 的身份发送
-      {entry.openedThread && <span> · 当前话题</span>}
-    </div>
-    {entry.reply && <div className="chat-reply-target"><span>{entry.reply.mode === 'thread' ? '话题回复' : '引用回复'}：{entry.messages.get(entry.reply.messageId) ? messageText(entry.messages.get(entry.reply.messageId)!).slice(0, 100) : entry.reply.messageId}</span>
-      <button type="button" onClick={() => { entry.reply = undefined; controller.cache.changed(); }}>取消</button></div>}
-    {preview && <div className="chat-attachment"><img src={preview} alt="待发送图片" /><button type="button" onClick={() => setFile(undefined)}>移除图片</button><span>图片单独发送，输入文字作为草稿保留</span></div>}
-    <textarea aria-label="聊天消息" placeholder="输入消息，Enter 发送，Shift+Enter 换行；支持粘贴图片" maxLength={4000} value={entry.draft}
-      onChange={(event) => { entry.draft = event.target.value; controller.cache.changed(); }}
+  const pending = [...entry.pending.entries()].filter(([, item]) => thread ? threadReply(entry, item.input.reply) : !threadReply(entry, item.input.reply));
+  return <div className={`chat-composer ${thread ? 'chat-thread-composer' : ''}`} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); choose(event.dataTransfer.files[0]); }}>
+    {reply && <div className="chat-reply-target"><IconReply /><div><strong>{reply.mode === 'thread' ? '回复话题' : '引用回复'}</strong><span>{entry.messages.get(reply.messageId) ? messageText(entry.messages.get(reply.messageId)!).slice(0, 100) : '引用的消息'}</span></div>
+      <Button type="text" size="mini" icon={<IconClose />} aria-label="取消回复" onClick={() => { entry.reply = undefined; controller.cache.changed(); }} /></div>}
+    {preview && <div className="chat-attachment"><img src={preview} alt="待发送图片" /><span>{file?.name}<small>图片单独发送，文字保留为草稿</small></span><Button type="text" size="mini" icon={<IconClose />} aria-label="移除图片" onClick={() => setFile(undefined)} /></div>}
+    <input ref={fileInput} className="chat-file-input" aria-label="上传聊天图片" type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={(event) => { choose(event.target.files?.[0]); event.target.value = ''; }} />
+    <Input.TextArea ref={input} aria-label={thread ? '话题消息' : '聊天消息'} placeholder={thread ? '回复话题…' : `发送到 ${entry.chat.name}`} maxLength={4000} value={draft} autoSize={{ minRows: 2, maxRows: 5 }}
+      onChange={(value) => { if (thread) setThreadDraft(value); else { entry.draft = value; controller.cache.changed(); } }}
       onPaste={(event) => { const image = [...event.clipboardData.files].find((f) => f.type.startsWith('image/')); if (image) { event.preventDefault(); choose(image); } }}
-      onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void submit(); } }} />
-    <div className="chat-composer-toolbar"><label className="chat-file-button">选择图片<input aria-label="选择聊天图片" type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={(event) => { choose(event.target.files?.[0]); event.target.value = ''; }} /></label>
-      <span className="chat-muted">{entry.draft.length}/4000</span><button type="button" className="chat-primary" disabled={uploading || entry.pending.size >= 3 || !entry.draft.trim() && !file} onClick={() => void submit()}>{uploading ? '发送中…' : '发送'}</button>
+      onKeyDown={(event) => {
+        if (event.key === 'Escape' && reply) { entry.reply = undefined; controller.cache.changed(); }
+        if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); void submit(); }
+      }} />
+    <div className="chat-composer-toolbar"><Tooltip content="发送图片 · 支持粘贴和拖拽"><Button className="chat-file-button" type="text" size="small" icon={<IconImage />} aria-label="选择聊天图片" onClick={() => fileInput.current?.click()} /></Tooltip>
+      <span className="chat-composer-shortcut">Enter 发送 · Shift+Enter 换行</span>
+      <Tooltip content={`以 ${bot?.botName || bot?.name || '机器人'} 的身份发送`}><span className="chat-composer-identity"><IconRobot />{bot?.botName || bot?.name || '机器人'}</span></Tooltip>
+      {draft.length > 0 && <span className="chat-word-count">{draft.length}/4000</span>}<Button type="primary" size="small" className="chat-primary" icon={<IconSend />} loading={uploading} disabled={entry.pending.size >= 3 || !draft.trim() && !file} onClick={() => void submit()}>发送</Button>
     </div>
-    {[...entry.pending.entries()].map(([id, pending]) => <div className={`chat-pending chat-pending-${pending.status}`} key={id}>
+    {pending.map(([id, pending]) => <div className={`chat-pending chat-pending-${pending.status}`} key={id}>
       <span>{pending.input.message.type === 'text' ? pending.input.message.text.slice(0, 80) : '[图片]'} · {pending.status === 'sending' ? '发送中' : pending.status === 'unknown' ? '发送结果待确认，请先刷新最新消息' : '发送失败'}{pending.error ? `：${pending.error}` : ''}</span>
-      {pending.status !== 'sending' && <><button type="button" onClick={() => controller.latest(entry)}>刷新</button><button type="button" onClick={() => void controller.send(entry, pending.input)}>使用相同发送编号重试</button>
-        <button type="button" onClick={() => { entry.pending.delete(id); controller.cache.changed(); }}>关闭提示</button></>}
+      {pending.status !== 'sending' && <><Button type="text" size="mini" onClick={() => controller.latest(entry)}>刷新消息</Button><Button type="text" size="mini" onClick={() => void controller.send(entry, pending.input)}>重试发送</Button>
+        <Button type="text" size="mini" icon={<IconClose />} aria-label="关闭发送提示" onClick={() => { entry.pending.delete(id); controller.cache.changed(); }} /></>}
     </div>)}
   </div>;
 }
 
-export function FeishuChatPanel({ serverUrl, token, bots, onUnauthorized }: { serverUrl: string; token: string; bots: Bot[]; onUnauthorized: () => void }) {
+export function FeishuChatPanel({ serverUrl, token, bots, onUnauthorized, onManageBots, ownMessageAlignment = 'right' }: {
+  serverUrl: string; token: string; bots: Bot[]; onUnauthorized: () => void; onManageBots?: () => void; ownMessageAlignment?: OwnMessageAlignment;
+}) {
   const controller = useChat(serverUrl, token, bots, onUnauthorized);
   const { entry, cache } = controller;
+  const [recallTarget, setRecallTarget] = useState<{ entry: ChatEntry; message: ChatMessage }>();
+  const [skipRecallWarning, setSkipRecallWarning] = useState(false);
+  const [recallError, setRecallError] = useState('');
+  useEffect(() => { setRecallTarget(undefined); setSkipRecallWarning(false); setRecallError(''); }, [cache]);
+  const recalling = Boolean(recallTarget && controller.isRecalling(recallTarget.entry, recallTarget.message.messageId));
+  const requestRecall = (target: ChatEntry, message: ChatMessage) => {
+    if (controller.isRecalling(target, message.messageId)) return;
+    controller.setNotice('');
+    if (!controller.needsRecallConfirmation()) { void controller.recall(target, message.messageId); return; }
+    setSkipRecallWarning(false); setRecallError(''); setRecallTarget({ entry: target, message });
+  };
   const bot = bots.find((b) => b.id === entry?.chat.botId);
+  const connection = controller.connections[entry?.chat.botId ?? controller.botId ?? -1];
+  const connected = controller.streamStatus === '实时连接正常' && connection?.status === 'connected';
+  const recent = [...cache.entries.values()].sort((a, b) => b.lastVisited - a.lastVisited);
   return <section className="feishu-chat" aria-label="飞书群聊">
+    <Modal visible={Boolean(recallTarget)} title="撤回这条消息？" className="chat-recall-modal" style={{ width: 420 }}
+      okText="确认撤回" cancelText="取消" okButtonProps={{ status: 'danger' }} confirmLoading={recalling}
+      maskClosable={!recalling} escToExit={!recalling} onCancel={() => { if (!recalling) setRecallTarget(undefined); }}
+      onOk={async () => {
+        if (!recallTarget) return;
+        setRecallError('');
+        const result = await controller.recall(recallTarget.entry, recallTarget.message.messageId);
+        if (result.ok) {
+          if (skipRecallWarning) controller.skipRecallConfirmation();
+          setRecallTarget(undefined);
+        } else setRecallError(result.error || '撤回失败，请稍后重试');
+      }}>
+      <p className="chat-recall-description">撤回后，群成员将无法查看这条消息。</p>
+      <div className="chat-recall-preview">{recallTarget ? messageText(recallTarget.message) : ''}</div>
+      {recallError && <Alert type="error" className="chat-recall-error" content={recallError} />}
+      <Checkbox checked={skipRecallWarning} disabled={recalling} onChange={setSkipRecallWarning}>5 分钟内不再提醒</Checkbox>
+    </Modal>
     <aside className="chat-sidebar">
-      <label className="chat-bot-select">机器人<select aria-label="选择聊天机器人" value={controller.botId ?? ''} onChange={(event) => controller.setBotId(Number(event.target.value))}>
-        {!bots.length && <option value="">暂无机器人</option>}{bots.map((b) => <option value={b.id} key={b.id}>{b.botName || b.name}</option>)}
-      </select></label>
-      <div className="chat-list-heading"><strong>已加入的群</strong><button type="button" disabled={controller.groupsLoading || !controller.ready} onClick={controller.refreshGroups}>刷新</button></div>
-      {controller.groupError && <div className="chat-error">{controller.groupError}</div>}
+      <div className="chat-sidebar-header"><h1>消息</h1><span>飞书群聊</span></div>
+      <div className="chat-bot-select"><IconRobot /><Select aria-label="选择聊天机器人" size="small" value={controller.botId} placeholder="选择机器人" disabled={!bots.length}
+        onChange={(value: number) => controller.setBotId(value)} options={bots.map((b) => ({ label: b.botName || b.name, value: b.id }))} /></div>
+      <div className="chat-list-heading"><span>已加入的群 <small>{controller.groups.length}{controller.groupToken ? '+' : ''}</small></span>
+        <Tooltip content="刷新群列表"><Button type="text" size="mini" icon={<IconRefresh />} aria-label="刷新群列表" loading={controller.groupsLoading} disabled={!controller.ready} onClick={controller.refreshGroups} /></Tooltip></div>
+      {controller.groupError && <Alert className="chat-error" type="error" content={controller.groupError} />}
       <div className="chat-group-list">
-        {controller.groups.map((g) => <button type="button" key={g.chatId} className={`chat-group ${cache.activeKey === `${g.botId}:${g.chatId}` ? 'selected' : ''}`} disabled={!controller.ready} onClick={() => void controller.select(g)}>
-          <span className="chat-group-avatar">{g.name.slice(0, 1)}</span><span>{g.name}</span>{controller.groupHints.has(`${g.botId}:${g.chatId}`) ? <small>新消息</small> : cache.entries.has(`${g.botId}:${g.chatId}`) && <small>已访问</small>}
-        </button>)}
-        {controller.groupsLoading && <div className="chat-muted">读取群列表…</div>}
-        {!controller.groups.length && !controller.groupsLoading && <div className="chat-empty">{bots.length ? '暂无群聊，请刷新或将机器人加入群聊' : '请先绑定机器人'}</div>}
-        {controller.groupToken && <button type="button" disabled={controller.groupsLoading} onClick={controller.moreGroups}>加载更多群</button>}
+        {controller.groups.map((g) => {
+          const key = `${g.botId}:${g.chatId}`;
+          const cached = cache.entries.get(key);
+          const last = cached ? [...cached.messages.values()].sort((a, b) => b.createTimeMs - a.createTimeMs)[0] : undefined;
+          return <button type="button" key={g.chatId} className={`chat-group ${cache.activeKey === key ? 'selected' : ''}`} aria-pressed={cache.activeKey === key} title={g.name} disabled={!controller.ready} onClick={() => void controller.select(g)}>
+            <Avatar className="chat-group-avatar" size={36} shape="square" style={{ backgroundColor: avatarColor(g.name) }}>{g.avatar && /^https?:\/\//.test(g.avatar) ? <img src={g.avatar} alt="" /> : <IconUserGroup />}</Avatar>
+            <span className="chat-group-copy"><span className="chat-group-title">{g.name}</span><span className="chat-group-preview">{last ? `${last.deleted ? '' : `${senderName(last, cached!, bots.find((b) => b.id === g.botId))}：`}${last.deleted ? '消息已撤回' : messageText(last)}` : g.chatMode === 'topic' ? '话题群' : '点击查看群消息'}</span></span>
+            <span className="chat-group-meta">{last && last.createTimeMs > 0 && <time>{new Date(last.createTimeMs).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })}</time>}
+              {controller.groupHints.has(key) && <span className="chat-unread-dot" aria-label="有新消息" />}</span>
+          </button>;
+        })}
+        {controller.groupsLoading && !controller.groups.length && <div className="chat-list-loading"><Spin size={18} /></div>}
+        {!controller.groups.length && !controller.groupsLoading && <Empty className="chat-empty" description={<><p>{bots.length ? controller.ready ? '机器人尚未加入群聊' : '正在连接服务端' : '请先绑定机器人'}</p>
+          {!bots.length && onManageBots && <Button type="primary" size="small" onClick={onManageBots}>管理机器人</Button>}</>} />}
+        {controller.groupToken && <Button className="chat-load-groups" type="text" size="small" loading={controller.groupsLoading} onClick={controller.moreGroups}>加载更多群</Button>}
       </div>
-      <details className="chat-recents"><summary>最近访问 · {cache.entries.size}/{MAX_CACHED_CHATS}</summary>
-        {[...cache.entries.values()].sort((a, b) => b.lastVisited - a.lastVisited).map((e) => <button type="button" key={e.key} onClick={() => void controller.select(e.chat)}>{e.chat.name}</button>)}
-        <p>仅保留本次运行中最近访问的会话</p>
-      </details>
+      <div className="chat-recents"><Dropdown trigger="click" position="top" droplist={<Menu className="chat-recents-menu" onClickMenuItem={(key) => { const target = cache.entries.get(key); if (target) void controller.select(target.chat); }}>
+        {recent.length ? recent.map((e) => <Menu.Item key={e.key}>{e.chat.name}</Menu.Item>) : <Menu.Item key="empty" disabled>暂无最近会话</Menu.Item>}</Menu>}>
+        <Button type="text" size="small" icon={<IconClockCircle />}>最近访问<IconDown /></Button>
+      </Dropdown><span>{recent.length > 0 ? `${recent.length} 个会话` : ''}</span></div>
     </aside>
     <div className="chat-workspace">
-      <div className="chat-workspace-header"><div><strong>{entry?.chat.name || '选择一个群聊'}</strong><div className="chat-muted">{controller.streamStatus}{entry && ` · 飞书：${controller.connections[entry.chat.botId]?.status || '状态待确认'}`}</div></div>
-        {entry && <button type="button" onClick={() => controller.latest(entry)}>刷新最新</button>}
+      <div className="chat-workspace-header"><Avatar size={36} shape="square" style={{ backgroundColor: entry ? avatarColor(entry.chat.name) : '#91a3be' }}><IconUserGroup /></Avatar>
+        <div className="chat-header-copy"><strong title={entry?.chat.name}>{entry?.chat.name || '飞书群聊'}</strong>
+          <Tooltip content={`${controller.streamStatus} · 机器人${connection?.status === 'connected' ? '已连接' : connection?.status === 'connecting' ? '连接中' : '连接状态待确认'}`}><span className="chat-connection-status" data-connected={connected} role="status"><i />{connected ? '实时同步' : controller.streamStatus === '实时连接正常' ? '消息通道已连接' : controller.streamStatus}</span></Tooltip>
+        </div>
+        {entry && <Tooltip content="刷新最新消息"><Button type="text" size="small" icon={<IconRefresh />} aria-label="刷新最新消息" loading={entry.main.loading} onClick={() => controller.latest(entry)} /></Tooltip>}
       </div>
-      {controller.notice && <div className="chat-error" role="alert">{controller.notice}<button type="button" onClick={() => controller.setNotice('')}>关闭</button></div>}
+      {controller.notice && <Alert className="chat-notice" type="error" content={controller.notice} closable onClose={() => controller.setNotice('')} />}
       {entry ? <div className={`chat-conversation ${entry.openedThread ? 'with-thread' : ''}`} key={`${entry.key}:${entry.generation}`}>
         <div className="chat-main-timeline">
-          {(entry.needsResync || entry.newMessages > 0 || entry.main.newerTruncated) && <div className="chat-new-hint"><span>{entry.needsResync ? '连接变化后需要校准消息' : '有新消息或更新'}</span><button type="button" onClick={() => controller.latest(entry)}>返回最新</button></div>}
-          <MessageList key={entry.key} controller={controller} entry={entry} view={entry.main} bot={bot} />
+          <MessageList key={entry.key} controller={controller} entry={entry} view={entry.main} bot={bot} onRecall={requestRecall} ownMessageAlignment={ownMessageAlignment} />
           <Composer controller={controller} entry={entry} bot={bot} />
         </div>
-        {entry.openedThread && <aside className="chat-thread"><div className="chat-thread-header"><strong>话题</strong><button type="button" onClick={() => { entry.openedThread = undefined; cache.changed(); }}>关闭话题</button></div>
-          <MessageList key={entry.openedThread.threadId} controller={controller} entry={entry} view={cache.view(entry, entry.openedThread.threadId)} bot={bot} thread />
-          <div className="chat-muted chat-thread-footer">下方输入框将发送到当前话题</div>
+        {entry.openedThread && <aside className="chat-thread" aria-label="话题讨论"><div className="chat-thread-header"><span><IconMessage /><strong>话题讨论</strong></span><Tooltip content="关闭话题"><Button type="text" size="mini" icon={<IconClose />} aria-label="关闭话题" onClick={() => { entry.openedThread = undefined; if (entry.reply?.mode === 'thread') entry.reply = undefined; cache.changed(); }} /></Tooltip></div>
+          <MessageList key={entry.openedThread.threadId} controller={controller} entry={entry} view={cache.view(entry, entry.openedThread.threadId)} bot={bot} onRecall={requestRecall} ownMessageAlignment={ownMessageAlignment} thread />
+          <Composer key={entry.openedThread.threadId} controller={controller} entry={entry} bot={bot} thread />
         </aside>}
-      </div> : <div className="chat-empty chat-welcome"><strong>机器人群聊</strong><p>选择群聊后，按需读取飞书历史消息。支持引用回复和话题讨论。</p><span>历史只保存在当前窗口内存中，退出后重新读取。</span></div>}
+      </div> : <div className="chat-welcome"><div className="chat-welcome-icon"><IconMessage /></div><h2>开始一段对话</h2><p>从左侧选择群聊，查看消息或以机器人身份回复。</p><span>历史消息仅在本次使用期间保留</span></div>}
     </div>
   </section>;
 }

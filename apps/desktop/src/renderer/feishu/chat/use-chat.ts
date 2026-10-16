@@ -17,6 +17,7 @@ function delay(ms: number, signal: AbortSignal) {
 export function useChat(serverUrl: string, token: string, bots: Bot[], onUnauthorized: () => void) {
   const api = useMemo(() => new ChatApi(serverUrl, token), [serverUrl, token]);
   const cache = useMemo(() => new ChatCache(), [api]);
+  const recallSession = useMemo(() => ({ skipConfirmationUntil: 0, requests: new Set<string>() }), [api]);
   const version = useSyncExternalStore(cache.subscribe, cache.snapshot);
   const unauthorized = useRef(onUnauthorized);
   unauthorized.current = onUnauthorized;
@@ -70,9 +71,13 @@ export function useChat(serverUrl: string, token: string, bots: Bot[], onUnautho
 
   const refreshVisible = useCallback((filterBot?: number) => {
     const current = cache.entries.get(cache.activeKey);
-    if (!current || filterBot != null && current.chat.botId !== filterBot || current.viewMode === 'history') return;
-    void load(current, false, undefined, true);
-    if (current.openedThread) void load(current, false, current.openedThread, true);
+    if (!current || filterBot != null && current.chat.botId !== filterBot) return;
+    if (current.viewMode === 'live') void load(current, false, undefined, true);
+    // Reconnection cancels all reads. A newly opened thread still needs its first page
+    // even when the main timeline must stay at the user's older reading position.
+    if (current.openedThread && (current.viewMode === 'live' || !cache.view(current, current.openedThread.threadId).pages.length)) {
+      void load(current, false, current.openedThread, true);
+    }
   }, [cache, load]);
   const refreshRef = useRef(refreshVisible);
   refreshRef.current = refreshVisible;
@@ -258,8 +263,32 @@ export function useChat(serverUrl: string, token: string, bots: Bot[], onUnautho
     }
   }, [api, cache, load, report]);
 
+  const recall = useCallback(async (target: ChatEntry, messageId: string) => {
+    const key = `${target.key}:${messageId}`;
+    if (!cache.current(target)) return { ok: false, error: '会话已释放，请重新选择' };
+    if (target.messages.get(messageId)?.deleted) return { ok: true };
+    if (recallSession.requests.has(key) || recallSession.requests.size >= 3) return { ok: false, error: '正在撤回消息，请稍候' };
+    const controller = new AbortController();
+    recallSession.requests.add(key); target.controllers.add(controller); cache.changed();
+    try {
+      const result = await api.recall(target.chat.botId, target.chat.chatId, messageId, AbortSignal.any([controller.signal, AbortSignal.timeout(25_000)]));
+      if (cache.current(target) && !controller.signal.aborted) cache.recall(target.chat.botId, result.chatId, result.messageId, result.recallTimeMs);
+      return { ok: true };
+    } catch (error) {
+      if (cache.current(target) && target.messages.get(messageId)?.deleted) return { ok: true };
+      const text = error instanceof ChatApiError && error.status < 500 ? errorText(error) : '撤回结果暂未确认，请刷新消息后再试';
+      if (!controller.signal.aborted) report(error instanceof ChatApiError ? error : new Error(text), target);
+      return { ok: false, error: text };
+    } finally {
+      target.controllers.delete(controller); recallSession.requests.delete(key); cache.changed();
+    }
+  }, [api, cache, recallSession, report]);
+
   return { api, cache, version, ready, streamStatus, connections, botId, setBotId: (value: number) => { setBotId(value); cache.activeKey = ''; cache.changed(); }, groups, groupToken, groupsLoading, groupError,
-    entry, notice, setNotice, select, openThread, send, detail, report, groupHints,
+    entry, notice, setNotice, select, openThread, send, detail, report, groupHints, recall,
+    isRecalling: (target: ChatEntry, messageId: string) => recallSession.requests.has(`${target.key}:${messageId}`),
+    needsRecallConfirmation: () => Date.now() >= recallSession.skipConfirmationUntil,
+    skipRecallConfirmation: () => { recallSession.skipConfirmationUntil = Date.now() + 5 * 60_000; },
     refreshGroups: () => { if (botId != null) void loadGroups(botId); },
     moreGroups: () => { if (botId != null && groupToken) void loadGroups(botId, groupToken); },
     latest: (target: ChatEntry) => { target.viewMode = 'live'; void load(target, false, undefined, true); if (target.openedThread) void load(target, false, target.openedThread, true); },

@@ -51,6 +51,10 @@ export class ChatApi {
   send(botId: number, chatId: string, input: SendMessageInput, signal: AbortSignal) {
     return this.json<{ message: ChatMessage; clientRequestId: string }>(`${this.path(botId, chatId)}/messages`, signal, input);
   }
+  async recall(botId: number, chatId: string, messageId: string, signal: AbortSignal) {
+    const response = await this.fetch(`${this.path(botId, chatId)}/messages/${encodeURIComponent(messageId)}`, { method: 'DELETE', signal });
+    return response.json() as Promise<{ chatId: string; messageId: string; recallTimeMs: number }>;
+  }
   async upload(botId: number, chatId: string, file: File, signal: AbortSignal) {
     const response = await this.fetch(`${this.path(botId, chatId)}/images`, { method: 'POST', body: file,
       headers: { 'content-type': file.type }, signal });

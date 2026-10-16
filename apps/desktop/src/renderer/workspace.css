@@ -1,0 +1,79 @@
+/* The signed-in app fills the window; each workspace owns its scrolling. */
+.app-shell.app-shell-workspace {
+  display: flex;
+  width: 100%;
+  height: 100dvh;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: #fff;
+}
+.app-shell-workspace [hidden] { display: none !important; }
+.app-sidebar {
+  display: flex;
+  flex: 0 0 72px;
+  flex-direction: column;
+  align-items: center;
+  padding: 18px 7px 12px;
+  border-right: 1px solid #e4e8ef;
+  background: #f0f3f8;
+}
+.app-sidebar-brand {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: 11px;
+  background: #3370ff;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 750;
+  letter-spacing: -.5px;
+}
+.app-sidebar .app-workspace-nav { width: 100%; margin-top: 24px; background: transparent; }
+.app-sidebar .arco-menu-inner { padding: 0; }
+.app-sidebar .arco-menu-item {
+  display: flex;
+  height: 62px;
+  min-height: 62px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  margin: 5px 0;
+  padding: 8px 2px;
+  border-radius: 9px;
+  background: transparent;
+  color: #646a73;
+  font-size: 11px;
+  line-height: 16px;
+}
+.app-sidebar .arco-menu-item .arco-icon { width: 21px; height: 21px; margin: 0; font-size: 21px; }
+.app-sidebar .arco-menu-item:hover { background: #e7ecf4; color: #3370ff; }
+.app-sidebar .arco-menu-selected { background: #e0eaff; color: #245bdb; font-weight: 600; }
+.app-shell .app-sidebar-logout.arco-btn {
+  width: 36px;
+  min-height: 36px;
+  margin-top: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: #737c8b;
+  font-size: 20px;
+}
+.app-shell .app-sidebar-logout.arco-btn:hover { background: #e3e9f2; color: #3370ff; }
+.app-main-content { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.app-main-content > .app-message { flex: 0 0 auto; margin: 8px 12px 0; }
+.app-workspace-panel { flex: 1; min-height: 0; padding: 22px 24px; overflow: auto; background: #f7f8fa; }
+.app-workspace-panel > .arco-card { max-width: 1440px; margin: 0 auto; }
+.app-shell-workspace .arco-card { border-radius: 10px; box-shadow: none; }
+.app-shell-workspace .arco-card-header { min-height: 48px; }
+.app-shell-workspace .arco-card-body { padding: 18px; }
+.app-chat-panel { display: flex; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+@media (max-width: 760px) {
+  .app-sidebar { flex-basis: 62px; padding-right: 5px; padding-left: 5px; }
+  .app-sidebar .arco-menu-item { font-size: 10px; }
+  .app-workspace-panel { padding: 14px; }
+}

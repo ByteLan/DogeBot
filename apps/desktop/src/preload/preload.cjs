@@ -2,6 +2,20 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 console.log('[douyin preload] loaded');
 
+// 注意：channel 字面量需与 src/shared/ipc-channels.ts 的 WindowIpc 保持一致。
+contextBridge.exposeInMainWorld('desktopWindow', {
+  platform: ['darwin', 'win32', 'linux'].includes(process.platform) ? process.platform : 'other',
+  minimize: () => ipcRenderer.invoke('window:minimize'),
+  toggleMaximize: () => ipcRenderer.invoke('window:toggle-maximize'),
+  close: () => ipcRenderer.invoke('window:close'),
+  getState: () => ipcRenderer.invoke('window:get-state'),
+  onStateChanged: (listener) => {
+    const handler = (_event, data) => listener(data);
+    ipcRenderer.on('window:state-changed', handler);
+    return () => ipcRenderer.off('window:state-changed', handler);
+  }
+});
+
 // 注意：channel 字面量需与 src/shared/ipc-channels.ts 的 DouyinIpc 保持一致。
 contextBridge.exposeInMainWorld('douyin', {
   openLogin: (partition) => {

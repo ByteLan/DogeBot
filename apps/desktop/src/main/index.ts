@@ -1,8 +1,8 @@
-import { app, type BrowserWindow } from 'electron';
+import { app, Menu, type BrowserWindow } from 'electron';
 import { logDouyin } from './log.js';
 import { installDevToolsShortcut, isBlockedDeeplinkUrl, registerBlockedDeeplinkHandlers } from './navigation.js';
 import { createTray } from './tray.js';
-import { createWindow, showMainWindow } from './main-window.js';
+import { createWindow, registerWindowIpc, showMainWindow } from './main-window.js';
 import { registerDouyinIpc } from './douyin/ipc.js';
 import { state } from './douyin/state.js';
 
@@ -20,8 +20,12 @@ app.on('browser-window-created', (_event: any, win: BrowserWindow) => {
 });
 
 registerDouyinIpc();
+registerWindowIpc();
 
 app.whenReady().then(() => {
+  Menu.setApplicationMenu(process.platform === 'darwin' ? Menu.buildFromTemplate([
+    { role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }
+  ]) : null);
   registerBlockedDeeplinkHandlers();
   createTray();
   createWindow();
