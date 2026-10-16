@@ -16,6 +16,12 @@ contextBridge.exposeInMainWorld('desktopWindow', {
   }
 });
 
+// 注意：channel 字面量需与 src/shared/ipc-channels.ts 的 SettingsIpc 保持一致。
+contextBridge.exposeInMainWorld('desktopSettings', {
+  getStartup: () => ipcRenderer.invoke('settings:get-startup'),
+  setStartup: (enabled) => ipcRenderer.invoke('settings:set-startup', enabled)
+});
+
 // 注意：channel 字面量需与 src/shared/ipc-channels.ts 的 DouyinIpc 保持一致。
 contextBridge.exposeInMainWorld('douyin', {
   openLogin: (partition) => {

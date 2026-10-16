@@ -8,6 +8,11 @@ export const WindowIpc = {
   stateChanged: 'window:state-changed'
 } as const;
 
+export const SettingsIpc = {
+  getStartup: 'settings:get-startup',
+  setStartup: 'settings:set-startup'
+} as const;
+
 export const DouyinIpc = {
   // renderer -> main（每任务 / 全局 / 登录）
   openLogin: 'douyin:open-login',

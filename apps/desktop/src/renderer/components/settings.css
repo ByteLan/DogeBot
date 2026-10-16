@@ -1,0 +1,13 @@
+.app-settings { display: flex; flex-direction: column; gap: 16px; max-width: 880px; margin: 0 auto; }
+.app-settings-header { display: flex; flex-direction: column; gap: 4px; padding: 0 0 4px; }
+.app-settings-header .arco-typography { margin: 0; }
+.app-settings-header > span { font-size: 12px; }
+.app-settings .arco-card-header { padding: 0 18px; }
+.app-settings-row { display: flex; align-items: center; justify-content: space-between; gap: 24px; min-height: 44px; }
+.app-settings-label { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.app-settings-label > .arco-typography-secondary { font-size: 12px; line-height: 20px; }
+.app-settings-row > .arco-switch, .app-settings-row > .arco-radio-group { flex-shrink: 0; }
+.app-settings-error { margin-top: 12px; }
+@media (max-width: 760px) {
+  .app-settings-row { gap: 16px; }
+}

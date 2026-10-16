@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Button, Menu, Tooltip, Typography } from '@arco-design/web-react';
-import { IconExport, IconMessage, IconRobot, IconVideoCamera } from '@arco-design/web-react/icon';
+import { IconExport, IconMessage, IconRobot, IconSettings, IconVideoCamera } from '@arco-design/web-react/icon';
 import { defaultFavoriteUrl, defaultCollectListUrl, defaultRequestUrlFilter } from '../shared/constants';
 import { isValidHttpUrl } from '../shared/url';
 import { useApi } from './api';
@@ -15,6 +15,7 @@ import {
   initialServerUrl,
   partitionElectronId,
   readPositiveNumber,
+  readOwnMessageAlignment,
   readStoredPartitions,
   readStoredStringList,
   readStoredTasks,
@@ -35,12 +36,17 @@ import type {
 import { LoginCard } from './components/LoginCard';
 import { FeishuBotsCard } from './components/FeishuBotsCard';
 import { DouyinMonitorCard } from './components/DouyinMonitorCard';
+import { SettingsPanel } from './components/SettingsPanel';
 import './workspace.css';
 
 const { Title, Text } = Typography;
 
 export function App() {
-  const [workspaceView, setWorkspaceView] = useState<'bots' | 'chats' | 'douyin'>('bots');
+  const [workspaceView, setWorkspaceView] = useState<'bots' | 'chats' | 'douyin' | 'settings'>('bots');
+  const [ownMessageAlignment, setOwnMessageAlignment] = usePersistentState(
+    readOwnMessageAlignment,
+    (value) => localStorage.setItem('dogebot.ownMessageAlignment', value)
+  );
   const [token, setToken] = useState(() => localStorage.getItem('dogebot.token') || '');
   const [serverUrl, setServerUrl] = useState(initialServerUrl);
   const [message, setMessage] = useState('');
@@ -389,11 +395,12 @@ export function App() {
       {loggedIn ? <aside className="app-sidebar" aria-label="工作区导航">
         <Tooltip content="DogeBot"><div className="app-sidebar-brand" aria-label="DogeBot">DB</div></Tooltip>
         <Menu className="app-workspace-nav" selectedKeys={[workspaceView]} onClickMenuItem={(key) => {
-          if (key === 'bots' || key === 'chats' || key === 'douyin') setWorkspaceView(key);
+          if (key === 'bots' || key === 'chats' || key === 'douyin' || key === 'settings') setWorkspaceView(key);
         }}>
           <Menu.Item key="bots"><IconRobot /><span>机器人</span></Menu.Item>
           <Menu.Item key="chats"><IconMessage /><span>群聊</span></Menu.Item>
           <Menu.Item key="douyin"><IconVideoCamera /><span>抖音监控</span></Menu.Item>
+          <Menu.Item key="settings"><IconSettings /><span>设置</span></Menu.Item>
         </Menu>
         <Tooltip content="退出登录" position="right"><Button className="app-sidebar-logout" type="text" icon={<IconExport />} aria-label="退出登录" onClick={logout} /></Tooltip>
       </aside> : <header className="app-header">
@@ -441,7 +448,7 @@ export function App() {
 
           </div>
           <div className="app-chat-panel" hidden={workspaceView !== 'chats'}>
-            <FeishuChatPanel key={`${serverUrl}:${token}`} serverUrl={serverUrl} token={token} bots={bots} onUnauthorized={logout} onManageBots={() => setWorkspaceView('bots')} />
+            <FeishuChatPanel key={`${serverUrl}:${token}`} serverUrl={serverUrl} token={token} bots={bots} onUnauthorized={logout} onManageBots={() => setWorkspaceView('bots')} ownMessageAlignment={ownMessageAlignment} />
           </div>
           <div className="app-workspace-panel" hidden={workspaceView !== 'douyin'}>
           <DouyinMonitorCard
@@ -482,6 +489,10 @@ export function App() {
             setCollectListUrlHistory={setCollectListUrlHistory}
             setRequestUrlFilterHistory={setRequestUrlFilterHistory}
           />
+          </div>
+          <div className="app-workspace-panel" hidden={workspaceView !== 'settings'}>
+            <SettingsPanel active={workspaceView === 'settings'} ownMessageAlignment={ownMessageAlignment}
+              onOwnMessageAlignmentChange={setOwnMessageAlignment} />
           </div>
         </>
       )}
