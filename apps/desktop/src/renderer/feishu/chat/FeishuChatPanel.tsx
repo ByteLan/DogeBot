@@ -3,7 +3,7 @@ import { Alert, Avatar, Button, Checkbox, Dropdown, Empty, Image, Input, Menu, M
 import { IconArrowDown, IconCheck, IconClockCircle, IconClose, IconCopy, IconDown, IconImage, IconMessage, IconMore, IconRefresh, IconReply, IconRight, IconRobot, IconSend, IconUndo, IconUserGroup } from '@arco-design/web-react/icon';
 import type { RefTextAreaType } from '@arco-design/web-react/es/Input/textarea';
 import type { Bot } from '../../types';
-import type { ChatMessage, OwnMessageAlignment, SendMessageInput } from './types';
+import type { ChatMessage, ChatSummary, OwnMessageAlignment, SendMessageInput } from './types';
 import type { ChatEntry, Timeline } from './cache';
 import { useChat, type ChatController } from './use-chat';
 import './chat.css';
@@ -48,6 +48,12 @@ function imageKeys(value: unknown) {
 const avatarColors = ['#4c83ed', '#36a590', '#8e6bd1', '#d58b42', '#5889ad'];
 function avatarColor(name: string) {
   return avatarColors[Array.from(name).reduce((sum, character) => sum + character.charCodeAt(0), 0) % avatarColors.length];
+}
+
+function GroupAvatar({ chat }: { chat?: ChatSummary }) {
+  return <Avatar className="chat-group-avatar" size={36} shape="square" style={{ backgroundColor: chat ? avatarColor(chat.name) : '#91a3be' }}>
+    {chat?.avatar && /^https?:\/\//.test(chat.avatar) ? <img src={chat.avatar} alt="" /> : <IconUserGroup />}
+  </Avatar>;
 }
 
 function senderName(message: ChatMessage, entry: ChatEntry, bot?: Bot) {
@@ -349,6 +355,7 @@ export function FeishuChatPanel({ serverUrl, token, bots, onUnauthorized, onMana
     setSkipRecallWarning(false); setRecallError(''); setRecallTarget({ entry: target, message });
   };
   const bot = bots.find((b) => b.id === entry?.chat.botId);
+  const activeGroup = entry ? controller.groups.find((g) => g.botId === entry.chat.botId && g.chatId === entry.chat.chatId) ?? entry.chat : undefined;
   const connection = controller.connections[entry?.chat.botId ?? controller.botId ?? -1];
   const connected = controller.streamStatus === '实时连接正常' && connection?.status === 'connected';
   const recent = [...cache.entries.values()].sort((a, b) => b.lastVisited - a.lastVisited);
@@ -383,7 +390,7 @@ export function FeishuChatPanel({ serverUrl, token, bots, onUnauthorized, onMana
           const cached = cache.entries.get(key);
           const last = cached ? [...cached.messages.values()].sort((a, b) => b.createTimeMs - a.createTimeMs)[0] : undefined;
           return <button type="button" key={g.chatId} className={`chat-group ${cache.activeKey === key ? 'selected' : ''}`} aria-pressed={cache.activeKey === key} title={g.name} disabled={!controller.ready} onClick={() => void controller.select(g)}>
-            <Avatar className="chat-group-avatar" size={36} shape="square" style={{ backgroundColor: avatarColor(g.name) }}>{g.avatar && /^https?:\/\//.test(g.avatar) ? <img src={g.avatar} alt="" /> : <IconUserGroup />}</Avatar>
+            <GroupAvatar chat={g} />
             <span className="chat-group-copy"><span className="chat-group-title">{g.name}</span><span className="chat-group-preview">{last ? `${last.deleted ? '' : `${senderName(last, cached!, bots.find((b) => b.id === g.botId))}：`}${last.deleted ? '消息已撤回' : messageText(last)}` : g.chatMode === 'topic' ? '话题群' : '点击查看群消息'}</span></span>
             <span className="chat-group-meta">{last && last.createTimeMs > 0 && <time>{new Date(last.createTimeMs).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })}</time>}
               {controller.groupHints.has(key) && <span className="chat-unread-dot" aria-label="有新消息" />}</span>
@@ -400,7 +407,7 @@ export function FeishuChatPanel({ serverUrl, token, bots, onUnauthorized, onMana
       </Dropdown><span>{recent.length > 0 ? `${recent.length} 个会话` : ''}</span></div>
     </aside>
     <div className="chat-workspace">
-      <div className="chat-workspace-header"><Avatar size={36} shape="square" style={{ backgroundColor: entry ? avatarColor(entry.chat.name) : '#91a3be' }}><IconUserGroup /></Avatar>
+      <div className="chat-workspace-header"><GroupAvatar chat={activeGroup} />
         <div className="chat-header-copy"><strong title={entry?.chat.name}>{entry?.chat.name || '飞书群聊'}</strong>
           <Tooltip content={`${controller.streamStatus} · 机器人${connection?.status === 'connected' ? '已连接' : connection?.status === 'connecting' ? '连接中' : '连接状态待确认'}`}><span className="chat-connection-status" data-connected={connected} role="status"><i />{connected ? '实时同步' : controller.streamStatus === '实时连接正常' ? '消息通道已连接' : controller.streamStatus}</span></Tooltip>
         </div>
