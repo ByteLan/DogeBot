@@ -16,6 +16,7 @@ import {
   partitionElectronId,
   readPositiveNumber,
   readOwnMessageAlignment,
+  readChatReceiveMode,
   readStoredPartitions,
   readStoredStringList,
   readStoredTasks,
@@ -37,15 +38,21 @@ import { LoginCard } from './components/LoginCard';
 import { FeishuBotsCard } from './components/FeishuBotsCard';
 import { DouyinMonitorCard } from './components/DouyinMonitorCard';
 import { SettingsPanel } from './components/SettingsPanel';
+import { useWindowVisibility } from './use-window-visibility';
 import './workspace.css';
 
 const { Title, Text } = Typography;
 
 export function App() {
+  const windowVisible = useWindowVisibility();
   const [workspaceView, setWorkspaceView] = useState<'bots' | 'chats' | 'douyin' | 'settings'>('bots');
   const [ownMessageAlignment, setOwnMessageAlignment] = usePersistentState(
     readOwnMessageAlignment,
     (value) => localStorage.setItem('dogebot.ownMessageAlignment', value)
+  );
+  const [receiveMode, setReceiveMode] = usePersistentState(
+    readChatReceiveMode,
+    (value) => localStorage.setItem('dogebot.chatReceiveMode', value)
   );
   const [token, setToken] = useState(() => localStorage.getItem('dogebot.token') || '');
   const [serverUrl, setServerUrl] = useState(initialServerUrl);
@@ -108,6 +115,8 @@ export function App() {
   const [douyinTaskEvents, setDouyinTaskEvents] = useState<Record<string, DouyinEvent[]>>({});
 
   const loggedIn = Boolean(token);
+  const viewingChat = workspaceView === 'chats' && windowVisible;
+  const receiveEnabled = loggedIn && (receiveMode === 'always' || viewingChat);
   const connectionMap = useMemo(() => new Map(connections.map((connection) => [connection.botId, connection])), [connections]);
   const activeDouyinTasks = useMemo(() => douyinTasks.filter((task) => task.enabled), [douyinTasks]);
   const favoriteUrlOptions = useMemo(
@@ -125,13 +134,13 @@ export function App() {
 
   const { apiUrl, api } = useApi(serverUrl, token);
 
-  const loadBots = useCallback(async () => {
+  const loadBots = useCallback(async (signal?: AbortSignal) => {
     const [botData, connectionData] = await Promise.all([
-      api<{ bots: Bot[] }>('/api/feishu/bots'),
-      api<{ connections: Connection[] }>('/api/feishu/connections')
+      api<{ bots: Bot[] }>('/api/feishu/bots', { signal }),
+      api<{ connections: Connection[] }>('/api/feishu/connections', { signal })
     ]);
-    setBots(botData.bots);
-    setConnections(connectionData.connections);
+    if (!signal?.aborted) { setBots(botData.bots); setConnections(connectionData.connections); }
+    return botData.bots;
   }, [api]);
 
   useEffect(() => {
@@ -448,7 +457,8 @@ export function App() {
 
           </div>
           <div className="app-chat-panel" hidden={workspaceView !== 'chats'}>
-            <FeishuChatPanel key={`${serverUrl}:${token}`} serverUrl={serverUrl} token={token} bots={bots} onUnauthorized={logout} onManageBots={() => setWorkspaceView('bots')} ownMessageAlignment={ownMessageAlignment} />
+            <FeishuChatPanel key={`${serverUrl}:${token}`} serverUrl={serverUrl} token={token} bots={bots} onUnauthorized={logout} onManageBots={() => setWorkspaceView('bots')} ownMessageAlignment={ownMessageAlignment}
+              receiveEnabled={receiveEnabled} viewing={viewingChat} onRefreshBots={loadBots} />
           </div>
           <div className="app-workspace-panel" hidden={workspaceView !== 'douyin'}>
           <DouyinMonitorCard
@@ -492,7 +502,7 @@ export function App() {
           </div>
           <div className="app-workspace-panel" hidden={workspaceView !== 'settings'}>
             <SettingsPanel active={workspaceView === 'settings'} ownMessageAlignment={ownMessageAlignment}
-              onOwnMessageAlignmentChange={setOwnMessageAlignment} />
+              onOwnMessageAlignmentChange={setOwnMessageAlignment} receiveMode={receiveMode} onReceiveModeChange={setReceiveMode} />
           </div>
         </>
       )}

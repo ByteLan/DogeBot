@@ -44,6 +44,7 @@
 .chat-connection-status { display: inline-flex; align-items: center; gap: 5px; width: fit-content; max-width: 100%; overflow: hidden; color: #8f959e; font-size: 11px; line-height: 15px; text-overflow: ellipsis; white-space: nowrap; }
 .chat-connection-status > i { flex: 0 0 5px; width: 5px; height: 5px; border-radius: 50%; background: #d4a34c; }
 .chat-connection-status[data-connected="true"] > i { background: #34a679; }
+.chat-connection-status[data-paused="true"] > i { background: #b5bbc4; }
 .chat-conversation { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; }
 .chat-main-timeline { position: relative; display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
 .chat-timeline-stage { position: relative; display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }

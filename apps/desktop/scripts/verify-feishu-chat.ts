@@ -152,6 +152,47 @@ check('byte budget evicts inactive sessions and releases distant active pages fi
   c.clear();
 });
 
+check('pausing cancels only reads, invalidates late pages and preserves the conversation and writes', () => {
+  const c = new ChatCache(); const e = c.visit(chat(1));
+  c.page(c.begin(e, e.main, true), { items: [message(1)], hasMore: false }, 'replace');
+  e.draft = 'keep draft'; e.reply = { messageId: 'om_1', mode: 'chat' };
+  e.scrollAnchors.set('main', { id: 'om_1', offset: 12 });
+  const thread = c.view(e, 'omt_one'); e.openedThread = { threadId: 'omt_one', rootMessageId: 'om_1' };
+  const old = c.begin(e, e.main, true), firstThread = c.begin(e, thread, true);
+  const details = c.read(e), groups = c.read(), write = new AbortController(); e.controllers.add(write);
+  c.dirty();
+  assert.equal(old.controller.signal.aborted, true); assert.equal(firstThread.controller.signal.aborted, true);
+  assert.equal(details.signal.aborted, true); assert.equal(groups.signal.aborted, true);
+  assert.equal(write.signal.aborted, false); assert.equal(e.controllers.has(write), true);
+  assert.equal(e.main.loading, false); assert.equal(thread.loading, false);
+  assert.equal(e.main.needsResync, true); assert.equal(thread.needsResync, true);
+  assert.equal(e.draft, 'keep draft'); assert.equal(e.reply?.messageId, 'om_1');
+  assert.equal(e.openedThread.threadId, 'omt_one'); assert.equal(e.scrollAnchors.get('main')?.offset, 12);
+  c.page(old, { items: [message(2)], hasMore: false }, 'replace'); assert.equal(e.messages.has('om_2'), false);
+  assert.equal(e.unverifiedIds.has('om_1'), true);
+  c.page(c.begin(e, e.main, true), { items: [message(1)], hasMore: false }, 'replace');
+  assert.equal(e.unverifiedIds.has('om_1'), false); assert.equal(e.main.needsResync, false);
+  assert.equal(thread.needsResync, true); assert.equal(thread.pages.length, 0);
+  c.clear(); assert.equal(write.signal.aborted, true);
+});
+
+check('confirmed sends survive a paused timeline and a single-detail check cannot validate the whole view', () => {
+  const c = new ChatCache(); const e = c.visit(chat(1));
+  c.page(c.begin(e, e.main, true), { items: [message(1), message(2)], hasMore: false }, 'replace');
+  e.pending.set('request-one', { status: 'sending', input: { clientRequestId: 'request-one', message: { type: 'text', text: 'hello' } } });
+  c.dirty(); c.incoming(message(3), 'request-one');
+  assert.equal(e.pending.size, 0); assert.equal(e.messages.has('om_3'), true);
+  c.detail(e, message(1, { deleted: true, content: {} }));
+  assert.equal(e.unverifiedIds.has('om_1'), false); assert.equal(e.unverifiedIds.has('om_2'), true);
+  assert.equal(e.main.needsResync, true); assert.equal(e.messages.get('om_1')?.deleted, true);
+  c.clear();
+});
+
+check('session cleanup cancels metadata queries without a selected conversation', () => {
+  const c = new ChatCache(); const groups = c.read(); c.clear();
+  assert.equal(groups.signal.aborted, true);
+});
+
 check('SSE handles split UTF-8, CRLF, multiline data and heartbeat comments', () => {
   const events: Array<[string, string]> = [];
   const parser = new SseParser((name, data) => events.push([name, data]));

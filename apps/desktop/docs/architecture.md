@@ -291,8 +291,10 @@ dist/
 
 ## 飞书聊天模块（2026-10-16）
 
-renderer 的 `feishu/chat/` 独立于抖音模块：`api.ts` 处理鉴权 JSON、SSE 和二进制请求，`cache.ts` 管理账号作用域的 10 会话 LRU 和有界分页窗口，`use-chat.ts` 管理查询、实时合并、发送与恢复，`FeishuChatPanel.tsx` 展示群列表、主线、话题和输入区。`App.tsx` 增加工作区切换，聊天组件在切换工作区时仍可接收事件，退出账号时销毁。
+renderer 的 `feishu/chat/` 独立于抖音模块：`api.ts` 处理鉴权 JSON、SSE 和二进制请求，`cache.ts` 管理账号作用域的 10 会话 LRU 和有界分页窗口，`use-chat.ts` 管理查询、实时合并、发送与恢复，`FeishuChatPanel.tsx` 展示群列表、主线、话题和输入区。`App.tsx` 管理工作区切换；默认「始终收取」在其他工作区继续订阅，「仅查看群聊时收取」则结合 Tab 与原生窗口可见性暂停、恢复。聊天组件与缓存只在登录会话结束时销毁，策略暂停只取消只读请求，不取消已提交的发送、上传或撤回。
 
 只保存 renderer 内存，不复用 `usePersistentState()`，不增加 Electron IPC 或主进程消息存储。图片使用有界 Blob/Object URL；会话淘汰时取消查询、释放资源，响应通过 generation 校验后才可写入现有条目。server 用 REST 代理飞书历史，通过 SSE 即时分发长连接事件和自身发送结果。
 
 容量、契约和恢复规则见 [设计文档](../../../docs/2026-10-16/feishu-desktop-chat-implementation-plan.md)。
+
+窗口显隐通过现有只读窗口桥发布 `visible`，聊天主线和话题分别维护阅读位置及待校准状态。收取偏好可持久化，消息与草稿仍只保存在内存；实现拆分与验证范围见 [收取策略方案](../../../docs/2026-10-17/feishu-chat-receive-policy-plan.md)。

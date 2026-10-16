@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Radio, Switch, Typography } from '@arco-design/web-react';
 import type { DesktopStartupSettings } from '../../shared/types';
-import type { OwnMessageAlignment } from '../feishu/chat/types';
+import type { ChatReceiveMode, OwnMessageAlignment } from '../feishu/chat/types';
 import './settings.css';
 
-export function SettingsPanel({ active, ownMessageAlignment, onOwnMessageAlignmentChange }: {
+export function SettingsPanel({ active, ownMessageAlignment, onOwnMessageAlignmentChange, receiveMode, onReceiveModeChange }: {
   active: boolean;
   ownMessageAlignment: OwnMessageAlignment;
   onOwnMessageAlignmentChange: (alignment: OwnMessageAlignment) => void;
+  receiveMode: ChatReceiveMode;
+  onReceiveModeChange: (mode: ChatReceiveMode) => void;
 }) {
   const [startup, setStartup] = useState<DesktopStartupSettings>();
   const [loading, setLoading] = useState(false);
@@ -87,6 +89,20 @@ export function SettingsPanel({ active, ownMessageAlignment, onOwnMessageAlignme
         action={<Button size="mini" type="text" onClick={() => setRetry((value) => value + 1)}>重试</Button>} /> : null}
     </Card>
     <Card title="聊天" size="small">
+      <div className="app-settings-row app-settings-receive">
+        <div className="app-settings-label">
+          <Typography.Text id="chat-receive-label">消息收取方式</Typography.Text>
+          <Typography.Text type="secondary">{receiveMode === 'always'
+            ? '切换页面或隐藏窗口后仍接收实时更新。'
+            : '仅在群聊页面且窗口可见时收取；暂停期间没有实时新消息提示，返回后自动同步。'}</Typography.Text>
+        </div>
+        <Radio.Group value={receiveMode} aria-labelledby="chat-receive-label" onChange={(value) => {
+          if (value === 'always' || value === 'when-viewing') onReceiveModeChange(value);
+        }}>
+          <Radio value="always">始终收取</Radio>
+          <Radio value="when-viewing">仅查看群聊时收取</Radio>
+        </Radio.Group>
+      </div>
       <div className="app-settings-row">
         <div className="app-settings-label">
           <Typography.Text id="message-alignment-label">自己发出的消息气泡</Typography.Text>

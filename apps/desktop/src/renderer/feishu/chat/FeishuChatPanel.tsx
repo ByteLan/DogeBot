@@ -86,9 +86,9 @@ function MessageImage({ controller, entry, message, imageKey }: { controller: Ch
   const mounted = useRef(true);
   const url = controller.cache.media.get(key)?.url;
   const load = async () => {
-    if (request.current || controller.cache.mediaUrl(key)) return;
-    const abort = new AbortController();
-    request.current = abort; entry.controllers.add(abort);
+    if (!controller.receiveEnabled || !controller.viewing || request.current && !request.current.signal.aborted || controller.cache.mediaUrl(key)) return;
+    const abort = controller.cache.read(entry);
+    request.current = abort;
     setLoading(true); setError('');
     try {
       const blob = await controller.api.image(entry.chat.botId, entry.chat.chatId, message.messageId, imageKey, abort.signal);
@@ -96,17 +96,24 @@ function MessageImage({ controller, entry, message, imageKey }: { controller: Ch
         controller.cache.putMedia(entry, key, blob); controller.cache.changed();
       }
     } catch (e) { if (!abort.signal.aborted) setError(e instanceof Error ? e.message : String(e)); }
-    finally { entry.controllers.delete(abort); request.current = undefined; if (mounted.current) setLoading(false); }
+    finally {
+      controller.cache.finishRead(abort);
+      if (request.current === abort) { request.current = undefined; if (mounted.current) setLoading(false); }
+    }
   };
   const loadRef = useRef(load); loadRef.current = load;
   useEffect(() => {
     mounted.current = true;
+    if (!controller.receiveEnabled || !controller.viewing) {
+      setLoading(false);
+      return () => { mounted.current = false; request.current?.abort(); };
+    }
     const observer = new IntersectionObserver((items) => {
       if (items.some((i) => i.isIntersecting)) { observer.disconnect(); void loadRef.current(); }
     });
     if (host.current) observer.observe(host.current);
     return () => { mounted.current = false; observer.disconnect(); request.current?.abort(); };
-  }, [key]);
+  }, [key, controller.receiveEnabled, controller.viewing]);
   return <div ref={host} className="chat-message-image">
     {url ? <Image className="chat-image" src={url} alt="消息图片" loader={<Spin size={16} />} onError={() => setError('图片预览已释放，请重新加载')} />
       : <Button type="text" size="small" icon={<IconImage />} loading={loading} onClick={() => void load()}>{error || '加载图片'}</Button>}
@@ -124,10 +131,12 @@ function MessageItem({ controller, entry, message, bot, onReference, onRecall, o
   const self = Boolean(message.sender.type === 'app' && message.sender.id && (message.sender.id === bot?.appId || message.sender.id === bot?.botOpenId));
   const side = self ? ownMessageAlignment : 'left';
   const label = senderName(message, entry, bot);
-  const quote = (mode: 'chat' | 'thread') => {
-    entry.reply = { messageId: message.messageId, mode };
+  const quote = async (mode: 'chat' | 'thread') => {
+    const current = await controller.ensureMessage(entry, message.messageId);
+    if (!current) return;
+    entry.reply = { messageId: current.messageId, mode };
     if (mode === 'thread') {
-      if (message.threadId) controller.openThread(entry, message);
+      if (current.threadId) await controller.openThread(entry, current);
       else entry.openedThread = undefined;
     }
     controller.cache.changed();
@@ -181,26 +190,29 @@ function MessageList({ controller, entry, view, bot, onRecall, ownMessageAlignme
   const host = useRef<HTMLDivElement>(null);
   const contentHost = useRef<HTMLDivElement>(null);
   const scrollKey = thread ? entry.openedThread?.threadId || 'main' : 'main';
-  const follow = useRef(entry.viewMode === 'live');
-  const anchor = useRef<{ id: string; offset: number } | undefined>(entry.viewMode === 'history' ? entry.scrollAnchors.get(scrollKey) : undefined);
+  const mode = thread ? view.viewMode : entry.viewMode;
+  const follow = useRef(mode === 'live');
+  const anchor = useRef<{ id: string; offset: number } | undefined>(mode === 'history' ? entry.scrollAnchors.get(scrollKey) : undefined);
   const [reference, setReference] = useState<string>();
   const messages = controller.cache.messages(entry, view);
   const last = view.pages.at(-1);
   const signature = messages.map((m) => m.messageId).join(',');
   useEffect(() => {
     const element = host.current;
-    if (!element) return;
-    if (!thread && entry.viewMode === 'live' && view.loading) { follow.current = true; anchor.current = undefined; }
+    if (!element || !controller.viewing) return;
+    if (mode === 'live' && view.loading) { follow.current = true; anchor.current = undefined; }
+    if (mode === 'history' && !anchor.current) anchor.current = entry.scrollAnchors.get(scrollKey);
     if (anchor.current) {
       const found = [...element.querySelectorAll<HTMLElement>('[data-message-id]')].find((item) => item.dataset.messageId === anchor.current?.id);
       if (found) element.scrollTop += found.getBoundingClientRect().top - element.getBoundingClientRect().top - anchor.current.offset;
       if (!view.loading) anchor.current = undefined;
     } else if (follow.current && (!view.newerTruncated || view.loading)) element.scrollTop = element.scrollHeight;
-  }, [signature, view.loading, view.newerTruncated, view.generation]);
+  }, [signature, view.loading, view.newerTruncated, view.generation, controller.viewing, mode]);
+  const viewingRef = useRef(controller.viewing); viewingRef.current = controller.viewing;
   useEffect(() => {
     const observer = new ResizeObserver(() => {
       const element = host.current;
-      if (!element || anchor.current) return;
+      if (!element || anchor.current || !viewingRef.current) return;
       if (follow.current) element.scrollTop = element.scrollHeight;
       else {
         const saved = entry.scrollAnchors.get(scrollKey);
@@ -220,7 +232,11 @@ function MessageList({ controller, entry, view, bot, onRecall, ownMessageAlignme
     }
     follow.current = false; controller.more(entry, view);
   };
-  const showReference = (id: string) => {
+  const showReference = async (id: string) => {
+    if (entry.unverifiedIds.has(id)) {
+      const checked = await controller.detail(entry, id);
+      if (!checked) return;
+    }
     const existing = [...host.current?.querySelectorAll<HTMLElement>('[data-message-id]') ?? []].find((item) => item.dataset.messageId === id);
     if (existing) {
       existing.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -240,12 +256,19 @@ function MessageList({ controller, entry, view, bot, onRecall, ownMessageAlignme
     </Modal>
     <div className="chat-message-list" ref={host} onScroll={() => {
       const element = host.current;
-      if (!element) return;
-      follow.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
-      if (!thread) entry.viewMode = follow.current && !view.newerTruncated ? 'live' : 'history';
+      if (!element || !controller.viewing) return;
+      // Showing stale cache can emit layout scrolls before the resume query starts.
+      // Preserve a live view until it is validated instead of treating that as reading history.
+      if (view.loading || view.needsResync && (thread ? view.viewMode : entry.viewMode) === 'live') return;
+      follow.current = !view.newerTruncated && element.scrollHeight - element.scrollTop - element.clientHeight < 80;
+      const nextMode = follow.current ? 'live' : 'history';
+      const changed = (thread ? view.viewMode : entry.viewMode) !== nextMode;
+      view.viewMode = nextMode;
+      if (!thread) entry.viewMode = nextMode;
       const top = element.getBoundingClientRect().top;
       const first = [...element.querySelectorAll<HTMLElement>('[data-message-id]')].find((item) => item.getBoundingClientRect().bottom >= top);
       if (first?.dataset.messageId) entry.scrollAnchors.set(scrollKey, { id: first.dataset.messageId, offset: first.getBoundingClientRect().top - top });
+      if (changed) controller.cache.changed();
     }}>
       <div className="chat-history-action">
         {last?.hasMore && <Button type="text" size="mini" onClick={older} disabled={view.loading || !last.nextPageToken}>加载更早消息</Button>}
@@ -264,8 +287,8 @@ function MessageList({ controller, entry, view, bot, onRecall, ownMessageAlignme
         </React.Fragment>;
       })}</div>
     </div>
-    {!thread && (entry.needsResync || entry.newMessages > 0 || view.newerTruncated) && <Button className="chat-new-hint" size="small" icon={<IconArrowDown />} onClick={() => controller.latest(entry)}>
-      {entry.newMessages > 0 ? `${entry.newMessages} 条新消息` : '返回最新消息'}</Button>}
+    {(view.needsResync || view.newerTruncated || !thread && entry.newMessages > 0) && <Button className="chat-new-hint" size="small" icon={<IconArrowDown />} loading={view.loading} onClick={() => controller.latest(entry, view)}>
+      {view.needsResync ? '消息可能有更新，查看最新' : thread ? '查看最新回复' : entry.newMessages > 0 ? `${entry.newMessages} 条新消息` : '返回最新消息'}</Button>}
   </div>;
 }
 
@@ -338,10 +361,11 @@ function Composer({ controller, entry, bot, thread = false }: { controller: Chat
   </div>;
 }
 
-export function FeishuChatPanel({ serverUrl, token, bots, onUnauthorized, onManageBots, ownMessageAlignment = 'right' }: {
+export function FeishuChatPanel({ serverUrl, token, bots, onUnauthorized, onManageBots, ownMessageAlignment = 'right', receiveEnabled = true, viewing = true, onRefreshBots }: {
   serverUrl: string; token: string; bots: Bot[]; onUnauthorized: () => void; onManageBots?: () => void; ownMessageAlignment?: OwnMessageAlignment;
+  receiveEnabled?: boolean; viewing?: boolean; onRefreshBots?: (signal: AbortSignal) => Promise<Bot[]>;
 }) {
-  const controller = useChat(serverUrl, token, bots, onUnauthorized);
+  const controller = useChat(serverUrl, token, bots, onUnauthorized, { receiveEnabled, viewing, onRefreshBots });
   const { entry, cache } = controller;
   const [recallTarget, setRecallTarget] = useState<{ entry: ChatEntry; message: ChatMessage }>();
   const [skipRecallWarning, setSkipRecallWarning] = useState(false);
@@ -357,7 +381,12 @@ export function FeishuChatPanel({ serverUrl, token, bots, onUnauthorized, onMana
   const bot = bots.find((b) => b.id === entry?.chat.botId);
   const activeGroup = entry ? controller.groups.find((g) => g.botId === entry.chat.botId && g.chatId === entry.chat.chatId) ?? entry.chat : undefined;
   const connection = controller.connections[entry?.chat.botId ?? controller.botId ?? -1];
-  const connected = controller.streamStatus === '实时连接正常' && connection?.status === 'connected';
+  const views = entry ? [entry.main, ...(entry.openedThread ? [cache.view(entry, entry.openedThread.threadId)] : [])] : [];
+  const syncFailed = controller.syncError || views.some((view) => view.error) || controller.groupError;
+  const status = !receiveEnabled ? '已暂停收取' : controller.streamStatus !== '实时连接正常' ? controller.streamStatus
+    : syncFailed ? '同步失败，可手动刷新' : controller.syncing || views.some((view) => view.loading) ? '正在同步'
+    : views.some((view) => view.needsResync) ? '待同步' : connection?.status === 'connected' ? '实时同步' : '消息通道已连接';
+  const connected = status === '实时同步';
   const recent = [...cache.entries.values()].sort((a, b) => b.lastVisited - a.lastVisited);
   return <section className="feishu-chat" aria-label="飞书群聊">
     <Modal visible={Boolean(recallTarget)} title="撤回这条消息？" className="chat-recall-modal" style={{ width: 420 }}
@@ -409,7 +438,7 @@ export function FeishuChatPanel({ serverUrl, token, bots, onUnauthorized, onMana
     <div className="chat-workspace">
       <div className="chat-workspace-header"><GroupAvatar chat={activeGroup} />
         <div className="chat-header-copy"><strong title={entry?.chat.name}>{entry?.chat.name || '飞书群聊'}</strong>
-          <Tooltip content={`${controller.streamStatus} · 机器人${connection?.status === 'connected' ? '已连接' : connection?.status === 'connecting' ? '连接中' : '连接状态待确认'}`}><span className="chat-connection-status" data-connected={connected} role="status"><i />{connected ? '实时同步' : controller.streamStatus === '实时连接正常' ? '消息通道已连接' : controller.streamStatus}</span></Tooltip>
+          <Tooltip content={`${status} · 机器人${connection?.status === 'connected' ? '已连接' : connection?.status === 'connecting' ? '连接中' : '连接状态待确认'}`}><span className="chat-connection-status" data-connected={connected} data-paused={!receiveEnabled} role="status"><i />{status}</span></Tooltip>
         </div>
         {entry && <Tooltip content="刷新最新消息"><Button type="text" size="small" icon={<IconRefresh />} aria-label="刷新最新消息" loading={entry.main.loading} onClick={() => controller.latest(entry)} /></Tooltip>}
       </div>

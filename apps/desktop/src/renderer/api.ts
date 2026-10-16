@@ -15,7 +15,7 @@ export function useApi(serverUrl: string, token: string) {
       });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
-        throw new Error(data.error || `HTTP ${response.status}`);
+        throw Object.assign(new Error(data.error || `HTTP ${response.status}`), { status: response.status });
       }
       return response.status === 204 ? (undefined as T) : response.json();
     },

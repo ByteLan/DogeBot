@@ -8,6 +8,7 @@
 .app-settings-label > .arco-typography-secondary { font-size: 12px; line-height: 20px; }
 .app-settings-row > .arco-switch, .app-settings-row > .arco-radio-group { flex-shrink: 0; }
 .app-settings-error { margin-top: 12px; }
+.app-settings-receive { align-items: flex-start; flex-direction: column; gap: 12px; margin-bottom: 18px; padding-bottom: 18px; border-bottom: 1px solid #eef0f4; }
 @media (max-width: 760px) {
   .app-settings-row { gap: 16px; }
 }

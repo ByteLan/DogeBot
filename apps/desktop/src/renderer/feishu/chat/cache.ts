@@ -14,6 +14,8 @@ export type Timeline = {
   error: string;
   snapshotEndTimeSeconds?: string;
   newerTruncated: boolean;
+  needsResync: boolean;
+  viewMode: 'live' | 'history';
 };
 export type PendingSend = { input: SendMessageInput; status: 'sending' | 'failed' | 'unknown'; error?: string };
 export type ChatEntry = {
@@ -21,6 +23,7 @@ export type ChatEntry = {
   messages: Map<string, ChatMessage>;
   revisions: Map<string, number>;
   tombstones: Map<string, number>;
+  unverifiedIds: Set<string>;
   main: Timeline;
   threads: Map<string, Timeline>;
   openedThread?: { threadId: string; rootMessageId: string };
@@ -34,7 +37,7 @@ export type ChatEntry = {
   scrollAnchors: Map<string, { id: string; offset: number }>;
 };
 export type RequestTicket = { key: string; generation: number; queryGeneration: number; revision: number; controller: AbortController; timeline: Timeline };
-const timeline = (): Timeline => ({ pages: [], head: [], generation: 0, loading: false, error: '', newerTruncated: false });
+const timeline = (): Timeline => ({ pages: [], head: [], generation: 0, loading: false, error: '', newerTruncated: false, needsResync: false, viewMode: 'live' });
 export const chatKey = (botId: number, chatId: string) => `${botId}:${chatId}`;
 export const isThreadReply = (m: ChatMessage) => Boolean(m.threadId && m.parentId && m.rootId !== m.messageId);
 const encode = new TextEncoder();
@@ -47,6 +50,7 @@ export class ChatCache {
   private visits = 0;
   private version = 0;
   private listeners = new Set<() => void>();
+  private reads = new Map<AbortController, ChatEntry | undefined>();
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   snapshot = () => this.version;
   changed = () => { this.enforce(); this.version++; for (const listener of this.listeners) listener(); };
@@ -55,7 +59,7 @@ export class ChatCache {
     const key = chatKey(chat.botId, chat.chatId);
     let entry = this.entries.get(key);
     if (!entry) {
-      entry = { key, chat, generation: ++this.nextGeneration, lastVisited: 0, messages: new Map(), revisions: new Map(), tombstones: new Map(),
+      entry = { key, chat, generation: ++this.nextGeneration, lastVisited: 0, messages: new Map(), revisions: new Map(), tombstones: new Map(), unverifiedIds: new Set(),
         main: timeline(), threads: new Map(), controllers: new Set(), needsResync: false, lastValidatedAt: 0,
         revision: 0, viewMode: 'live', newMessages: 0, draft: '', pending: new Map(), detailIds: [], memberNames: new Map(), scrollAnchors: new Map() };
       this.entries.set(key, entry);
@@ -78,10 +82,19 @@ export class ChatCache {
     return ids.map((id) => entry.messages.get(id)).filter((m): m is ChatMessage => Boolean(m))
       .sort((a, b) => a.createTimeMs - b.createTimeMs || a.messageId.localeCompare(b.messageId));
   }
+  read(entry?: ChatEntry) {
+    const controller = new AbortController();
+    this.reads.set(controller, entry);
+    entry?.controllers.add(controller);
+    return controller;
+  }
+  finishRead(controller: AbortController) {
+    this.reads.get(controller)?.controllers.delete(controller);
+    this.reads.delete(controller);
+  }
   begin(entry: ChatEntry, view: Timeline, reset: boolean): RequestTicket {
     if (reset) view.generation++;
-    const controller = new AbortController();
-    entry.controllers.add(controller);
+    const controller = this.read(entry);
     view.loading = true;
     view.error = '';
     this.changed();
@@ -92,8 +105,7 @@ export class ChatCache {
     return entry?.generation === ticket.generation && ticket.timeline.generation === ticket.queryGeneration && !ticket.controller.signal.aborted ? entry : undefined;
   }
   finish(ticket: RequestTicket) {
-    const entry = this.entries.get(ticket.key);
-    entry?.controllers.delete(ticket.controller);
+    this.finishRead(ticket.controller);
     if (this.valid(ticket)) { ticket.timeline.loading = false; this.changed(); }
   }
   merge(entry: ChatEntry, message: ChatMessage, requestRevision?: number) {
@@ -115,6 +127,7 @@ export class ChatCache {
         contentState: message.contentState === 'unavailable' && !message.deleted ? previous.contentState : message.contentState };
     }
     entry.messages.set(id, message);
+    entry.unverifiedIds.delete(id);
     entry.revisions.set(id, ++entry.revision);
   }
   page(ticket: RequestTicket, result: HistoryPage, mode: 'replace' | 'older' | 'validate') {
@@ -123,7 +136,10 @@ export class ChatCache {
     const view = ticket.timeline;
     const overlap = result.items.some((m) => entry.messages.has(m.messageId) && this.ids(view).includes(m.messageId));
     if (mode === 'validate' && !overlap && this.ids(view).length) {
-      if (entry.viewMode === 'history') { entry.needsResync = true; view.newerTruncated = true; entry.newMessages++; this.changed(); return; }
+      if ((view === entry.main ? entry.viewMode : view.viewMode) === 'history') {
+        if (view === entry.main) { entry.needsResync = true; entry.newMessages++; }
+        view.needsResync = true; view.newerTruncated = true; this.changed(); return;
+      }
       mode = 'replace';
     }
     const arrived = this.ids(view).filter((id) => (entry.revisions.get(id) ?? 0) > ticket.revision);
@@ -141,6 +157,7 @@ export class ChatCache {
     }
     const paged = new Set(view.pages.flatMap((p) => p.ids));
     view.head = view.head.filter((id) => !paged.has(id));
+    if (mode !== 'older') view.needsResync = false;
     if (view === entry.main && mode !== 'older') { entry.needsResync = false; entry.lastValidatedAt = Date.now(); entry.newMessages = 0; }
     this.trim(entry, view, mode === 'older');
     this.changed();
@@ -155,7 +172,7 @@ export class ChatCache {
       if (root && !root.threadId) this.merge(entry, { ...root, threadId: message.threadId });
     }
     const view = isThreadReply(message) ? entry.threads.get(message.threadId!) : entry.main;
-    if (view && (!view.newerTruncated || view.loading || existing)) {
+    if (view && (!view.newerTruncated || view.loading || existing || requestId)) {
       this.merge(entry, message);
       if (!this.ids(view).includes(message.messageId)) view.head.push(message.messageId);
       this.trim(entry, view, false);
@@ -173,6 +190,7 @@ export class ChatCache {
       if (entry.tombstones.size > 300) {
         // Do not forget a tombstone while an older response can still revive it.
         for (const controller of entry.controllers) controller.abort();
+        for (const controller of entry.controllers) this.reads.delete(controller);
         entry.controllers.clear(); entry.needsResync = true;
         for (const view of [entry.main, ...entry.threads.values()]) { view.generation++; view.loading = false; }
         entry.tombstones.delete(entry.tombstones.keys().next().value!);
@@ -183,12 +201,17 @@ export class ChatCache {
     this.changed();
   }
   dirty(botId?: number) {
+    // Reads belong to a receiving cycle; writes belong to the login session.
+    for (const [controller, entry] of this.reads) if (botId == null || entry?.chat.botId === botId) {
+      controller.abort(); this.finishRead(controller);
+    }
     for (const entry of this.entries.values()) {
       if (botId != null && entry.chat.botId !== botId) continue;
       entry.needsResync = true;
-      for (const controller of entry.controllers) controller.abort();
-      entry.controllers.clear();
-      for (const view of [entry.main, ...entry.threads.values()]) { view.generation++; view.loading = false; view.newerTruncated = true; }
+      for (const id of entry.messages.keys()) entry.unverifiedIds.add(id);
+      for (const view of [entry.main, ...entry.threads.values()]) {
+        view.generation++; view.loading = false; view.needsResync = true; view.newerTruncated = true;
+      }
     }
     this.changed();
   }
@@ -203,7 +226,7 @@ export class ChatCache {
     const keep = new Set([...[entry.main, ...entry.threads.values()].flatMap((v) => this.ids(v)), ...entry.detailIds,
       entry.openedThread?.rootMessageId ?? '', entry.reply?.messageId ?? '']);
     for (const id of entry.messages.keys()) if (!keep.has(id)) {
-      entry.messages.delete(id); entry.revisions.delete(id); this.releaseMedia(entry.key, id);
+      entry.messages.delete(id); entry.revisions.delete(id); entry.unverifiedIds.delete(id); this.releaseMedia(entry.key, id);
     }
   }
   private trim(entry: ChatEntry, preferred: Timeline, older: boolean) {
@@ -286,15 +309,21 @@ export class ChatCache {
     const entry = this.entries.get(key);
     if (!entry) return;
     for (const controller of entry.controllers) controller.abort();
+    for (const controller of entry.controllers) this.reads.delete(controller);
     this.releaseMedia(key);
     this.entries.delete(key);
     // Async closures can retain the entry until a write finishes. Release its data now.
-    entry.messages.clear(); entry.revisions.clear(); entry.tombstones.clear();
+    entry.messages.clear(); entry.revisions.clear(); entry.tombstones.clear(); entry.unverifiedIds.clear();
     for (const view of [entry.main, ...entry.threads.values()]) { view.pages = []; view.head = []; }
     entry.threads.clear(); entry.controllers.clear(); entry.pending.clear(); entry.memberNames.clear(); entry.scrollAnchors.clear();
     entry.detailIds = []; entry.draft = ''; entry.reply = undefined; entry.openedThread = undefined;
     if (this.activeKey === key) this.activeKey = '';
   }
   removeBot(botId: number) { for (const e of this.entries.values()) if (e.chat.botId === botId) this.remove(e.key); this.changed(); }
-  clear() { for (const key of this.entries.keys()) this.remove(key); this.changed(); }
+  clear() {
+    for (const controller of this.reads.keys()) controller.abort();
+    this.reads.clear();
+    for (const key of this.entries.keys()) this.remove(key);
+    this.changed();
+  }
 }
