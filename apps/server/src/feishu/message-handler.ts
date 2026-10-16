@@ -31,7 +31,7 @@ export async function handleFeishuMessage(bot: FeishuBot, event: any) {
   const parsedMessage = parseFeishuMessage(message);
   const text = parsedMessage.text;
   if (!messageId) return;
-  const dedupKey = `message:${messageId}`;
+  const dedupKey = `business-message:${bot.id}:${messageId}`;
   if (!rememberFeishuEventKey(dedupKey)) return;
   if (isFromCurrentBot(bot, event)) return;
 

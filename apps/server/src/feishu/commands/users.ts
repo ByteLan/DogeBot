@@ -2,6 +2,15 @@ import type { FeishuBot, AtRecord } from '../../types.js';
 import { db } from '../../db.js';
 import { feishuSdkClient } from '../client.js';
 import { createChatMessage } from '../api.js';
+import { publishMessageResult, publishMessageRefresh } from '../chat/events.js';
+
+const cardMessages = new WeakMap<object, Map<string, { bot: FeishuBot; messageId: string }>>();
+function rememberCard(client: object, cardId: string, bot: FeishuBot, messageId: string | undefined) {
+  if (!messageId) return;
+  const cards = cardMessages.get(client) ?? new Map();
+  cards.set(cardId, { bot, messageId });
+  cardMessages.set(client, cards);
+}
 
 const USERS_CARD_PERSON_LIST_CHUNK_SIZE = 100;
 const USERS_CARD_MAX_RECORDS = 1000;
@@ -149,8 +158,8 @@ async function createCardEntity(client: Awaited<ReturnType<typeof feishuSdkClien
   return cardId;
 }
 
-async function replyCardReference(client: Awaited<ReturnType<typeof feishuSdkClient>>, messageId: string, cardId: string, replyInThread = false) {
-  return client.im.v1.message.reply({
+async function replyCardReference(bot: FeishuBot, client: Awaited<ReturnType<typeof feishuSdkClient>>, messageId: string, cardId: string, replyInThread = false) {
+  const result = await client.im.v1.message.reply({
     path: { message_id: messageId },
     data: {
       msg_type: 'interactive',
@@ -158,10 +167,15 @@ async function replyCardReference(client: Awaited<ReturnType<typeof feishuSdkCli
       reply_in_thread: replyInThread
     }
   });
+  publishMessageResult(bot, result);
+  rememberCard(client, cardId, bot, result.data?.message_id);
+  return result;
 }
 
-async function sendCardReferenceToChat(bot: FeishuBot, chatId: string, cardId: string) {
-  return createChatMessage(bot, chatId, 'interactive', { type: 'card', data: { card_id: cardId } });
+async function sendCardReferenceToChat(bot: FeishuBot, client: object, chatId: string, cardId: string) {
+  const messageId = await createChatMessage(bot, chatId, 'interactive', { type: 'card', data: { card_id: cardId } });
+  rememberCard(client, cardId, bot, messageId);
+  return messageId;
 }
 
 async function appendUsersCardElements(client: Awaited<ReturnType<typeof feishuSdkClient>>, cardId: string, chunks: AtRecord[][], buildElements: (chunk: AtRecord[], index: number) => object[]) {
@@ -178,6 +192,8 @@ async function appendUsersCardElements(client: Awaited<ReturnType<typeof feishuS
     });
     sequence += 1;
   }
+  const sent = cardMessages.get(client)?.get(cardId);
+  if (chunks.length > 1 && sent) publishMessageRefresh(sent.bot, sent.messageId);
 }
 
 export async function replyUsersCard(
@@ -193,7 +209,7 @@ export async function replyUsersCard(
   // --- Person List 卡片 ---
   const firstPlChunks = chunkUsersRecords(cardGroups[0]);
   const personListCardId = await createCardEntity(client, usersPersonListCard(cardGroups[0]));
-  const personListReply = await replyCardReference(client, messageId, personListCardId, replyInThread);
+  const personListReply = await replyCardReference(bot, client, messageId, personListCardId, replyInThread);
   await appendUsersCardElements(client, personListCardId, firstPlChunks, (chunk, index) => [
     usersDividerElement(index),
     usersPersonListElement(chunk, index)
@@ -206,7 +222,7 @@ export async function replyUsersCard(
   for (let g = 1; g < cardGroups.length; g++) {
     const chunks = chunkUsersRecords(cardGroups[g]);
     const cardId = await createCardEntity(client, usersPersonListCard(cardGroups[g]));
-    await replyCardReference(client, personListMessageId, cardId, true);
+    await replyCardReference(bot, client, personListMessageId, cardId, true);
     await appendUsersCardElements(client, cardId, chunks, (chunk, index) => [
       usersDividerElement(index),
       usersPersonListElement(chunk, index)
@@ -217,7 +233,7 @@ export async function replyUsersCard(
   const firstMdChunks = chunkUsersRecords(cardGroups[0]);
   const markdownCardId = await createCardEntity(client, usersMarkdownCard(cardGroups[0]));
   await replyCardReference(
-    client,
+    bot, client,
     replyMarkdownInThread ? personListMessageId : messageId,
     markdownCardId,
     replyMarkdownInThread
@@ -228,7 +244,7 @@ export async function replyUsersCard(
   for (let g = 1; g < cardGroups.length; g++) {
     const chunks = chunkUsersRecords(cardGroups[g]);
     const cardId = await createCardEntity(client, usersMarkdownCard(cardGroups[g]));
-    await replyCardReference(client, personListMessageId, cardId, true);
+    await replyCardReference(bot, client, personListMessageId, cardId, true);
     await appendUsersCardElements(client, cardId, chunks, (chunk, index) => [usersMarkdownElement(chunk, index)]);
   }
 }
@@ -239,7 +255,7 @@ export async function sendUsersCardToChat(bot: FeishuBot, chatId: string, record
 
   // --- Person List 卡片 ---
   const personListCardId = await createCardEntity(client, usersPersonListCard(cardGroups[0]));
-  const personListMessageId = await sendCardReferenceToChat(bot, chatId, personListCardId);
+  const personListMessageId = await sendCardReferenceToChat(bot, client, chatId, personListCardId);
   const firstPlChunks = chunkUsersRecords(cardGroups[0]);
   await appendUsersCardElements(client, personListCardId, firstPlChunks, (chunk, index) => [
     usersDividerElement(index),
@@ -250,7 +266,7 @@ export async function sendUsersCardToChat(bot: FeishuBot, chatId: string, record
   for (let g = 1; g < cardGroups.length; g++) {
     const chunks = chunkUsersRecords(cardGroups[g]);
     const cardId = await createCardEntity(client, usersPersonListCard(cardGroups[g]));
-    await replyCardReference(client, personListMessageId, cardId, true);
+    await replyCardReference(bot, client, personListMessageId, cardId, true);
     await appendUsersCardElements(client, cardId, chunks, (chunk, index) => [
       usersDividerElement(index),
       usersPersonListElement(chunk, index)
@@ -259,7 +275,7 @@ export async function sendUsersCardToChat(bot: FeishuBot, chatId: string, record
 
   // --- Markdown 卡片 ---
   const markdownCardId = await createCardEntity(client, usersMarkdownCard(cardGroups[0]));
-  const markdownReply = await replyCardReference(client, personListMessageId, markdownCardId, true);
+  const markdownReply = await replyCardReference(bot, client, personListMessageId, markdownCardId, true);
   const firstMdChunks = chunkUsersRecords(cardGroups[0]);
   await appendUsersCardElements(client, markdownCardId, firstMdChunks, (chunk, index) => [usersMarkdownElement(chunk, index)]);
 
@@ -267,7 +283,7 @@ export async function sendUsersCardToChat(bot: FeishuBot, chatId: string, record
   for (let g = 1; g < cardGroups.length; g++) {
     const chunks = chunkUsersRecords(cardGroups[g]);
     const cardId = await createCardEntity(client, usersMarkdownCard(cardGroups[g]));
-    await replyCardReference(client, personListMessageId, cardId, true);
+    await replyCardReference(bot, client, personListMessageId, cardId, true);
     await appendUsersCardElements(client, cardId, chunks, (chunk, index) => [usersMarkdownElement(chunk, index)]);
   }
 

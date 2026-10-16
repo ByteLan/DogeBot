@@ -11,6 +11,10 @@ export function rememberFeishuEventKey(eventKey: string) {
   const now = Date.now();
   cleanupRecentFeishuEventKeys(now);
   if (recentFeishuEventKeys.has(eventKey)) return false;
+  if (recentFeishuEventKeys.size >= 20_000) {
+    const oldest = recentFeishuEventKeys.keys().next().value;
+    if (oldest) recentFeishuEventKeys.delete(oldest);
+  }
   recentFeishuEventKeys.set(eventKey, now + FEISHU_EVENT_DEDUP_TTL_MS);
   return true;
 }
