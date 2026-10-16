@@ -10,7 +10,7 @@ function windowState(win: BrowserWindow): DesktopWindowState {
   return { maximized: win.isMaximized(), focused: win.isFocused() };
 }
 
-function senderWindow(event: IpcMainInvokeEvent): BrowserWindow {
+export function senderWindow(event: IpcMainInvokeEvent): BrowserWindow {
   const win = state.mainWindow;
   if (!win || win.isDestroyed() || event.sender !== win.webContents
     || event.senderFrame !== win.webContents.mainFrame

@@ -1,8 +1,13 @@
 import { useEffect, useState, type Dispatch, type SetStateAction } from 'react';
 import { defaultFavoriteUrl, defaultCollectListUrl, defaultRequestUrlFilter } from '../shared/constants';
 import type { DouyinPartition, DouyinTask } from './types';
+import type { OwnMessageAlignment } from './feishu/chat/types';
 
 export const initialServerUrl = localStorage.getItem('dogebot.serverUrl') || 'http://127.0.0.1:3000';
+
+export function readOwnMessageAlignment(): OwnMessageAlignment {
+  return localStorage.getItem('dogebot.ownMessageAlignment') === 'left' ? 'left' : 'right';
+}
 
 // 内置默认 partition：其 electron partition 串沿用旧的 persist:dogebot-douyin，
 // 保证历史登录态不丢；其余 partition 由 id 派生。

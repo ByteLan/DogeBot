@@ -1,4 +1,4 @@
-// 在 main 与 renderer 之间共享的窗口与抖音监听类型。
+// 在 main 与 renderer 之间共享的桌面能力与抖音监听类型。
 
 export type DesktopWindowState = {
   maximized: boolean;
@@ -12,6 +12,18 @@ export type DesktopWindowBridge = {
   close: () => Promise<void>;
   getState: () => Promise<DesktopWindowState>;
   onStateChanged: (listener: (state: DesktopWindowState) => void) => () => void;
+};
+
+export type DesktopStartupSettings = {
+  available: boolean;
+  enabled: boolean;
+  unavailableReason?: 'development' | 'platform';
+  requiresApproval?: boolean;
+};
+
+export type DesktopSettingsBridge = {
+  getStartup: () => Promise<DesktopStartupSettings>;
+  setStartup: (enabled: boolean) => Promise<DesktopStartupSettings>;
 };
 
 // 主进程接收的单任务配置（每任务自持 partition / 定时 / 显隐 / 窗口回收策略）。

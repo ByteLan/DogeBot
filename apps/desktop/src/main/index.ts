@@ -4,6 +4,7 @@ import { installDevToolsShortcut, isBlockedDeeplinkUrl, registerBlockedDeeplinkH
 import { createTray } from './tray.js';
 import { createWindow, registerWindowIpc, showMainWindow } from './main-window.js';
 import { registerDouyinIpc } from './douyin/ipc.js';
+import { registerSettingsIpc } from './settings.js';
 import { state } from './douyin/state.js';
 
 app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
@@ -21,6 +22,7 @@ app.on('browser-window-created', (_event: any, win: BrowserWindow) => {
 
 registerDouyinIpc();
 registerWindowIpc();
+registerSettingsIpc();
 
 app.whenReady().then(() => {
   Menu.setApplicationMenu(process.platform === 'darwin' ? Menu.buildFromTemplate([

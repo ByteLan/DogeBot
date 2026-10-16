@@ -1,4 +1,4 @@
-import type { DesktopWindowBridge, DouyinTaskConfig, DouyinMonitorSharedConfig, DouyinTaskState, DouyinPartition } from '../shared/types';
+import type { DesktopSettingsBridge, DesktopWindowBridge, DouyinTaskConfig, DouyinMonitorSharedConfig, DouyinTaskState, DouyinPartition } from '../shared/types';
 
 export type { DouyinMonitorSharedConfig, DouyinTaskState, DouyinPartition };
 export type DouyinMonitorTaskPayload = DouyinTaskConfig;
@@ -107,6 +107,7 @@ export type DouyinClickResult = {
 
 declare global {
   interface Window {
+    desktopSettings?: DesktopSettingsBridge;
     desktopWindow?: DesktopWindowBridge;
     douyin?: DouyinBridge;
   }
