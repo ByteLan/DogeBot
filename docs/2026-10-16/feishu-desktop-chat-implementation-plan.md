@@ -540,11 +540,11 @@ pnpm build
 
 ### 本次验证结果
 
-- server：`tsc -p tsconfig.json --noEmit` 通过；`pnpm build` 通过。新增 `tsconfig.build.json` 仅编译 src 到 dist，保持 `pnpm start -> dist/index.js` 与产物一致；原配置仍校验 src 和 scripts。
+- server：`tsc -p tsconfig.json --noEmit` 通过；`pnpm build` 通过。使用原有 `tsconfig.json`（`rootDir: "."`）编译到 `dist/src` 和 `dist/scripts`，保持 `pnpm start -> dist/src/index.js` 及云端部署入口一致。
 - desktop：完整 `pnpm build` 通过，包含主进程与 renderer 类型检查、Vite 和 preload 拷贝。现有打包大块体积提示不影响构建成功。
 - 15 项缓存/解析场景通过，包括立即释放淘汰实体、迟到请求、版本合并、撤回标记溢出保护、分页连续性、话题根消息更新、消息/图片容量和 SSE 分片。
 - 6 项模拟接口场景通过，使用独立临时数据库与模拟飞书，覆盖鉴权、用户隔离、群/话题归属、UUID、自动发送、其他机器人消息、撤回、图片上传和代理。
 - 使用生产构建在 Chrome 进行浏览器联调：群历史/成员名称、REST/SSE 去重、话题查看和回复、图片上传/发送/预览、960×720 布局、10 会话 LRU、淘汰后 Blob URL 失效和重新读取均通过；未出现 renderer 未捕获异常或聊天 localStorage 数据。
-- 使用独立临时数据库启动编译后的 `dist/index.js`，确认健康检查和新聊天鉴权路由正常；没有使用真实 bot 凭证或发送真实飞书消息。
+- 使用独立临时数据库启动编译后的 `dist/src/index.js`，确认健康检查和新聊天鉴权路由正常；没有使用真实 bot 凭证或发送真实飞书消息。
 
 后续上线前仍需用实际机器人验证租户权限、历史可见范围、CardKit 动态回读以及生产代理 SSE。未提交或推送代码。

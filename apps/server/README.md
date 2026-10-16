@@ -110,7 +110,7 @@ pnpm add-user <用户名> <密码>
 
 ## 宝塔面板长期运行
 
-推荐在宝塔里用 Node 项目或 PM2 管理器运行编译后的 `dist/index.js`，不要直接运行 TypeScript 开发命令。
+推荐在宝塔里用 Node 项目或 PM2 管理器运行编译后的 `dist/src/index.js`，不要直接运行 TypeScript 开发命令。
 
 首次部署：
 
@@ -136,8 +136,8 @@ DOGEBOT_DATA_DIR=/www/wwwroot/DogeBot-data pnpm add-user admin 'change-me'
 宝塔 Node 项目建议配置：
 
 - 项目目录：`/www/wwwroot/DogeBot/apps/server`
-- 启动文件：`dist/index.js`
-- 启动命令：`node dist/index.js`
+- 启动文件：`dist/src/index.js`
+- 启动命令：`node dist/src/index.js`
 - 端口：`3000`
 - Node 版本：推荐 `22.x`（至少 `22.13.0`）或 `24` 及以上；`23.x` 至少需 `23.4.0`。宝塔 / PM2 的运行版本也必须满足此要求。
 - 环境变量：`PORT=3000`
@@ -159,7 +159,7 @@ DOGEBOT_FEISHU_DEBUG=0 \
 DOGEBOT_LLM_BASE_URL='https://api.openai.com/v1' \
 DOGEBOT_LLM_API_KEY='<OpenAI 兼容接口 Key>' \
 DOGEBOT_LLM_MODEL='<模型名>' \
-pm2 start dist/index.js --name dogebot-server --update-env
+pm2 start dist/src/index.js --name dogebot-server --update-env
 pm2 save
 ```
 
@@ -195,6 +195,7 @@ pm2 restart dogebot-server --update-env
 ## REST API
 
 - `POST /api/login`：登录，入参为 `{ "username": "...", "password": "..." }`。
+- `GET /api/me`：验证当前登录态并返回当前用户，需要 Bearer token；未登录返回 `401`。
 - `GET /api/feishu/bots`：查询当前用户绑定的 bot。
 - `GET /api/feishu/connections`：查询服务端当前维护的飞书长连接状态。
 - `POST /api/feishu/bots`：绑定当前用户的 bot。
@@ -340,4 +341,26 @@ node --import tsx scripts/verify-feishu-chat.ts
 
 ### 构建配置
 
-`tsconfig.json` 用于 src 和 scripts 的完整类型检查；`pnpm build` 使用 `tsconfig.build.json` 将 src 编译到 dist 根目录，保证 `pnpm start` 的 `dist/index.js` 启动入口与产物一致。Python 脚本和 assets 继续按原构建流程复制。
+`pnpm build` 使用原有 `tsconfig.json`（`rootDir: "."`），将 src 编译到 `dist/src`、TypeScript 脚本编译到 `dist/scripts`。`pnpm start` 和云端 Node 项目的启动入口均为 `dist/src/index.js`，保持原部署路径。Python 脚本和 assets 继续按原构建流程复制。
+
+### 桌面端访问 `/api/me` 返回 404
+
+该接口随飞书群聊功能加入，需要桌面端和服务端都更新到包含群聊接口的代码。`pnpm build` 只生成文件，不会更新已经运行的 Node.js 进程；构建完成后需重启云端实际提供服务的进程。
+
+生产入口保持为 `apps/server/dist/src/index.js`。确认宝塔 / PM2 / Node 项目的工作目录为 `apps/server`，启动文件为 `dist/src/index.js`。`pnpm build` 会按原部署路径覆盖产物，不需要调整云端的启动路径。
+
+在云端进入 `apps/server`，先确认源码和编译产物都包含路由：
+
+```bash
+rg -n '/api/me' src/index.ts dist/src/index.js
+```
+
+源码没有该路由时先同步服务端代码；源码有而产物没有时重新执行 `pnpm build`；两者都有则核对实际启动文件并重启服务。保持现有 `DOGEBOT_DATA_DIR`、`DOGEBOT_AUTH_SECRET` 和端口配置。
+
+在云端本机检查 HTTP 响应（端口替换为实际配置）：
+
+```bash
+curl -i http://127.0.0.1:3000/api/me
+```
+
+无 token 时应返回 `401`，表示路由已经生效。若本机返回 `401` 而桌面端使用的公网地址返回 `404`，检查反向代理是否将 `/api/me` 转发到同一个 Node.js 服务，并保留 `/api/` 路径。
