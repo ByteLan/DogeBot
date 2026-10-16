@@ -1,12 +1,16 @@
 import { useEffect, useState, type Dispatch, type SetStateAction } from 'react';
 import { defaultFavoriteUrl, defaultCollectListUrl, defaultRequestUrlFilter } from '../shared/constants';
 import type { DouyinPartition, DouyinTask } from './types';
-import type { OwnMessageAlignment } from './feishu/chat/types';
+import type { ChatReceiveMode, OwnMessageAlignment } from './feishu/chat/types';
 
 export const initialServerUrl = localStorage.getItem('dogebot.serverUrl') || 'http://127.0.0.1:3000';
 
 export function readOwnMessageAlignment(): OwnMessageAlignment {
   return localStorage.getItem('dogebot.ownMessageAlignment') === 'left' ? 'left' : 'right';
+}
+
+export function readChatReceiveMode(): ChatReceiveMode {
+  return localStorage.getItem('dogebot.chatReceiveMode') === 'when-viewing' ? 'when-viewing' : 'always';
 }
 
 // 内置默认 partition：其 electron partition 串沿用旧的 persist:dogebot-douyin，

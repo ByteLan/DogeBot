@@ -6,7 +6,7 @@ import type { QrBegin } from '../types';
 export function useQrRegistration(params: {
   qrRegistration: QrBegin | undefined;
   api: ApiClient;
-  loadBots: () => Promise<void>;
+  loadBots: () => Promise<unknown>;
   setMessage: Dispatch<SetStateAction<string>>;
   setQrRegistration: Dispatch<SetStateAction<QrBegin | undefined>>;
 }) {

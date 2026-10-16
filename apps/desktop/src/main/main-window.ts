@@ -7,7 +7,7 @@ import { WindowIpc } from '../shared/ipc-channels.js';
 import type { DesktopWindowState } from '../shared/types.js';
 
 function windowState(win: BrowserWindow): DesktopWindowState {
-  return { maximized: win.isMaximized(), focused: win.isFocused() };
+  return { maximized: win.isMaximized(), focused: win.isFocused(), visible: win.isVisible() && !win.isMinimized() };
 }
 
 export function senderWindow(event: IpcMainInvokeEvent): BrowserWindow {
@@ -76,6 +76,10 @@ export function createWindow() {
   win.on('unmaximize', publishWindowState);
   win.on('focus', publishWindowState);
   win.on('blur', publishWindowState);
+  win.on('show', publishWindowState);
+  win.on('hide', publishWindowState);
+  win.on('minimize', publishWindowState);
+  win.on('restore', publishWindowState);
   win.webContents.on('did-finish-load', publishWindowState);
   win.on('close', (event) => {
     if (state.appQuitting) return;

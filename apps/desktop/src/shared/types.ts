@@ -3,6 +3,7 @@
 export type DesktopWindowState = {
   maximized: boolean;
   focused: boolean;
+  visible: boolean;
 };
 
 export type DesktopWindowBridge = {

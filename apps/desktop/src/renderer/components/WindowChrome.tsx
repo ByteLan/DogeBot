@@ -11,7 +11,7 @@ function reportWindowError(error: unknown) {
 
 export function WindowChrome({ children }: { children: ReactNode }) {
   const bridge = window.desktopWindow;
-  const [state, setState] = useState<DesktopWindowState>({ maximized: false, focused: true });
+  const [state, setState] = useState<DesktopWindowState>({ maximized: false, focused: true, visible: false });
 
   useEffect(() => {
     if (!bridge) return;
