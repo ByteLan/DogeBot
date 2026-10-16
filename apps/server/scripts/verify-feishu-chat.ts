@@ -51,6 +51,16 @@ globalThis.fetch = async (input, init) => {
   if (/\/chats\/[^/]+$/.test(url.pathname)) return ok({ name: `测试群 ${url.pathname.split('_').at(-1)}`, chat_mode: 'group' });
   if (url.pathname.includes('/resources/')) return new Response(new Uint8Array(fixturePng), { headers: { 'content-type': 'image/png' } });
   if (url.pathname.endsWith('/images')) return ok({ image_key: 'img_fixture' });
+  if (method === 'DELETE' && /\/messages\/[^/]+$/.test(url.pathname)) {
+    const id = url.pathname.split('/').at(-1)!;
+    const error = id === 'om_expired' ? 230009 : id === 'om_denied' ? 230026 : id === 'om_unsupported' ? 230054 : id === 'om_limited' ? 99991400 : 0;
+    if (error) return Response.json({ code: error, msg: 'fixture recall rejected' }, { status: error === 99991400 ? 429 : 400 });
+    if (id === 'om_unconfirmed') return Response.json({});
+    const item = messages.get(id); assert.ok(item);
+    item.deleted = true; item.body = { content: '{}' }; item.update_time = String(Date.now());
+    if (id === 'om_recalled_elsewhere') return Response.json({ code: 230110, msg: 'Action unavailable as the message has been deleted.' }, { status: 400 });
+    return ok({});
+  }
   if (method === 'POST' && /\/messages(?:\/[^/]+\/reply)?$/.test(url.pathname)) {
     const parentId = url.pathname.endsWith('/reply') ? url.pathname.split('/').at(-2) : undefined;
     const parent = parentId ? messages.get(parentId) : undefined;
@@ -72,7 +82,7 @@ globalThis.fetch = async (input, init) => {
 };
 
 const app = express();
-app.use((_req, res, next) => { res.setHeader('Access-Control-Allow-Origin', '*'); res.setHeader('Access-Control-Allow-Headers', 'authorization,content-type'); res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS'); next(); });
+app.use((_req, res, next) => { res.setHeader('Access-Control-Allow-Origin', '*'); res.setHeader('Access-Control-Allow-Headers', 'authorization,content-type'); res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS'); next(); });
 app.options('*', (_req, res) => { res.sendStatus(204); });
 app.use(express.json());
 app.get('/api/me', requireAuth, (req, res) => res.json({ user: (req as import('../src/auth.js').AuthenticatedRequest).user }));
@@ -169,6 +179,42 @@ try {
     const response = await request(prefix + '/oc_1/messages/om_root/resources/img_x');
     assert.equal(response.status, 200); assert.equal(response.headers.get('cache-control'), 'no-store');
     assert.equal((await response.arrayBuffer()).byteLength, fixturePng.byteLength);
+  });
+  await check('recall rejects other users, chats, members and bots before issuing DELETE', async () => {
+    messages.set('om_other_app', rawMessage('om_other_app', 'other app', { sender: { id: 'cli_other', id_type: 'app_id', sender_type: 'app' } }));
+    const deletes = () => upstreamCalls.filter((c) => c.method === 'DELETE').length;
+    const before = deletes();
+    assert.equal((await request(prefix + '/oc_1/messages/om_root', { method: 'DELETE' }, tokens[1])).status, 404);
+    assert.equal((await request(prefix + '/oc_1/messages/om_foreign', { method: 'DELETE' })).status, 403);
+    assert.equal((await request(prefix + '/oc_1/messages/om_root', { method: 'DELETE' })).status, 403);
+    assert.equal((await request(prefix + '/oc_1/messages/om_other_app', { method: 'DELETE' })).status, 403);
+    assert.equal(deletes(), before); messages.delete('om_other_app');
+  });
+  await check('recall supports app_id/open_id and thread replies, no-store, SSE isolation and repeat requests', async () => {
+    for (const [id, senderId, senderType] of [['om_own_app', 'cli_test_one', 'app_id'], ['om_own_open', 'ou_bot', 'open_id'], ['om_own_thread', 'cli_test_one', 'app_id'], ['om_recalled_elsewhere', 'cli_test_one', 'app_id']]) {
+      messages.set(id, rawMessage(id, 'will recall', { sender: { id: senderId, id_type: senderType, sender_type: 'app' },
+        ...(id === 'om_own_thread' ? { root_id: 'om_root', parent_id: 'om_root', thread_id: 'omt_one' } : {}) }));
+      const response = await request(prefix + `/oc_1/messages/${id}`, { method: 'DELETE' });
+      assert.equal(response.status, 200); assert.equal(response.headers.get('cache-control'), 'no-store');
+      const result = await response.json(); assert.equal(result.messageId, id); assert.ok(result.recallTimeMs > 0);
+      await one.until((e) => e.type === 'message.recalled' && e.messageId === id);
+      assert.equal(messages.get(id)?.deleted, true);
+      const count = upstreamCalls.filter((c) => c.method === 'DELETE').length;
+      assert.equal((await request(prefix + `/oc_1/messages/${id}`, { method: 'DELETE' })).status, 200);
+      assert.equal(upstreamCalls.filter((c) => c.method === 'DELETE').length, count);
+      messages.delete(id);
+    }
+    assert.equal(two.events.filter((e) => e.type === 'message.recalled').length, 0);
+  });
+  await check('recall failures preserve messages and never publish a false recall', async () => {
+    for (const [id, status] of [['om_expired', 400], ['om_denied', 403], ['om_unsupported', 400], ['om_limited', 429], ['om_unconfirmed', 502]] as const) {
+      messages.set(id, rawMessage(id, 'must survive failure', { sender: { id: 'cli_test_one', id_type: 'app_id', sender_type: 'app' } }));
+      const response = await request(prefix + `/oc_1/messages/${id}`, { method: 'DELETE' });
+      assert.equal(response.status, status);
+      assert.equal(messages.get(id)?.deleted, undefined);
+      assert.equal(one.events.some((e) => e.type === 'message.recalled' && e.messageId === id), false);
+      messages.delete(id);
+    }
   });
   console.log(`${passed} Feishu chat API verification scenarios passed`);
 } finally { one.controller.abort(); two.controller.abort(); }

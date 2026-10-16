@@ -323,11 +323,14 @@ pm2 restart dogebot-server --update-env
 - `GET /chats/:chatId/messages`：固定每页 50 条，携带 `pageToken` 续页时同时携带首次返回的 `snapshotEndTimeSeconds`。
 - `GET /chats/:chatId/threads/:threadId/messages`：话题历史，必须传 `rootMessageId`，不传时间上界。
 - `GET /chats/:chatId/messages/:messageId`：单条消息，校验群归属。
+- `DELETE /chats/:chatId/messages/:messageId`：撤回当前机器人自己发送的消息。服务端重新读取消息并校验 bot 所属用户、群归属及发送者 app_id/open_id，拒绝撤回其他用户和机器人的消息。成功后返回 `{ chatId, messageId, recallTimeMs }` 并向该用户的在线客户端发布 `message.recalled`；重复撤回已确认删除的消息按成功处理，不自动重试不确定的写操作。
 - `POST /chats/:chatId/messages`：`{ clientRequestId, message: { type: 'text', text } | { type: 'image', imageKey }, reply?: { messageId, mode: 'chat' | 'thread' } }`。发送编号为 UUID，同一发送重试沿用。
 - `POST /chats/:chatId/images`：PNG/JPEG/WebP/GIF 二进制，最大 10 MiB，返回 `imageKey`。
 - `GET /chats/:chatId/messages/:messageId/resources/:fileKey`：鉴权后的图片流代理，最大 10 MiB。
 
 `GET /api/feishu/chat-events` 是带 Bearer 请求头的 SSE，包含 `ready`、`message.upsert`、`message.recalled`、`message.refresh`、`bot.connection`、`bot.removed`。每 15 秒心跳，不支持事件重放；代理关闭该接口的缓冲。历史读取不进入命令处理器。
+
+撤回需要启用机器人能力、机器人仍在群中，并拥有 `im:message:recall`、`im:message:send_as_bot` 或 `im:message` 中任一权限。时限由企业管理员配置，应用不硬编码为 24 小时。权限不足、超过时限和不支持的消息类型返回明确错误，不广播成功事件、不删除缓存。批量发送接口产生的消息不在当前撤回入口支持范围内。[官方接口说明](https://open.feishu.cn/document/server-docs/im-v1/message/delete)
 
 验证（临时数据库、模拟飞书响应，不访问真实租户）：
 

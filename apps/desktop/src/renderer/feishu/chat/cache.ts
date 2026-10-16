@@ -167,6 +167,7 @@ export class ChatCache {
     for (const entry of this.entries.values()) {
       if (entry.chat.botId !== botId || (chatId ? entry.chat.chatId !== chatId : !entry.messages.has(id))) continue;
       this.releaseMedia(entry.key, id);
+      if (entry.reply?.messageId === id) entry.reply = undefined;
       if (!entry.messages.has(id) && !entry.controllers.size) continue;
       entry.tombstones.set(id, time);
       if (entry.tombstones.size > 300) {

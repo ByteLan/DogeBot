@@ -122,6 +122,22 @@ check('shared media is bounded and URLs are released on recall/eviction', () => 
   c.recall(1, 'oc_1', 'om_2', 9000); assert.equal(c.media.size, 0); c.clear();
 });
 
+check('recall clears quote targets and shared thread/reference content without losing drafts', () => {
+  const c = new ChatCache(); const e = c.visit(chat(1));
+  const root = message(1, { threadId: 'omt_one' });
+  c.incoming(root); c.detail(e, root);
+  const view = c.view(e, 'omt_one');
+  c.page(c.begin(e, view, true), { items: [root], hasMore: false }, 'replace');
+  e.reply = { messageId: root.messageId, mode: 'chat' }; e.draft = 'keep this unsent draft';
+  c.putMedia(e, `${e.key}:${root.messageId}:img_a`, new Blob(['image']));
+  c.recall(1, 'oc_1', root.messageId, 9000);
+  assert.equal(e.reply, undefined); assert.equal(e.draft, 'keep this unsent draft');
+  assert.equal(c.messages(e)[0]?.deleted, true); assert.equal(c.messages(e, view)[0]?.deleted, true);
+  assert.deepEqual(e.messages.get(root.messageId)?.content, {}); assert.equal(c.media.size, 0);
+  c.recall(1, 'oc_1', root.messageId, 9001); c.incoming(root);
+  assert.equal(e.messages.get(root.messageId)?.deleted, true); c.clear();
+});
+
 check('byte budget evicts inactive sessions and releases distant active pages first', () => {
   const c = new ChatCache(); const body = 'x'.repeat(200_000);
   for (let group = 1; group <= 3; group++) {

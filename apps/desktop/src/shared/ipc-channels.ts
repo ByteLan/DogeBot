@@ -1,5 +1,13 @@
 // IPC channel 名称的单一来源（main 进程与 renderer 类型层引用）。
 // 注意：src/preload/*.cjs 为 CommonJS，无法 import 本模块，其中的字面量需与此保持一致。
+export const WindowIpc = {
+  minimize: 'window:minimize',
+  toggleMaximize: 'window:toggle-maximize',
+  close: 'window:close',
+  getState: 'window:get-state',
+  stateChanged: 'window:state-changed'
+} as const;
+
 export const DouyinIpc = {
   // renderer -> main（每任务 / 全局 / 登录）
   openLogin: 'douyin:open-login',

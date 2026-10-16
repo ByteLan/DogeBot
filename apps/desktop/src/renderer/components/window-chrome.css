@@ -1,0 +1,55 @@
+.desktop-window {
+  --desktop-titlebar-height: 32px;
+  display: flex;
+  height: 100dvh;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: #f0f3f8;
+}
+.desktop-titlebar {
+  position: relative;
+  z-index: 10000;
+  display: flex;
+  height: var(--desktop-titlebar-height);
+  flex: 0 0 var(--desktop-titlebar-height);
+  align-items: center;
+  justify-content: space-between;
+  padding-left: 16px;
+  background: #f0f3f8;
+  color: #606976;
+  user-select: none;
+  -webkit-app-region: drag;
+}
+.desktop-titlebar-name { font-size: 12px; line-height: 1; }
+.desktop-window[data-platform="darwin"] .desktop-titlebar { padding-left: 88px; }
+.desktop-window-controls {
+  display: flex;
+  align-self: stretch;
+  -webkit-app-region: no-drag;
+}
+.desktop-titlebar .desktop-window-button.arco-btn {
+  display: grid;
+  width: 44px;
+  height: 32px;
+  min-height: 0;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: inherit;
+  font-size: 14px;
+  transition: background-color .12s, color .12s;
+  -webkit-app-region: no-drag;
+}
+.desktop-titlebar .desktop-window-button svg { width: 14px; height: 14px; }
+.desktop-titlebar .desktop-window-button:hover { background: #e1e6ee; color: #1f2329; }
+.desktop-titlebar .desktop-window-button:active { background: #d5dce6; }
+.desktop-titlebar .desktop-window-close:hover { background: #e5484d; color: #fff; }
+.desktop-titlebar .desktop-window-close:active { background: #cd383e; color: #fff; }
+.desktop-titlebar .desktop-window-button:focus-visible { outline: 2px solid #3370ff; outline-offset: -3px; }
+.desktop-window[data-focused="false"] .desktop-titlebar { color: #9aa1ac; }
+.desktop-window-content { flex: 1; min-width: 0; min-height: 0; overflow: auto; }
+.desktop-window-content .app-shell.app-shell-workspace { height: 100%; }

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Typography } from '@arco-design/web-react';
+import { Alert, Button, Menu, Tooltip, Typography } from '@arco-design/web-react';
+import { IconExport, IconMessage, IconRobot, IconVideoCamera } from '@arco-design/web-react/icon';
 import { defaultFavoriteUrl, defaultCollectListUrl, defaultRequestUrlFilter } from '../shared/constants';
 import { isValidHttpUrl } from '../shared/url';
 import { useApi } from './api';
@@ -34,6 +35,7 @@ import type {
 import { LoginCard } from './components/LoginCard';
 import { FeishuBotsCard } from './components/FeishuBotsCard';
 import { DouyinMonitorCard } from './components/DouyinMonitorCard';
+import './workspace.css';
 
 const { Title, Text } = Typography;
 
@@ -383,8 +385,18 @@ export function App() {
   };
 
   return (
-    <main className={`app-shell ${loggedIn ? '' : 'app-shell-login'}`.trim()}>
-      <header className="app-header">
+    <main className={`app-shell ${loggedIn ? 'app-shell-workspace' : 'app-shell-login'}`}>
+      {loggedIn ? <aside className="app-sidebar" aria-label="工作区导航">
+        <Tooltip content="DogeBot"><div className="app-sidebar-brand" aria-label="DogeBot">DB</div></Tooltip>
+        <Menu className="app-workspace-nav" selectedKeys={[workspaceView]} onClickMenuItem={(key) => {
+          if (key === 'bots' || key === 'chats' || key === 'douyin') setWorkspaceView(key);
+        }}>
+          <Menu.Item key="bots"><IconRobot /><span>机器人</span></Menu.Item>
+          <Menu.Item key="chats"><IconMessage /><span>群聊</span></Menu.Item>
+          <Menu.Item key="douyin"><IconVideoCamera /><span>抖音监控</span></Menu.Item>
+        </Menu>
+        <Tooltip content="退出登录" position="right"><Button className="app-sidebar-logout" type="text" icon={<IconExport />} aria-label="退出登录" onClick={logout} /></Tooltip>
+      </aside> : <header className="app-header">
         <div className="app-brand">
           <div className="app-logo" aria-hidden="true">DB</div>
           <div>
@@ -392,8 +404,8 @@ export function App() {
             <Text className="app-subtitle" type="secondary">桌面自动化控制台</Text>
           </div>
         </div>
-        {loggedIn ? <Button className="header-logout" size="small" onClick={logout}>退出登录</Button> : null}
-      </header>
+      </header>}
+      <div className={loggedIn ? 'app-main-content' : 'app-login-content'}>
       {message ? (
         <Alert
           className="app-message"
@@ -412,11 +424,6 @@ export function App() {
         />
       ) : (
         <>
-          <nav className="app-workspace-nav" aria-label="工作区">
-            <button type="button" aria-selected={workspaceView === 'bots'} onClick={() => setWorkspaceView('bots')}>机器人管理</button>
-            <button type="button" aria-selected={workspaceView === 'chats'} onClick={() => setWorkspaceView('chats')}>群聊</button>
-            <button type="button" aria-selected={workspaceView === 'douyin'} onClick={() => setWorkspaceView('douyin')}>抖音监控</button>
-          </nav>
           <div className="app-workspace-panel" hidden={workspaceView !== 'bots'}>
           <FeishuBotsCard
             botForm={botForm}
@@ -433,8 +440,8 @@ export function App() {
           />
 
           </div>
-          <div hidden={workspaceView !== 'chats'}>
-            <FeishuChatPanel key={`${serverUrl}:${token}`} serverUrl={serverUrl} token={token} bots={bots} onUnauthorized={logout} />
+          <div className="app-chat-panel" hidden={workspaceView !== 'chats'}>
+            <FeishuChatPanel key={`${serverUrl}:${token}`} serverUrl={serverUrl} token={token} bots={bots} onUnauthorized={logout} onManageBots={() => setWorkspaceView('bots')} />
           </div>
           <div className="app-workspace-panel" hidden={workspaceView !== 'douyin'}>
           <DouyinMonitorCard
@@ -478,6 +485,7 @@ export function App() {
           </div>
         </>
       )}
+      </div>
     </main>
   );
 }

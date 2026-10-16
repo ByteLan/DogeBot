@@ -50,3 +50,5 @@ export type SendMessageInput = {
   message: { type: 'text'; text: string } | { type: 'image'; imageKey: string };
   reply?: { messageId: string; mode: 'chat' | 'thread' };
 };
+
+export type OwnMessageAlignment = 'left' | 'right';
