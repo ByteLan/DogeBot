@@ -1,7 +1,7 @@
 import type { Request, Response as ExpressResponse } from 'express';
 import type { FeishuBot } from '../types.js';
 import { getBot } from './bot-management.js';
-import { handleFeishuMessage } from './message-handler.js';
+import { dispatchFeishuMessage, dispatchFeishuRecall } from './chat/ingress.js';
 import { handleFeishuCardAction } from './card-action.js';
 
 export async function feishuWebhook(req: Request, res: ExpressResponse) {
@@ -27,7 +27,7 @@ export async function feishuWebhook(req: Request, res: ExpressResponse) {
   if (eventType === 'im.message.receive_v1') {
     const eventId = String(payload.header?.event_id || payload.event?.message?.message_id || '').trim();
     const messageId = String(payload.event?.message?.message_id || '').trim();
-    handleFeishuMessage(bot, payload.event).catch((error) => {
+    dispatchFeishuMessage(bot, payload.event).catch((error) => {
       console.error('[feishu] message handling failed', {
         botId: bot.id,
         messageId,
@@ -36,6 +36,7 @@ export async function feishuWebhook(req: Request, res: ExpressResponse) {
       });
     });
   }
+  if (eventType === 'im.message.recalled_v1') dispatchFeishuRecall(bot, payload.event);
   if (eventType === 'card.action.trigger') {
     const eventId = String(payload.header?.event_id || '').trim();
     const messageId = String(payload.event?.context?.open_message_id || '').trim();

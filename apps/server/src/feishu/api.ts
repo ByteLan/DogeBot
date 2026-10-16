@@ -1,5 +1,6 @@
 import type { FeishuBot, FeishuMessageDetails, FeishuMention } from '../types.js';
 import { feishuJson, openBase, tenantAccessToken, isBotBlockedError } from './client.js';
+import { publishChatEvent, publishMessageResult, publishMessageRefresh } from './chat/events.js';
 
 function idFromFeishuObject(value: any): string {
   if (typeof value === 'string') return value.trim();
@@ -16,6 +17,7 @@ export async function createChatMessage(bot: FeishuBot, chatId: string, msgType:
     });
     const messageId = String(result.data?.message_id || '').trim();
     if (!messageId) throw new Error('chat message send failed: missing message_id');
+    publishMessageResult(bot, result);
     return messageId;
   } catch (error) {
     // "bot stopped / not in chat" is a recipient-side state, not a bug on our
@@ -40,6 +42,7 @@ export async function replyText(bot: FeishuBot, messageId: string, text: string,
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ msg_type: 'text', content: JSON.stringify({ text }), reply_in_thread: replyInThread })
     });
+    publishMessageResult(bot, result);
     return String(result.data?.message_id || '').trim();
   } catch (error) {
     console.error('[feishu] text reply send failed', {
@@ -63,11 +66,12 @@ export async function replyMedia(
     ? { msgType: 'image', content: { image_key: media.key } }
     : { msgType: 'sticker', content: { file_key: media.key } };
   try {
-    await feishuJson(`${openBase(bot.domain)}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reply`, {
+    const result = await feishuJson(`${openBase(bot.domain)}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reply`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ msg_type: payload.msgType, content: JSON.stringify(payload.content), reply_in_thread: replyInThread })
     });
+    publishMessageResult(bot, result);
   } catch (error) {
     console.error('[feishu] media reply send failed', {
       botId: bot.id,
@@ -199,11 +203,12 @@ export async function addReaction(bot: FeishuBot, messageId: string, reactionTyp
 
 export async function replyCard(bot: FeishuBot, messageId: string, card: object, replyInThread = false) {
   const token = await tenantAccessToken(bot);
-  await feishuJson(`${openBase(bot.domain)}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reply`, {
+  const result = await feishuJson(`${openBase(bot.domain)}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reply`, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body: JSON.stringify({ msg_type: 'interactive', content: JSON.stringify(card), reply_in_thread: replyInThread })
   });
+  publishMessageResult(bot, result);
 }
 
 export async function updateInteractiveMessage(bot: FeishuBot, messageId: string, card: object) {
@@ -213,6 +218,7 @@ export async function updateInteractiveMessage(bot: FeishuBot, messageId: string
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body: JSON.stringify({ content: JSON.stringify(card) })
   });
+  publishMessageRefresh(bot, messageId);
 }
 
 export async function deleteMessage(bot: FeishuBot, messageId: string) {
@@ -221,6 +227,7 @@ export async function deleteMessage(bot: FeishuBot, messageId: string) {
     method: 'DELETE',
     headers: { authorization: `Bearer ${token}` }
   });
+  publishChatEvent(bot, { type: 'message.recalled', botId: bot.id, messageId, recallTimeMs: Date.now() });
 }
 
 export async function uploadImage(bot: FeishuBot, data: Buffer, fileName: string) {

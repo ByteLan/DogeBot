@@ -228,3 +228,15 @@ pnpm package:win
 ```
 
 打包产物默认输出到 `apps/desktop/release/`。macOS 上打 mac 包可直接执行；Windows 包更推荐在 Windows 机器上执行 `pnpm package:win`，如果在 macOS 上交叉打 Windows 包，可能需要额外安装 `wine`。
+
+## desktop 飞书群聊
+
+桌面端新增「机器人管理 / 群聊 / 抖音监控」工作区。群聊通过 server 主动读取飞书历史，用已有飞书长连接接收消息，再通过 SSE 推送到桌面端；支持群列表、历史翻页、话题、文本/图片发送与引用回复。
+
+消息不写入数据库。desktop 仅在当前 renderer 内存中保留最近访问的 10 个会话，每群最多 300 条历史消息；所有群合计 16 MiB 的消息正文预算、16 MiB 的图片 Blob 预算。退出登录或真正退出应用后清空，不提供离线浏览和消息关键词搜索。
+
+群历史需要 `im:message:readonly` 或 `im:message`，并额外开通 `im:message.group_msg`；群列表需要 `im:chat:read` 等群信息读取权限，成员名字读取可开通 `im:chat.members:read`；发送需要 `im:message:send_as_bot` 等机器人发送权限，图片上传需要 `im:resource`。如需展示其他机器人消息，申请 `im:message.group_msg.include_bot:read`。订阅 `im.message.receive_v1` 和 `im.message.recalled_v1`，发布配置后生效。
+
+反向代理需为 `/api/feishu/chat-events` 关闭响应缓冲，保留长连接；客户端使用 Bearer 请求头鉴权。SSE 或飞书连接恢复后按需重新读取当前会话，不保留服务端重放日志。
+
+具体接口、缓存和验收见 [飞书群聊实现方案](docs/2026-10-16/feishu-desktop-chat-implementation-plan.md)。

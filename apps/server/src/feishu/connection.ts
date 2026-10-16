@@ -1,8 +1,8 @@
 import type { FeishuBot } from '../types.js';
 import { getEnabledBots } from './bot-management.js';
-import { handleFeishuMessage } from './message-handler.js';
+import { dispatchFeishuMessage, dispatchFeishuRecall } from './chat/ingress.js';
+import { publishChatEvent } from './chat/events.js';
 import { handleFeishuCardAction } from './card-action.js';
-import { previewTextFromMessage } from './message-parser.js';
 
 type LarkModule = typeof import('@larksuiteoapi/node-sdk');
 type ManagedConnection = {
@@ -18,23 +18,6 @@ function sdkDomain(lark: LarkModule, domain: string) {
   if (domain === 'lark') return lark.Domain.Lark;
   if (domain === 'feishu') return lark.Domain.Feishu;
   return domain;
-}
-
-function messageTextPreview(event: any) {
-  return previewTextFromMessage(event?.message).slice(0, 50);
-}
-
-function senderName(event: any) {
-  const sender = event?.sender || {};
-  return String(
-    sender.sender_name ||
-      sender.name ||
-      sender.sender_id?.open_id ||
-      sender.sender_id?.user_id ||
-      sender.sender_id?.union_id ||
-      sender.sender_type ||
-      ''
-  ).trim();
 }
 
 class FeishuConnectionManager {
@@ -63,18 +46,22 @@ class FeishuConnectionManager {
         source: 'dogebot',
         onReady: () => {
           connection.status = 'connected';
+          publishChatEvent(bot, { type: 'bot.connection', botId: bot.id, status: 'connected' });
           connection.error = undefined;
           console.log(`[feishu] bot ${bot.id} connected`);
         },
         onReconnecting: () => {
           connection.status = 'reconnecting';
+          publishChatEvent(bot, { type: 'bot.connection', botId: bot.id, status: 'reconnecting' });
         },
         onReconnected: () => {
           connection.status = 'connected';
+          publishChatEvent(bot, { type: 'bot.connection', botId: bot.id, status: 'connected' });
           connection.error = undefined;
         },
         onError: (error) => {
           connection.status = 'failed';
+          publishChatEvent(bot, { type: 'bot.connection', botId: bot.id, status: 'failed' });
           connection.error = error.message;
           console.error(`[feishu] bot ${bot.id} connection failed`, error);
         }
@@ -89,16 +76,15 @@ class FeishuConnectionManager {
           verificationToken: bot.verification_token || undefined
         }).register({
           'im.message.receive_v1': (data: any) => {
-            const event = data?.event || data;
-            console.log('[feishu] message event received', {
-              senderName: senderName(event),
-              text: messageTextPreview(event)
-            });
             queueMicrotask(() => {
-              handleFeishuMessage(bot, data?.event || data).catch((error) => {
+              dispatchFeishuMessage(bot, data?.event || data).catch((error) => {
                 console.error(`[feishu] bot ${bot.id} message handling failed`, error);
               });
             });
+          },
+          'im.message.recalled_v1': (data: unknown) => {
+            const payload = data as { event?: unknown };
+            dispatchFeishuRecall(bot, payload?.event ?? data);
           },
           'card.action.trigger': (data: any) => {
             queueMicrotask(() => {
@@ -112,6 +98,7 @@ class FeishuConnectionManager {
       });
     } catch (error) {
       connection.status = 'failed';
+      publishChatEvent(bot, { type: 'bot.connection', botId: bot.id, status: 'failed' });
       connection.error = error instanceof Error ? error.message : String(error);
       console.error(`[feishu] bot ${bot.id} start failed`, error);
     }

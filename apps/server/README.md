@@ -310,3 +310,34 @@ pm2 restart dogebot-server --update-env
 - `/byte-style --rate 0.12`、`/字节范 --rate 12`、`/scale-new-heights --rate 0.12`、`/勇攀高峰 --rate 12`：设置当前会话该风格随机生图概率，支持小数或百分数写法；会话级 rate 优先于环境变量默认值，但不能超过全局默认概率的 10 倍。
 - `/byte-style --max 12`、`/字节范 --max 12`、`/scale-new-heights --max 12`、`/勇攀高峰 --max 12`：设置当前会话该风格随机生图允许处理的最大文本长度；超过该长度则不会处理。如果配置值超过 `DOGEBOT_FEISHU_STYLE_STICKER_MAX_CHARS_LIMIT`，实际仍会按上限截断。
 - 同一条普通文本消息在“文本复读”“字节范随机生图”“勇攀高峰随机生图”三者之间互斥；即使同时命中多个概率，也只会随机选择其中一个执行。随机生图命中后，如果触发消息在话题里，则会直接回复到话题里，否则发送到当前会话。
+
+## 群聊历史代理与实时事件
+
+群聊 API 全部校验登录用户拥有对应 bot。消息查询结果只在当前请求中存在，不新增历史表或资源磁盘缓存。`GET /api/me` 返回当前登录用户；连接列表按用户过滤。
+
+`/api/feishu/bots/:botId` 下新增：
+
+- `GET /chats`、`GET /chats/:chatId`：群列表和群信息。
+- `GET /chats/:chatId/members`：按需读取成员名字。
+- `GET /chats/:chatId/messages`：固定每页 50 条，携带 `pageToken` 续页时同时携带首次返回的 `snapshotEndTimeSeconds`。
+- `GET /chats/:chatId/threads/:threadId/messages`：话题历史，必须传 `rootMessageId`，不传时间上界。
+- `GET /chats/:chatId/messages/:messageId`：单条消息，校验群归属。
+- `POST /chats/:chatId/messages`：`{ clientRequestId, message: { type: 'text', text } | { type: 'image', imageKey }, reply?: { messageId, mode: 'chat' | 'thread' } }`。发送编号为 UUID，同一发送重试沿用。
+- `POST /chats/:chatId/images`：PNG/JPEG/WebP/GIF 二进制，最大 10 MiB，返回 `imageKey`。
+- `GET /chats/:chatId/messages/:messageId/resources/:fileKey`：鉴权后的图片流代理，最大 10 MiB。
+
+`GET /api/feishu/chat-events` 是带 Bearer 请求头的 SSE，包含 `ready`、`message.upsert`、`message.recalled`、`message.refresh`、`bot.connection`、`bot.removed`。每 15 秒心跳，不支持事件重放；代理关闭该接口的缓冲。历史读取不进入命令处理器。
+
+验证（临时数据库、模拟飞书响应，不访问真实租户）：
+
+```bash
+node --import tsx scripts/verify-feishu-chat.ts
+```
+
+加 `--serve` 可保留本地模拟服务用于界面联调，临时会话信息写入系统临时目录的 `dogebot-chat-fixture.json`。勿将模拟服务用于生产。
+
+完整方案见 [设计文档](../../docs/2026-10-16/feishu-desktop-chat-implementation-plan.md)。
+
+### 构建配置
+
+`tsconfig.json` 用于 src 和 scripts 的完整类型检查；`pnpm build` 使用 `tsconfig.build.json` 将 src 编译到 dist 根目录，保证 `pnpm start` 的 `dist/index.js` 启动入口与产物一致。Python 脚本和 assets 继续按原构建流程复制。

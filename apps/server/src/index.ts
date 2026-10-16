@@ -1,4 +1,5 @@
 import cors from 'cors';
+import { createFeishuChatRouter } from './feishu/chat/routes.js';
 import express from 'express';
 import { authenticate, createToken, requireAuth, type AuthenticatedRequest } from './auth.js';
 import { getRandomMmVideo, redirectRandomMmVideo, setOpenApiInvalidNotifier, uploadDouyinAwemeRecords } from './douyin.js';
@@ -34,9 +35,12 @@ app.post('/api/login', (req, res) => {
   res.json({ token: createToken(user), user });
 });
 
+app.get('/api/me', requireAuth, (req: AuthenticatedRequest, res) => res.json({ user: req.user }));
+app.use('/api/feishu', createFeishuChatRouter());
+
 app.get('/api/feishu/bots', requireAuth, listFeishuBots);
-app.get('/api/feishu/connections', requireAuth, (_req, res) => {
-  res.json({ connections: feishuConnectionManager.snapshot() });
+app.get('/api/feishu/connections', requireAuth, (req: AuthenticatedRequest, res) => {
+  res.json({ connections: feishuConnectionManager.snapshot().filter((item) => item.userId === req.user?.id) });
 });
 app.post('/api/douyin/aweme-records', requireAuth, uploadDouyinAwemeRecords);
 app.post('/api/feishu/bots', requireAuth, async (req: AuthenticatedRequest, res) => {

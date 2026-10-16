@@ -6,6 +6,7 @@ import { useApi } from './api';
 import { useDouyinBridge } from './douyin/hooks';
 import { buildUrlHistory, mergeHistoryValues } from './douyin/utils';
 import { useQrRegistration } from './feishu/hooks';
+import { FeishuChatPanel } from './feishu/chat/FeishuChatPanel';
 import {
   DEFAULT_PARTITION_ID,
   createDefaultTask,
@@ -37,6 +38,7 @@ import { DouyinMonitorCard } from './components/DouyinMonitorCard';
 const { Title, Text } = Typography;
 
 export function App() {
+  const [workspaceView, setWorkspaceView] = useState<'bots' | 'chats' | 'douyin'>('bots');
   const [token, setToken] = useState(() => localStorage.getItem('dogebot.token') || '');
   const [serverUrl, setServerUrl] = useState(initialServerUrl);
   const [message, setMessage] = useState('');
@@ -410,6 +412,12 @@ export function App() {
         />
       ) : (
         <>
+          <nav className="app-workspace-nav" aria-label="工作区">
+            <button type="button" aria-selected={workspaceView === 'bots'} onClick={() => setWorkspaceView('bots')}>机器人管理</button>
+            <button type="button" aria-selected={workspaceView === 'chats'} onClick={() => setWorkspaceView('chats')}>群聊</button>
+            <button type="button" aria-selected={workspaceView === 'douyin'} onClick={() => setWorkspaceView('douyin')}>抖音监控</button>
+          </nav>
+          <div className="app-workspace-panel" hidden={workspaceView !== 'bots'}>
           <FeishuBotsCard
             botForm={botForm}
             setBotForm={setBotForm}
@@ -424,6 +432,11 @@ export function App() {
             onClearAdmin={clearAdmin}
           />
 
+          </div>
+          <div hidden={workspaceView !== 'chats'}>
+            <FeishuChatPanel key={`${serverUrl}:${token}`} serverUrl={serverUrl} token={token} bots={bots} onUnauthorized={logout} />
+          </div>
+          <div className="app-workspace-panel" hidden={workspaceView !== 'douyin'}>
           <DouyinMonitorCard
             douyinShortIntervalSeconds={douyinShortIntervalSeconds}
             setDouyinShortIntervalSeconds={setDouyinShortIntervalSeconds}
@@ -462,6 +475,7 @@ export function App() {
             setCollectListUrlHistory={setCollectListUrlHistory}
             setRequestUrlFilterHistory={setRequestUrlFilterHistory}
           />
+          </div>
         </>
       )}
     </main>

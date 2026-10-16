@@ -53,6 +53,7 @@ export async function tenantAccessToken(bot: FeishuBot) {
 
   const data = await feishuJson<{ tenant_access_token: string; expire: number }>(`${openBase(bot.domain)}/open-apis/auth/v3/tenant_access_token/internal`, {
     method: 'POST',
+    signal: AbortSignal.timeout(20_000),
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ app_id: bot.app_id, app_secret: bot.app_secret })
   });

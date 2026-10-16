@@ -288,3 +288,11 @@ dist/
 2. **preload 与 shared 打通**：若将 preload 改为 TS 并以 CommonJS 产出，可让其复用 `shared/ipc-channels.ts`，消除最后一处 channel 名重复。
 3. **代码分割**：渲染层打包体积 >500KB（Arco + react-json-view-lite），可按需动态 `import()` 拆分。
 4. **渲染层遗留类型问题**：新增类型门禁后暴露过一处 `JsonView data` 为 `unknown` 的历史问题（已用行为中性的 `as object` 断言修复），可评估是否收紧相关类型。
+
+## 飞书聊天模块（2026-10-16）
+
+renderer 的 `feishu/chat/` 独立于抖音模块：`api.ts` 处理鉴权 JSON、SSE 和二进制请求，`cache.ts` 管理账号作用域的 10 会话 LRU 和有界分页窗口，`use-chat.ts` 管理查询、实时合并、发送与恢复，`FeishuChatPanel.tsx` 展示群列表、主线、话题和输入区。`App.tsx` 增加工作区切换，聊天组件在切换工作区时仍可接收事件，退出账号时销毁。
+
+只保存 renderer 内存，不复用 `usePersistentState()`，不增加 Electron IPC 或主进程消息存储。图片使用有界 Blob/Object URL；会话淘汰时取消查询、释放资源，响应通过 generation 校验后才可写入现有条目。server 用 REST 代理飞书历史，通过 SSE 即时分发长连接事件和自身发送结果。
+
+容量、契约和恢复规则见 [设计文档](../../../docs/2026-10-16/feishu-desktop-chat-implementation-plan.md)。

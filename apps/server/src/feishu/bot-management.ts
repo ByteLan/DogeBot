@@ -1,3 +1,4 @@
+import { publishChatEvent } from './chat/events.js';
 import type { Request, Response as ExpressResponse } from 'express';
 import type { AuthenticatedRequest } from '../auth.js';
 import type { FeishuBot } from '../types.js';
@@ -95,7 +96,9 @@ export function createFeishuBot(req: AuthenticatedRequest, res: ExpressResponse)
 }
 
 export function deleteOwnedFeishuBot(botId: number, userId: number) {
-  if (!getOwnedBot(botId, userId)) return false;
+  const bot = getOwnedBot(botId, userId);
+  if (!bot) return false;
+  publishChatEvent(bot, { type: 'bot.removed', botId });
   db.prepare('DELETE FROM feishu_bot_default_commands WHERE bot_id = ?').run(botId);
   db.prepare('DELETE FROM feishu_chat_cron_tasks WHERE bot_id = ?').run(botId);
   db.prepare('DELETE FROM feishu_douyin_subscriptions WHERE bot_id = ?').run(botId);
