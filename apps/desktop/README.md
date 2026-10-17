@@ -31,6 +31,8 @@ apps/desktop/
 └── tsconfig.json
 ```
 
+产品能力与交互以[产品规格索引](../../product-spec/README.md)为入口，桌面窗口和设置见[桌面规格](../../product-spec/desktop/README.md)。
+
 ## 开发命令
 
 ```bash
@@ -84,36 +86,14 @@ pnpm dev
 
 ## 抖音收藏监听
 
-桌面端使用独立的 Electron 持久会话 `persist:dogebot-douyin` 保存 douyin.com 登录态。点击“登录 douyin.com”完成登录后，可以在“抖音收藏监听”里配置多个任务。
+桌面端支持多个独立监听任务，每个任务拥有独立窗口、调度周期、显示策略和启动/停止开关；使用相同浏览器身份（partition）的任务共享抖音登录态，不同身份相互隔离。
 
-共享配置：
+- 在「运行设置」管理身份和新任务默认值；默认短间隔 10 秒、长间隔 60 秒、连续无变化阈值 3 次，默认值修改不影响已有任务。
+- 每任务配置收藏页、收藏接口基础路径、完整请求 URL 包含筛选和 `clickText`，可选择只刷新不点击、后台隐藏、点击失败显示及停止后销毁窗口。
+- URL 字段支持输入、历史选择和删除非默认历史项；执行中匹配的 fetch/XHR 响应会继续捕获。
+- 提取 `aweme_list[].aweme_id` 后提交 `/api/douyin/aweme-records`；server 按 `(user_id, click_text, aweme_id)` 去重，只有真正新增项触发对应分组的飞书订阅，不补发库存。
 
-- 短间隔、长间隔和 retry 次数：所有活跃任务共享一套调度节奏。
-- 隐藏 Douyin 窗口后台执行：所有任务共享同一个 Douyin 窗口。
-- 点击失败立即弹到前台：模拟点击失败时把 Douyin 窗口显示出来，便于排查页面状态。
-
-每个任务单独配置：
-
-- `favoriteUrl`：任务开始时打开的抖音页面地址。
-- `collectListUrl`：要捕获的接口基础路径，匹配时只比较 `origin + pathname`。
-- 请求 URL 筛选字符串：对完整请求 URL 做包含匹配，例如 `collects_id=7648523880352618283`。
-- `clickText`：用于模拟点击页面上包含该文案的元素，也是同步到服务端后的 `click_text` 分组。
-- 不点击，仅刷新页面并监听 API：开启后任务只打开 `favoriteUrl`，不执行模拟点击。
-
-三个下拉字段 `favoriteUrl`、`collectListUrl`、请求 URL 筛选字符串都支持输入新值；点击“开始监听”时，当前活跃任务里的输入会写入本地历史，后续可从下拉框选择，也可以删除非默认历史项。
-
-任务执行方式：
-
-- 多个活跃任务在同一个 Douyin 窗口中串行执行。
-- 每个任务会打开自己的 `favoriteUrl`，等待 5 秒，再按配置决定是否点击 `clickText`。
-- 任务会等待匹配接口返回，最多等待 5 秒；任务结束后再等待 5 秒进入下一个任务。
-- 监听使用页面内 fetch/XHR hook，不阻塞网络请求；即使不在刷新任务窗口内，只要监听仍在运行，页面中出现匹配请求也会继续上报。
-
-同步到服务端：
-
-- 捕获到接口 body 后，桌面端提取 `aweme_list[].aweme_id`。
-- 桌面端调用服务端 `/api/douyin/aweme-records`，提交 `{ clickText, awemeIds }`。
-- 服务端按 `(user_id, click_text, aweme_id)` 去重入库；只有新插入的 `aweme_id` 会触发飞书 `/douyin --subscribe {clickText}` 订阅通知。
+完整任务配置、调度和异常交互见[监听产品规格](../../product-spec/douyin/monitor.md)，入库和分发规则见[分发规格](../../product-spec/douyin/library-and-delivery.md)。
 
 ## 扫码创建飞书 bot
 

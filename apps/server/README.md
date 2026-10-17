@@ -2,7 +2,9 @@
 
 `@dogebot/server` 是 DogeBot 的 Node.js 服务端应用，负责用户认证、SQLite 数据存储、飞书机器人绑定，以及为每个已启用 bot 维护独立飞书 WebSocket 长连接。
 
-服务端安装、构建和运行需要 Node.js `24` 及以上版本，与 `@syru/byted-sticker-generator@1.1.0` 的运行要求保持一致。
+服务端安装、构建和运行需要 Node.js `24` 及以上版本，与当前 `@syru/byted-sticker-generator` 的运行要求保持一致。
+
+功能与产品规则见[产品规格索引](../../product-spec/README.md)；开发前请阅读对应模块及根目录 [AGENTS.md](../../AGENTS.md)。
 
 ## 主要能力
 
@@ -35,7 +37,7 @@ apps/server/
 
 ## 开发命令
 
-安装、构建和运行服务端推荐使用 Node.js `22.x`（至少 `22.13.0`）或 `24` 及以上版本。若使用 Node.js `23.x`，至少需要 `23.4.0`，以确保原生 `node:sqlite` 模块无需实验参数即可加载。
+安装、构建和运行服务端使用 Node.js `24` 及以上版本。当前 package engines 的下限比贴纸依赖宽，完整应用以贴纸依赖的 `>=24.0.0` 要求为准。
 
 ```bash
 pnpm dev
@@ -91,12 +93,12 @@ pnpm add-user <用户名> <密码>
 - `DOGEBOT_STYLE_STICKER_RENDER_CONCURRENCY`：字节范/勇攀高峰生图的全局并发数，默认 `2`；`/open-api/v1/byte-style`、`/open-api/v1/scale-new-heights`、飞书命令生图、随机生图、卡片预览共用这一组并发额度。
 - `DOGEBOT_STYLE_STICKER_RENDER_QUEUE_MAX`：字节范/勇攀高峰生图的等待队列上限，默认 `20`；超过后新任务会立即抛出 `QUEUE_FULL` 错误，避免请求堆积占用内存。
 - `DOGEBOT_STYLE_STICKER_RENDER_TIMEOUT_MS`：单个字节范/勇攀高峰生图任务的最大执行时间（毫秒），默认 `20000`；超时后会立即释放并发额度并抛出 `TASK_TIMEOUT` 错误，避免卡死后续任务。
-- `DOGEBOT_STYLE_STICKER_OUTPUT_SCALE_MULTIPLIER`：输出倍率乘数（支持小数），默认 `3`；补偿包内固定的 72px 基准字高，使出图尺寸接近旧版 220px 效果。
-- `DOGEBOT_STYLE_STICKER_LINE_HEIGHT`：行间距倍率（支持小数），默认 `1.1`；包默认 `1`，旧版为 `1.1`。
+- `DOGEBOT_STYLE_STICKER_OUTPUT_SCALE_MULTIPLIER`：输出倍率乘数（支持小数），默认 `2`；作用于包内固定的 72px 基准字高。
+- `DOGEBOT_STYLE_STICKER_LINE_HEIGHT`：行间距倍率（支持小数），默认 `1.2`；包默认 `1`，旧版为 `1.1`。
 - `DOGEBOT_STYLE_STICKER_ANTIALIAS_SCALE`：内部超采样倍率（支持小数），默认 `1`；包默认 `1.5`，旧版无超采样。设为 `1.5` 或更高可获得更平滑的边缘。
-- `DOGEBOT_STYLE_STICKER_PADDING_X`：左右留白（像素），默认 `8`；包默认 `4`。
-- `DOGEBOT_STYLE_STICKER_PADDING_Y`：上下留白（像素），默认 `24`；包默认 `8`。
-- `DOGEBOT_STYLE_STICKER_OUTLINE_STROKE_WIDTH`：描边厚度（像素），默认 `20`；包对 bs 默认 `14`。
+- `DOGEBOT_STYLE_STICKER_PADDING_X`：左右留白（像素），默认 `4`。
+- `DOGEBOT_STYLE_STICKER_PADDING_Y`：上下留白（像素），默认 `8`。
+- `DOGEBOT_STYLE_STICKER_OUTLINE_STROKE_WIDTH`：描边厚度（像素），默认 `14`。
 - `DOGEBOT_PYTHON_TASK_CONCURRENCY`：服务端调用 `python3` 子进程任务的全局并发数，默认 `2`；当前主要用于图片/表情包镜像反转。
 - `DOGEBOT_PYTHON_TASK_QUEUE_MAX`：`python3` 子进程任务的等待队列上限，默认 `20`；超过后新任务会立即抛出 `QUEUE_FULL` 错误。
 - `DOGEBOT_PYTHON_TASK_TIMEOUT_MS`：单个 `python3` 子进程任务的最大执行时间（毫秒），默认 `20000`；超时后会通过 `AbortSignal` 结束子进程并抛出 `TASK_TIMEOUT` 错误。
@@ -139,7 +141,7 @@ DOGEBOT_DATA_DIR=/www/wwwroot/DogeBot-data pnpm add-user admin 'change-me'
 - 启动文件：`dist/src/index.js`
 - 启动命令：`node dist/src/index.js`
 - 端口：`3000`
-- Node 版本：推荐 `22.x`（至少 `22.13.0`）或 `24` 及以上；`23.x` 至少需 `23.4.0`。宝塔 / PM2 的运行版本也必须满足此要求。
+- Node 版本：`24` 及以上；宝塔 / PM2 使用的实际运行版本也必须满足贴纸依赖要求。
 - 环境变量：`PORT=3000`
 - 环境变量：`DOGEBOT_DATA_DIR=/www/wwwroot/DogeBot-data`
 - 环境变量：`DOGEBOT_AUTH_SECRET=<一段足够长的随机字符串>`
@@ -253,7 +255,7 @@ pm2 restart dogebot-server --update-env
 - `/douyin {模拟点击文案} [--count n]`：随机发送匹配文案的抖音收藏视频。
 - `/douyin {模拟点击文案} --search {关键词}`：按标题模糊搜索该分组下的视频，返回匹配度最高的结果（含标题和链接）。搜索使用 `Intl.Segmenter` 中文分词，无需完全匹配标题，输入一段话也能找到相关视频。若 `/set-default` 设为 `/douyin {文案} --search`（以 `--search` 结尾），用户直接发文字会自动拼接为搜索词。无搜索词或未命中时回退到随机视频。
 - `/douyin {模拟点击文案} --search-random {关键词}`：与 `--search` 相同的搜索逻辑，但从高分候选池中随机选取结果，每次返回不同。同样支持 `/set-default` 拼接。
-- `/douyin --delete {aweme_id}`：软删除当前 bot 绑定用户名下的指定抖音收藏记录，`aweme_id` 必须是大于 5 位的数字，且只有该 bot 的 `/set-default` 管理员可以执行。
+- `/douyin --delete`：仅该 bot 的 `/set-default` 管理员可发起；从当前消息或引用中解析视频 ID（至少 10 位数字），先发送确认卡片，确认后软删除绑定用户名下的对应记录。
 - `/douyin --subscribe {模拟点击文案}`：为当前发消息的群聊或与 bot 的单聊订阅该 `click_text` 分组；后续桌面端同步时，只有该分组有新的 `aweme_id` 成功入库，才会把新增视频链接发到当前会话，已有库存不会补发。
 - `/douyin --unsubscribe {模拟点击文案}`：取消当前会话对该 `click_text` 分组的订阅。
 
@@ -261,7 +263,7 @@ pm2 restart dogebot-server --update-env
 
 ## 抖音视频失效检测
 
-服务端会通过抖音移动端分享页 `https://www.iesdouyin.com/share/video/{aweme_id}`（iPhone UA、8 秒超时）判断视频是否失效：失效视频返回的页面标题会退化为「在抖音记录美好生活」之类的兜底文案，据此区分有效与失效。检测出错（网络异常等）时按「有效」处理，避免误删。检测逻辑纯 Node.js 实现，不依赖任何本地编译组件。
+服务端默认采用两阶段检测：先读取移动端分享页标题，真实标题可判有效；兜底标题只表示不确定，再由 Web 详情 API 确认。详情明确为空才判失效，接口异常、超时或队列满均按不确定处理，不据此删除或跳过数据。所有业务入口复用缓存、全局并发/QPS 及同视频在途去重。阶段开关、默认频控及管理员确认规则见[有效性规格](../../product-spec/douyin/validity-checks.md)。
 
 触发方式有两类：
 
