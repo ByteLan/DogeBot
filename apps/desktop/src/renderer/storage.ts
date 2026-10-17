@@ -10,7 +10,8 @@ export function readOwnMessageAlignment(): OwnMessageAlignment {
 }
 
 export function readChatReceiveMode(): ChatReceiveMode {
-  return localStorage.getItem('dogebot.chatReceiveMode') === 'when-viewing' ? 'when-viewing' : 'always';
+  const value = localStorage.getItem('dogebot.chatReceiveMode');
+  return value === 'when-viewing' || value === 'manual' ? value : 'always';
 }
 
 // 内置默认 partition：其 electron partition 串沿用旧的 persist:dogebot-douyin，

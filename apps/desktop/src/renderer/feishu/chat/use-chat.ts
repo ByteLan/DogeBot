@@ -15,13 +15,14 @@ function delay(ms: number, signal: AbortSignal) {
 }
 
 export function useChat(serverUrl: string, token: string, bots: Bot[], onUnauthorized: () => void, options: {
-  receiveEnabled: boolean; viewing: boolean; onRefreshBots?: (signal: AbortSignal) => Promise<Bot[]>;
+  receiveEnabled: boolean; manualOnly: boolean; viewing: boolean; onRefreshBots?: (signal: AbortSignal) => Promise<Bot[]>;
 }) {
   const api = useMemo(() => new ChatApi(serverUrl, token), [serverUrl, token]);
   const cache = useMemo(() => new ChatCache(), [api]);
   const recallSession = useMemo(() => ({ skipConfirmationUntil: 0, requests: new Set<string>() }), [api]);
   const session = useMemo(() => new AbortController(), [api]);
-  const enabled = useRef(options.receiveEnabled); enabled.current = options.receiveEnabled;
+  const receiving = options.receiveEnabled && !options.manualOnly;
+  const enabled = useRef(receiving); enabled.current = receiving;
   const optionsRef = useRef(options); optionsRef.current = options;
   const needsOwnershipCheck = useRef(false);
   const version = useSyncExternalStore(cache.subscribe, cache.snapshot);
@@ -37,6 +38,7 @@ export function useChat(serverUrl: string, token: string, bots: Bot[], onUnautho
   const [groups, setGroups] = useState<ChatSummary[]>([]);
   const [groupToken, setGroupToken] = useState<string>();
   const [groupsLoading, setGroupsLoading] = useState(false);
+  const [groupsLoaded, setGroupsLoaded] = useState(false);
   const [groupError, setGroupError] = useState('');
   const [notice, setNotice] = useState('');
   const [groupHints, setGroupHints] = useState<Set<string>>(new Set());
@@ -46,7 +48,7 @@ export function useChat(serverUrl: string, token: string, bots: Bot[], onUnautho
     let resolve!: () => void;
     const promise = new Promise<void>((done) => { resolve = done; });
     return { promise, resolve };
-  }, [api, options.receiveEnabled]);
+  }, [api, receiving]);
   const entry = cache.entries.get(cache.activeKey);
 
   useEffect(() => () => { session.abort(); cache.clear(); }, [cache, session]);
@@ -95,7 +97,7 @@ export function useChat(serverUrl: string, token: string, bots: Bot[], onUnautho
   refreshRef.current = refreshVisible;
 
   const detail = useCallback(async (target: ChatEntry, id: string) => {
-    if (!cache.current(target) || !enabled.current) return;
+    if (!cache.current(target) || !enabled.current && !optionsRef.current.manualOnly) return;
     const controller = cache.read(target);
     try {
       const result = await api.detail(target.chat.botId, target.chat.chatId, id, controller.signal);
@@ -109,9 +111,9 @@ export function useChat(serverUrl: string, token: string, bots: Bot[], onUnautho
 
   useEffect(() => {
     setSyncing(false); setSyncError(''); setGroupEpoch(0);
-    if (!options.receiveEnabled) {
+    if (!receiving) {
       needsOwnershipCheck.current = true;
-      cache.dirty(); setGroupsLoading(false); setStreamStatus('已暂停收取');
+      cache.dirty(); setGroupsLoading(false); setStreamStatus(options.manualOnly ? '仅手动刷新' : '已暂停收取');
       return;
     }
     const controller = new AbortController();
@@ -237,7 +239,7 @@ export function useChat(serverUrl: string, token: string, bots: Bot[], onUnautho
       for (const timer of timers.values()) clearTimeout(timer);
       cache.dirty();
     };
-  }, [api, cache, detail, readyPromise, report, options.receiveEnabled]);
+  }, [api, cache, detail, readyPromise, report, receiving, options.manualOnly]);
 
   useEffect(() => {
     for (const cached of cache.entries.values()) if (!bots.some((bot) => bot.id === cached.chat.botId)) cache.remove(cached.key);
@@ -256,6 +258,7 @@ export function useChat(serverUrl: string, token: string, bots: Bot[], onUnautho
       if (controller.signal.aborted) return;
       setGroups((old) => next ? [...new Map([...old, ...result.items].map((g) => [g.chatId, g])).values()] : result.items);
       setGroupToken(result.hasMore && result.nextPageToken !== next ? result.nextPageToken : undefined);
+      setGroupsLoaded(true);
     } catch (error) { if (!controller.signal.aborted) { setGroupError(errorText(error)); report(error); } }
     finally {
       cache.finishRead(controller);
@@ -263,20 +266,18 @@ export function useChat(serverUrl: string, token: string, bots: Bot[], onUnautho
     }
   }, [api, cache, report]);
   useEffect(() => {
-    if (ready && options.receiveEnabled && groupEpoch > 0 && botId != null && bots.some((bot) => bot.id === botId)) void loadGroups(botId);
+    if (ready && receiving && groupEpoch > 0 && botId != null && bots.some((bot) => bot.id === botId)) void loadGroups(botId);
     return () => groupController.current?.abort();
-  }, [botId, bots, ready, groupEpoch, options.receiveEnabled, loadGroups]);
-  useEffect(() => { setGroups([]); setGroupToken(undefined); }, [botId]);
+  }, [botId, bots, ready, groupEpoch, receiving, loadGroups]);
+  useEffect(() => { setGroups([]); setGroupToken(undefined); setGroupsLoaded(false); setGroupError(''); }, [botId]);
 
-  const select = useCallback(async (chat: ChatSummary) => {
-    if (!enabled.current) return;
-    setBotId(chat.botId); setNotice('');
-    const target = cache.visit(chat);
-    setGroupHints((values) => { const next = new Set(values); next.delete(target.key); return next; });
+  const loadContext = useCallback((target: ChatEntry) => {
+    if (!cache.current(target)) return;
+    const chat = target.chat;
     const controller = cache.read(target);
     void api.chat(chat.botId, chat.chatId, controller.signal).then(({ chat: info }) => {
       if (!controller.signal.aborted && cache.current(target)) { target.chat = info; cache.changed(); }
-    }).catch((error: unknown) => { if (!controller.signal.aborted) report(error, target); });
+    }).catch((error: unknown) => { if (!controller.signal.aborted) report(error, target); }).finally(() => cache.finishRead(controller));
     if (!target.memberNames.size) {
       const members = cache.read(target);
       void (async () => {
@@ -289,8 +290,20 @@ export function useChat(serverUrl: string, token: string, bots: Bot[], onUnautho
           if (!result.hasMore || !result.nextPageToken || result.nextPageToken === next) break;
           next = result.nextPageToken;
         }
-      })().catch(() => {}).finally(() => cache.finishRead(members));
+      })().catch((error: unknown) => {
+        if (!members.signal.aborted && error instanceof ChatApiError && error.status === 401) report(error, target);
+      }).finally(() => cache.finishRead(members));
     }
+  }, [api, cache, report]);
+
+  const select = useCallback(async (chat: ChatSummary) => {
+    if (!enabled.current && !optionsRef.current.manualOnly) return;
+    setBotId(chat.botId); setNotice('');
+    const target = cache.visit(chat);
+    setGroupHints((values) => { const next = new Set(values); next.delete(target.key); return next; });
+    if (optionsRef.current.manualOnly) return;
+    loadContext(target);
+    const controller = cache.read(target);
     await Promise.race([readyPromise.promise, delay(3000, controller.signal)]);
     if (cache.current(target) && !controller.signal.aborted && enabled.current) {
       if (!target.main.pages.length || target.main.needsResync || Date.now() - target.lastValidatedAt > 30_000) {
@@ -298,23 +311,24 @@ export function useChat(serverUrl: string, token: string, bots: Bot[], onUnautho
       }
     }
     controller.abort(); cache.finishRead(controller);
-  }, [api, cache, load, readyPromise, report]);
+  }, [cache, load, loadContext, readyPromise]);
 
   const ensureMessage = useCallback(async (target: ChatEntry, id: string) => {
-    if (!enabled.current || !cache.current(target)) return;
-    const message = target.unverifiedIds.has(id) ? await detail(target, id) : target.messages.get(id);
+    if (!enabled.current && !optionsRef.current.manualOnly || !cache.current(target)) return;
+    const message = optionsRef.current.manualOnly || target.unverifiedIds.has(id) ? await detail(target, id) : target.messages.get(id);
     if (message?.deleted) { setNotice('这条消息已撤回，请选择其他消息'); return; }
     return message;
   }, [cache, detail]);
 
   const openThread = useCallback(async (target: ChatEntry, input: ChatMessage) => {
     const message = await ensureMessage(target, input.messageId);
-    if (!message || !cache.current(target) || !enabled.current) return;
+    if (!message || !cache.current(target) || !enabled.current && !optionsRef.current.manualOnly) return;
     if (!message.threadId) return;
     const root = { threadId: message.threadId, rootMessageId: message.rootId || message.messageId };
     target.openedThread = root;
+    if (optionsRef.current.manualOnly) cache.view(target, root.threadId).needsResync = true;
     cache.changed();
-    void load(target, false, root);
+    if (enabled.current) void load(target, false, root);
   }, [cache, ensureMessage, load]);
 
   const send = useCallback(async (target: ChatEntry, input: SendMessageInput) => {
@@ -380,10 +394,18 @@ export function useChat(serverUrl: string, token: string, bots: Bot[], onUnautho
   }, [api, cache, recallSession, report, session]);
 
   const latest = (target: ChatEntry, view = target.main) => {
+    if (!cache.current(target)) return;
     setSyncError('');
     if (view === target.main) target.viewMode = 'live';
     view.viewMode = 'live';
     void load(target, false, view === target.main ? undefined : target.openedThread, true, true);
+    if (optionsRef.current.manualOnly && view === target.main) {
+      loadContext(target);
+      if (target.openedThread) {
+        cache.view(target, target.openedThread.threadId).viewMode = 'live';
+        void load(target, false, target.openedThread, true, true);
+      }
+    }
   };
   useEffect(() => {
     if (!options.viewing || !entry || entry.viewMode !== 'live' || entry.main.needsResync) return;
@@ -393,14 +415,15 @@ export function useChat(serverUrl: string, token: string, bots: Bot[], onUnautho
     });
   }, [options.viewing, entry, version]);
 
-  return { api, cache, version, ready, streamStatus, syncing, syncError, receiveEnabled: options.receiveEnabled, viewing: options.viewing,
-    connections, botId, setBotId: (value: number) => { setBotId(value); cache.activeKey = ''; cache.changed(); }, groups, groupToken, groupsLoading, groupError,
+  return { api, cache, version, ready, canBrowse: ready || options.manualOnly, manualOnly: options.manualOnly,
+    streamStatus, syncing, syncError, receiveEnabled: receiving, viewing: options.viewing,
+    connections, botId, setBotId: (value: number) => { setBotId(value); cache.activeKey = ''; cache.changed(); }, groups, groupToken, groupsLoading, groupsLoaded, groupError,
     entry, notice, setNotice, select, openThread, send, detail, ensureMessage, report, groupHints, recall,
     isRecalling: (target: ChatEntry, messageId: string) => recallSession.requests.has(`${target.key}:${messageId}`),
     needsRecallConfirmation: () => Date.now() >= recallSession.skipConfirmationUntil,
     skipRecallConfirmation: () => { recallSession.skipConfirmationUntil = Date.now() + 5 * 60_000; },
     refreshGroups: () => { if (botId != null) void loadGroups(botId, undefined, true); },
-    moreGroups: () => { if (botId != null && groupToken) void loadGroups(botId, groupToken); },
+    moreGroups: () => { if (botId != null && groupToken) void loadGroups(botId, groupToken, true); },
     latest,
     more: (target: ChatEntry, view: Timeline) => {
       if (view === target.main) target.viewMode = 'history';

@@ -94,13 +94,15 @@ export function SettingsPanel({ active, ownMessageAlignment, onOwnMessageAlignme
           <Typography.Text id="chat-receive-label">消息收取方式</Typography.Text>
           <Typography.Text type="secondary">{receiveMode === 'always'
             ? '切换页面或隐藏窗口后仍接收实时更新。'
+            : receiveMode === 'manual' ? '不连接实时消息通道，不自动拉取群聊；仅手动刷新，没有实时新消息提示。'
             : '仅在群聊页面且窗口可见时收取；暂停期间没有实时新消息提示，返回后自动同步。'}</Typography.Text>
         </div>
         <Radio.Group value={receiveMode} aria-labelledby="chat-receive-label" onChange={(value) => {
-          if (value === 'always' || value === 'when-viewing') onReceiveModeChange(value);
+          if (value === 'always' || value === 'when-viewing' || value === 'manual') onReceiveModeChange(value);
         }}>
           <Radio value="always">始终收取</Radio>
           <Radio value="when-viewing">仅查看群聊时收取</Radio>
+          <Radio value="manual">从不自动收取</Radio>
         </Radio.Group>
       </div>
       <div className="app-settings-row">

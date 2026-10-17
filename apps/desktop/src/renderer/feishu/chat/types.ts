@@ -53,4 +53,4 @@ export type SendMessageInput = {
 
 export type OwnMessageAlignment = 'left' | 'right';
 
-export type ChatReceiveMode = 'always' | 'when-viewing';
+export type ChatReceiveMode = 'always' | 'when-viewing' | 'manual';
