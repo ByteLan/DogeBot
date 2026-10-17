@@ -35,4 +35,6 @@
 
 聊天与收取策略已有构建、模拟接口、缓存和交互检查，以及 WSLg/Linux Electron 窗口验证，详见[实现记录](../docs/2026-10-17/feishu-chat-receive-policy-plan.md#8-实现与验证记录)。真实飞书租户及 Windows/macOS 的原生行为仍需对应环境验收。其他模块本轮依据源码整理，没有重新进行端到端验证。
 
+「从不自动收取」的构建、模拟请求与交互、Linux Electron 检查见[手动收取验证记录](../docs/2026-10-17/feishu-chat-manual-receive-plan.md#实现与验证记录)。
+
 开发规范见 [AGENTS.md](../AGENTS.md)；详细接口与部署见 [server README](../apps/server/README.md)，桌面使用与打包见 [desktop README](../apps/desktop/README.md)。

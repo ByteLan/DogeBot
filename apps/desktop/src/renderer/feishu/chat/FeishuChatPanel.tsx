@@ -85,8 +85,9 @@ function MessageImage({ controller, entry, message, imageKey }: { controller: Ch
   const request = useRef<AbortController | undefined>(undefined);
   const mounted = useRef(true);
   const url = controller.cache.media.get(key)?.url;
-  const load = async () => {
-    if (!controller.receiveEnabled || !controller.viewing || request.current && !request.current.signal.aborted || controller.cache.mediaUrl(key)) return;
+  const load = async (manual = false) => {
+    if (!controller.receiveEnabled && !(manual && controller.manualOnly) || !controller.viewing
+      || request.current && !request.current.signal.aborted || controller.cache.mediaUrl(key)) return;
     const abort = controller.cache.read(entry);
     request.current = abort;
     setLoading(true); setError('');
@@ -116,7 +117,7 @@ function MessageImage({ controller, entry, message, imageKey }: { controller: Ch
   }, [key, controller.receiveEnabled, controller.viewing]);
   return <div ref={host} className="chat-message-image">
     {url ? <Image className="chat-image" src={url} alt="消息图片" loader={<Spin size={16} />} onError={() => setError('图片预览已释放，请重新加载')} />
-      : <Button type="text" size="small" icon={<IconImage />} loading={loading} onClick={() => void load()}>{error || '加载图片'}</Button>}
+      : <Button type="text" size="small" icon={<IconImage />} loading={loading} onClick={() => void load(true)}>{error || '加载图片'}</Button>}
   </div>;
 }
 
@@ -275,7 +276,8 @@ function MessageList({ controller, entry, view, bot, onRecall, ownMessageAlignme
         {view.loading && <Spin size={14} tip="正在读取消息" />}
         {!view.loading && view.pages.length > 0 && !last?.hasMore && <span>已到可读取的最早消息</span>}
       </div>
-      {!messages.length && !view.loading && <Empty className="chat-empty" description="暂无消息，发送第一条消息吧" />}
+      {!messages.length && !view.loading && <Empty className="chat-empty" description={controller.manualOnly && !view.pages.length
+        ? thread ? '尚未读取话题消息，请点击刷新' : '尚未读取消息，请点击右上角刷新' : '暂无消息，发送第一条消息吧'} />}
       <div className="chat-message-items" ref={contentHost}>{messages.map((message, index) => {
         const previous = messages[index - 1];
         const separate = Boolean(message.createTimeMs && (!previous || message.createTimeMs - previous.createTimeMs >= 5 * 60_000
@@ -361,11 +363,11 @@ function Composer({ controller, entry, bot, thread = false }: { controller: Chat
   </div>;
 }
 
-export function FeishuChatPanel({ serverUrl, token, bots, onUnauthorized, onManageBots, ownMessageAlignment = 'right', receiveEnabled = true, viewing = true, onRefreshBots }: {
+export function FeishuChatPanel({ serverUrl, token, bots, onUnauthorized, onManageBots, ownMessageAlignment = 'right', receiveEnabled = true, manualOnly = false, viewing = true, onRefreshBots }: {
   serverUrl: string; token: string; bots: Bot[]; onUnauthorized: () => void; onManageBots?: () => void; ownMessageAlignment?: OwnMessageAlignment;
-  receiveEnabled?: boolean; viewing?: boolean; onRefreshBots?: (signal: AbortSignal) => Promise<Bot[]>;
+  receiveEnabled?: boolean; manualOnly?: boolean; viewing?: boolean; onRefreshBots?: (signal: AbortSignal) => Promise<Bot[]>;
 }) {
-  const controller = useChat(serverUrl, token, bots, onUnauthorized, { receiveEnabled, viewing, onRefreshBots });
+  const controller = useChat(serverUrl, token, bots, onUnauthorized, { receiveEnabled, manualOnly, viewing, onRefreshBots });
   const { entry, cache } = controller;
   const [recallTarget, setRecallTarget] = useState<{ entry: ChatEntry; message: ChatMessage }>();
   const [skipRecallWarning, setSkipRecallWarning] = useState(false);
@@ -383,7 +385,9 @@ export function FeishuChatPanel({ serverUrl, token, bots, onUnauthorized, onMana
   const connection = controller.connections[entry?.chat.botId ?? controller.botId ?? -1];
   const views = entry ? [entry.main, ...(entry.openedThread ? [cache.view(entry, entry.openedThread.threadId)] : [])] : [];
   const syncFailed = controller.syncError || views.some((view) => view.error) || controller.groupError;
-  const status = !receiveEnabled ? '已暂停收取' : controller.streamStatus !== '实时连接正常' ? controller.streamStatus
+  const status = manualOnly ? views.some((view) => view.loading) || controller.groupsLoading ? '正在手动刷新'
+    : syncFailed ? '刷新失败，可重试' : '仅手动刷新'
+    : !receiveEnabled ? '已暂停收取' : controller.streamStatus !== '实时连接正常' ? controller.streamStatus
     : syncFailed ? '同步失败，可手动刷新' : controller.syncing || views.some((view) => view.loading) ? '正在同步'
     : views.some((view) => view.needsResync) ? '待同步' : connection?.status === 'connected' ? '实时同步' : '消息通道已连接';
   const connected = status === '实时同步';
@@ -411,14 +415,14 @@ export function FeishuChatPanel({ serverUrl, token, bots, onUnauthorized, onMana
       <div className="chat-bot-select"><IconRobot /><Select aria-label="选择聊天机器人" size="small" value={controller.botId} placeholder="选择机器人" disabled={!bots.length}
         onChange={(value: number) => controller.setBotId(value)} options={bots.map((b) => ({ label: b.botName || b.name, value: b.id }))} /></div>
       <div className="chat-list-heading"><span>已加入的群 <small>{controller.groups.length}{controller.groupToken ? '+' : ''}</small></span>
-        <Tooltip content="刷新群列表"><Button type="text" size="mini" icon={<IconRefresh />} aria-label="刷新群列表" loading={controller.groupsLoading} disabled={!controller.ready} onClick={controller.refreshGroups} /></Tooltip></div>
+        <Tooltip content="刷新群列表"><Button type="text" size="mini" icon={<IconRefresh />} aria-label="刷新群列表" loading={controller.groupsLoading} disabled={!controller.canBrowse || controller.botId == null} onClick={controller.refreshGroups} /></Tooltip></div>
       {controller.groupError && <Alert className="chat-error" type="error" content={controller.groupError} />}
       <div className="chat-group-list">
         {controller.groups.map((g) => {
           const key = `${g.botId}:${g.chatId}`;
           const cached = cache.entries.get(key);
           const last = cached ? [...cached.messages.values()].sort((a, b) => b.createTimeMs - a.createTimeMs)[0] : undefined;
-          return <button type="button" key={g.chatId} className={`chat-group ${cache.activeKey === key ? 'selected' : ''}`} aria-pressed={cache.activeKey === key} title={g.name} disabled={!controller.ready} onClick={() => void controller.select(g)}>
+          return <button type="button" key={g.chatId} className={`chat-group ${cache.activeKey === key ? 'selected' : ''}`} aria-pressed={cache.activeKey === key} title={g.name} disabled={!controller.canBrowse} onClick={() => void controller.select(g)}>
             <GroupAvatar chat={g} />
             <span className="chat-group-copy"><span className="chat-group-title">{g.name}</span><span className="chat-group-preview">{last ? `${last.deleted ? '' : `${senderName(last, cached!, bots.find((b) => b.id === g.botId))}：`}${last.deleted ? '消息已撤回' : messageText(last)}` : g.chatMode === 'topic' ? '话题群' : '点击查看群消息'}</span></span>
             <span className="chat-group-meta">{last && last.createTimeMs > 0 && <time>{new Date(last.createTimeMs).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })}</time>}
@@ -426,7 +430,8 @@ export function FeishuChatPanel({ serverUrl, token, bots, onUnauthorized, onMana
           </button>;
         })}
         {controller.groupsLoading && !controller.groups.length && <div className="chat-list-loading"><Spin size={18} /></div>}
-        {!controller.groups.length && !controller.groupsLoading && <Empty className="chat-empty" description={<><p>{bots.length ? controller.ready ? '机器人尚未加入群聊' : '正在连接服务端' : '请先绑定机器人'}</p>
+        {!controller.groups.length && !controller.groupsLoading && <Empty className="chat-empty" description={<><p>{bots.length
+          ? manualOnly && !controller.groupsLoaded ? '点击刷新群列表，查看已加入的群' : controller.canBrowse ? '机器人尚未加入群聊' : '正在连接服务端' : '请先绑定机器人'}</p>
           {!bots.length && onManageBots && <Button type="primary" size="small" onClick={onManageBots}>管理机器人</Button>}</>} />}
         {controller.groupToken && <Button className="chat-load-groups" type="text" size="small" loading={controller.groupsLoading} onClick={controller.moreGroups}>加载更多群</Button>}
       </div>
@@ -438,7 +443,8 @@ export function FeishuChatPanel({ serverUrl, token, bots, onUnauthorized, onMana
     <div className="chat-workspace">
       <div className="chat-workspace-header"><GroupAvatar chat={activeGroup} />
         <div className="chat-header-copy"><strong title={entry?.chat.name}>{entry?.chat.name || '飞书群聊'}</strong>
-          <Tooltip content={`${status} · 机器人${connection?.status === 'connected' ? '已连接' : connection?.status === 'connecting' ? '连接中' : '连接状态待确认'}`}><span className="chat-connection-status" data-connected={connected} data-paused={!receiveEnabled} role="status"><i />{status}</span></Tooltip>
+          <Tooltip content={manualOnly ? '不会自动同步；点击刷新获取消息，图片需点击加载。'
+            : `${status} · 机器人${connection?.status === 'connected' ? '已连接' : connection?.status === 'connecting' ? '连接中' : '连接状态待确认'}`}><span className="chat-connection-status" data-connected={connected} data-paused={!controller.receiveEnabled} role="status"><i />{status}</span></Tooltip>
         </div>
         {entry && <Tooltip content="刷新最新消息"><Button type="text" size="small" icon={<IconRefresh />} aria-label="刷新最新消息" loading={entry.main.loading} onClick={() => controller.latest(entry)} /></Tooltip>}
       </div>
@@ -448,7 +454,12 @@ export function FeishuChatPanel({ serverUrl, token, bots, onUnauthorized, onMana
           <MessageList key={entry.key} controller={controller} entry={entry} view={entry.main} bot={bot} onRecall={requestRecall} ownMessageAlignment={ownMessageAlignment} />
           <Composer controller={controller} entry={entry} bot={bot} />
         </div>
-        {entry.openedThread && <aside className="chat-thread" aria-label="话题讨论"><div className="chat-thread-header"><span><IconMessage /><strong>话题讨论</strong></span><Tooltip content="关闭话题"><Button type="text" size="mini" icon={<IconClose />} aria-label="关闭话题" onClick={() => { entry.openedThread = undefined; if (entry.reply?.mode === 'thread') entry.reply = undefined; cache.changed(); }} /></Tooltip></div>
+        {entry.openedThread && <aside className="chat-thread" aria-label="话题讨论"><div className="chat-thread-header"><span><IconMessage /><strong>话题讨论</strong></span>
+          {manualOnly && <Tooltip content="刷新话题消息"><Button type="text" size="mini" icon={<IconRefresh />} aria-label="刷新话题消息" loading={cache.view(entry, entry.openedThread.threadId).loading} onClick={() => {
+            const thread = entry.openedThread;
+            if (thread) controller.latest(entry, cache.view(entry, thread.threadId));
+          }} /></Tooltip>}
+          <Tooltip content="关闭话题"><Button type="text" size="mini" icon={<IconClose />} aria-label="关闭话题" onClick={() => { entry.openedThread = undefined; if (entry.reply?.mode === 'thread') entry.reply = undefined; cache.changed(); }} /></Tooltip></div>
           <MessageList key={entry.openedThread.threadId} controller={controller} entry={entry} view={cache.view(entry, entry.openedThread.threadId)} bot={bot} onRecall={requestRecall} ownMessageAlignment={ownMessageAlignment} thread />
           <Composer key={entry.openedThread.threadId} controller={controller} entry={entry} bot={bot} thread />
         </aside>}

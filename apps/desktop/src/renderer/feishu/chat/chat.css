@@ -114,7 +114,7 @@
 .app-shell .feishu-chat .chat-new-hint { position: absolute; z-index: 5; right: 18px; bottom: 12px; height: 30px; min-height: 30px; border-color: #e0e6f0; border-radius: 16px; background: #fff; box-shadow: 0 2px 10px #1f23291a; color: #3370ff; font-size: 11px; }
 .chat-thread { position: relative; display: flex; flex: 0 0 360px; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid #e0e5ed; background: #fafbfc; }
 .chat-thread-header { display: flex; flex: 0 0 46px; align-items: center; justify-content: space-between; padding: 8px 14px; border-bottom: 1px solid #e5e8ef; background: #fff; font-size: 13px; }
-.chat-thread-header > span { display: flex; align-items: center; gap: 7px; }
+.chat-thread-header > span { display: flex; flex: 1; align-items: center; gap: 7px; }
 .chat-thread-header .arco-icon { color: #646a73; }
 .chat-thread .chat-message-list { padding-right: 14px; padding-left: 14px; }
 .chat-thread .chat-message-text { font-size: 12px; }

@@ -2,6 +2,8 @@
 
 当前行为与后续维护入口：[消息收取产品规格](../../product-spec/chat/message-receiving.md)。
 
+后续第三档「从不自动收取」见[手动收取方案](feishu-chat-manual-receive-plan.md)；下文保留最初两档设计与验证记录。
+
 日期：2026-10-17（北京时间）
 
 状态：已在当前工作区实现，验证范围见第 8 节。实现前基线为 `b292ed1`。

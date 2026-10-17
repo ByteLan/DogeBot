@@ -116,7 +116,7 @@ export function App() {
 
   const loggedIn = Boolean(token);
   const viewingChat = workspaceView === 'chats' && windowVisible;
-  const receiveEnabled = loggedIn && (receiveMode === 'always' || viewingChat);
+  const receiveEnabled = loggedIn && (receiveMode === 'always' || receiveMode === 'when-viewing' && viewingChat);
   const connectionMap = useMemo(() => new Map(connections.map((connection) => [connection.botId, connection])), [connections]);
   const activeDouyinTasks = useMemo(() => douyinTasks.filter((task) => task.enabled), [douyinTasks]);
   const favoriteUrlOptions = useMemo(
@@ -458,7 +458,7 @@ export function App() {
           </div>
           <div className="app-chat-panel" hidden={workspaceView !== 'chats'}>
             <FeishuChatPanel key={`${serverUrl}:${token}`} serverUrl={serverUrl} token={token} bots={bots} onUnauthorized={logout} onManageBots={() => setWorkspaceView('bots')} ownMessageAlignment={ownMessageAlignment}
-              receiveEnabled={receiveEnabled} viewing={viewingChat} onRefreshBots={loadBots} />
+              receiveEnabled={receiveEnabled} manualOnly={receiveMode === 'manual'} viewing={viewingChat} onRefreshBots={loadBots} />
           </div>
           <div className="app-workspace-panel" hidden={workspaceView !== 'douyin'}>
           <DouyinMonitorCard
