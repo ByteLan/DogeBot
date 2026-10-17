@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.renderer.json",
+  "compilerOptions": { "allowImportingTsExtensions": true },
+  "include": ["tests", "src/renderer", "src/shared", "vitest.config.ts"]
+}

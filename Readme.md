@@ -51,6 +51,8 @@ pnpm dev
 
 注意：日常不要在根目录执行 `pnpm install`。`apps/server` 和 `apps/desktop` 是两个独立 pnpm 项目，分别在各自目录安装依赖和运行脚本。
 
+回归测试统一使用 Vitest。安装好两个应用的开发依赖后，在仓库根目录运行 `pnpm test` 可依次完成 server 与 desktop 的测试及相关类型检查；也可在各应用目录单独运行 `pnpm test`。聊天 API 使用临时数据库和模拟飞书，桌面交互使用模拟 DOM，不访问真实飞书租户。修复范围见[聊天审查修复记录](docs/2026-10-17/chat-review-fixes-and-vitest.md)。
+
 如果需要临时使用保留的 Rush 配置，可以在根目录执行 `pnpm rush:update` 或 `pnpm rush:build`。
 
 ## 服务端能力

@@ -331,9 +331,11 @@ export function useChat(serverUrl: string, token: string, bots: Bot[], onUnautho
     if (enabled.current) void load(target, false, root);
   }, [cache, ensureMessage, load]);
 
-  const send = useCallback(async (target: ChatEntry, input: SendMessageInput) => {
+  const send = useCallback(async (target: ChatEntry, input: SendMessageInput, composerKey = 'main') => {
     if (!cache.current(target) || target.pending.size >= 3 && !target.pending.has(input.clientRequestId)) return;
-    target.pending.set(input.clientRequestId, { input, status: 'sending' });
+    const editor = cache.view(target, composerKey === 'main' ? undefined : composerKey).composer;
+    const sentReply = input.reply;
+    target.pending.set(input.clientRequestId, { input, composerKey, status: 'sending' });
     cache.changed();
     const controller = new AbortController(); target.controllers.add(controller);
     const signal = AbortSignal.any([controller.signal, session.signal, AbortSignal.timeout(25_000)]);
@@ -347,19 +349,21 @@ export function useChat(serverUrl: string, token: string, bots: Bot[], onUnautho
       const result = await api.send(target.chat.botId, target.chat.chatId, input, signal);
       if (!cache.current(target) || controller.signal.aborted || session.signal.aborted) return;
       if (result.message.threadId && input.reply) {
-        target.openedThread = { threadId: result.message.threadId, rootMessageId: result.message.rootId || input.reply.messageId };
         cache.view(target, result.message.threadId);
+        if (cache.activeKey === target.key && (composerKey === 'main' ? editor.reply === sentReply : target.openedThread?.threadId === composerKey)) {
+          target.openedThread = { threadId: result.message.threadId, rootMessageId: result.message.rootId || input.reply.messageId };
+        }
       }
       cache.incoming(result.message, input.clientRequestId);
       target.pending.delete(input.clientRequestId);
-      target.reply = undefined;
+      if (editor.reply === sentReply) editor.reply = undefined;
       cache.changed();
-      if (target.openedThread && input.reply) void load(target, false, target.openedThread, true);
+      if (target.openedThread?.threadId === result.message.threadId && input.reply) void load(target, false, target.openedThread, true);
     } catch (error) {
       if (!cache.current(target)) return;
       if (!target.pending.has(input.clientRequestId)) return; // Already confirmed by SSE.
       const uncertain = !(error instanceof ChatApiError) || error.status >= 500;
-      target.pending.set(input.clientRequestId, { input, status: uncertain ? 'unknown' : 'failed', error: errorText(error) });
+      target.pending.set(input.clientRequestId, { input, composerKey, status: uncertain ? 'unknown' : 'failed', error: errorText(error) });
       cache.changed(); report(error, target);
     }
     finally { target.controllers.delete(controller); }

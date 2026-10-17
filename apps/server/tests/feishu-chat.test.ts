@@ -1,19 +1,17 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { afterAll, beforeAll, describe, test, vi } from 'vitest';
+import { databaseFixture } from './database-fixture.js';
 import { setTimeout as wait } from 'node:timers/promises';
 import express from 'express';
 
 // Never open the application's real database or contact a real Feishu tenant.
-process.env.DOGEBOT_DATA_DIR = mkdtempSync(join(tmpdir(), 'dogebot-chat-verify-'));
+const releaseDatabase = databaseFixture('dogebot-chat-verify-');
 const { addUser, createToken, requireAuth } = await import('../src/auth.js');
 const { db } = await import('../src/db.js');
 const { createFeishuChatRouter } = await import('../src/feishu/chat/routes.js');
 const { createFeishuBotForUser, listFeishuBots } = await import('../src/feishu/bot-management.js');
 const { createChatMessage } = await import('../src/feishu/api.js');
 const { dispatchFeishuMessage, dispatchFeishuRecall } = await import('../src/feishu/chat/ingress.js');
-const { publishChatEvent } = await import('../src/feishu/chat/events.js');
 
 addUser('chat-test-one', 'temporary-test-password');
 addUser('chat-test-two', 'temporary-test-password');
@@ -38,7 +36,7 @@ const upstreamCalls: Array<{ path: string; method: string; body?: Record<string,
 const originalFetch = globalThis.fetch;
 let sent = 0;
 const fixturePng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAEAAAAAoCAIAAADBrGu+AAAAWUlEQVR4nO3PUQkAIBTAwFfNQsY2hyH8OITBAtxm7fN1wwUNaEEDWtCAFjSgBQ1oQQNa0IAWNKAFDWhBA1rQgBY0oAUNaEEDWtCAFjSgBQ1oQQNa0IAWPHYBDrbS4hiUtIAAAAAASUVORK5CYII=', 'base64');
-globalThis.fetch = async (input, init) => {
+vi.stubGlobal('fetch', (async (input, init) => {
   const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input : input.url);
   if (url.hostname !== 'open.feishu.cn') return originalFetch(input, init);
   const method = init?.method ?? 'GET';
@@ -79,7 +77,7 @@ globalThis.fetch = async (input, init) => {
   const id = url.pathname.split('/').at(-1)!;
   if (messages.has(id)) return ok({ items: [messages.get(id)] });
   throw new Error(`Unexpected fixture request: ${method} ${url.pathname}`);
-};
+}) satisfies typeof fetch);
 
 const app = express();
 app.use((_req, res, next) => { res.setHeader('Access-Control-Allow-Origin', '*'); res.setHeader('Access-Control-Allow-Headers', 'authorization,content-type'); res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS'); next(); });
@@ -98,8 +96,6 @@ const request = (path: string, options: RequestInit = {}, token = tokens[0]) => 
   ...options, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...options.headers }
 });
 const prefix = `/api/feishu/bots/${bot1.id}/chats`;
-let passed = 0;
-async function check(name: string, run: () => Promise<void>) { await run(); passed++; console.log(`PASS ${name}`); }
 
 async function eventStream(token: string) {
   const controller = new AbortController();
@@ -129,16 +125,26 @@ async function eventStream(token: string) {
   return { controller, events, until };
 }
 
-const one = await eventStream(tokens[0]);
-const two = await eventStream(tokens[1]);
-try {
-  await check('HTTP auth, ownership and no-store headers', async () => {
+let one: Awaited<ReturnType<typeof eventStream>>;
+let two: Awaited<ReturnType<typeof eventStream>>;
+beforeAll(async () => {
+  one = await eventStream(tokens[0]);
+  two = await eventStream(tokens[1]);
+});
+afterAll(async () => {
+  one?.controller.abort(); two?.controller.abort();
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  vi.unstubAllGlobals(); releaseDatabase();
+});
+
+describe('Feishu chat API', () => {
+  test('HTTP auth, ownership and no-store headers', async () => {
     assert.equal((await originalFetch(baseUrl + prefix)).status, 401);
     assert.equal((await request(`/api/feishu/bots/${bot2.id}/chats`)).status, 404);
     const response = await request(prefix); assert.equal(response.status, 200); assert.equal(response.headers.get('cache-control'), 'no-store');
     assert.equal((await response.json()).items.length, 12);
   });
-  await check('history query, fixed pagination conditions and thread membership', async () => {
+  test('history query, fixed pagination conditions and thread membership', async () => {
     const response = await request(prefix + '/oc_1/messages'); const page = await response.json();
     assert.equal(response.status, 200); assert.ok(page.snapshotEndTimeSeconds); assert.ok(page.items.some((m: { messageId: string }) => m.messageId === 'om_root'));
     assert.equal((await request(prefix + '/oc_1/messages?pageToken=next')).status, 400);
@@ -147,7 +153,7 @@ try {
     assert.equal((await request(prefix + '/oc_1/messages/om_foreign')).status, 403);
     assert.ok(upstreamCalls.some((c) => c.path.includes('sort_type=ByCreateTimeDesc') && c.path.includes('page_size=50')));
   });
-  await check('sending returns a message and publishes only to its owning user', async () => {
+  test('sending returns a message and publishes only to its owning user', async () => {
     const uuid = crypto.randomUUID();
     const response = await request(prefix + '/oc_1/messages', { method: 'POST', body: JSON.stringify({ clientRequestId: uuid, message: { type: 'text', text: '桌面发送验证' } }) });
     assert.equal(response.status, 200); const result = await response.json();
@@ -158,7 +164,7 @@ try {
     assert.equal((await request(prefix + '/oc_1/messages', { method: 'POST', body: JSON.stringify({ clientRequestId: crypto.randomUUID(), message: { type: 'text', text: 'wrong group' }, reply: { messageId: 'om_foreign', mode: 'chat' } }) })).status, 403);
     assert.equal(sent, count);
   });
-  await check('existing automatic sends and bot-message ingress reach desktop', async () => {
+  test('existing automatic sends and bot-message ingress reach desktop', async () => {
     const id = await createChatMessage(bot1, 'oc_1', 'text', { text: '现有自动发送验证' });
     await one.until((e) => e.message?.messageId === id);
     await dispatchFeishuMessage(bot1, { sender: { sender_type: 'bot', sender_id: { open_id: 'ou_other_bot' } }, message: { ...rawMessage('om_other_bot', '其他机器人消息'), message_type: 'text', content: '{"text":"其他机器人消息"}' } });
@@ -166,7 +172,7 @@ try {
     dispatchFeishuRecall(bot1, { chat_id: 'oc_1', message_id: 'om_other_bot', recall_time: String(Date.now()) });
     await one.until((e) => e.type === 'message.recalled' && e.messageId === 'om_other_bot');
   });
-  await check('reply mode, thread routing and image upload use the expected Feishu payloads', async () => {
+  test('reply mode, thread routing and image upload use the expected Feishu payloads', async () => {
     const response = await request(prefix + '/oc_1/messages', { method: 'POST', body: JSON.stringify({ clientRequestId: crypto.randomUUID(),
       message: { type: 'text', text: '话题回复验证' }, reply: { messageId: 'om_root', mode: 'thread' } }) });
     assert.equal(response.status, 200); assert.equal((await response.json()).message.threadId, 'omt_one');
@@ -174,13 +180,13 @@ try {
     const upload = await request(prefix + '/oc_1/images', { method: 'POST', headers: { 'content-type': 'image/png' }, body: new Uint8Array(fixturePng) });
     assert.equal(upload.status, 200); assert.equal((await upload.json()).imageKey, 'img_fixture');
   });
-  await check('image proxy validates parent chat and does not use a disk cache', async () => {
+  test('image proxy validates parent chat and does not use a disk cache', async () => {
     assert.equal((await request(prefix + '/oc_1/messages/om_foreign/resources/img_x')).status, 403);
     const response = await request(prefix + '/oc_1/messages/om_root/resources/img_x');
     assert.equal(response.status, 200); assert.equal(response.headers.get('cache-control'), 'no-store');
     assert.equal((await response.arrayBuffer()).byteLength, fixturePng.byteLength);
   });
-  await check('recall rejects other users, chats, members and bots before issuing DELETE', async () => {
+  test('recall rejects other users, chats, members and bots before issuing DELETE', async () => {
     messages.set('om_other_app', rawMessage('om_other_app', 'other app', { sender: { id: 'cli_other', id_type: 'app_id', sender_type: 'app' } }));
     const deletes = () => upstreamCalls.filter((c) => c.method === 'DELETE').length;
     const before = deletes();
@@ -190,7 +196,7 @@ try {
     assert.equal((await request(prefix + '/oc_1/messages/om_other_app', { method: 'DELETE' })).status, 403);
     assert.equal(deletes(), before); messages.delete('om_other_app');
   });
-  await check('recall supports app_id/open_id and thread replies, no-store, SSE isolation and repeat requests', async () => {
+  test('recall supports app_id/open_id and thread replies, no-store, SSE isolation and repeat requests', async () => {
     for (const [id, senderId, senderType] of [['om_own_app', 'cli_test_one', 'app_id'], ['om_own_open', 'ou_bot', 'open_id'], ['om_own_thread', 'cli_test_one', 'app_id'], ['om_recalled_elsewhere', 'cli_test_one', 'app_id']]) {
       messages.set(id, rawMessage(id, 'will recall', { sender: { id: senderId, id_type: senderType, sender_type: 'app' },
         ...(id === 'om_own_thread' ? { root_id: 'om_root', parent_id: 'om_root', thread_id: 'omt_one' } : {}) }));
@@ -206,7 +212,7 @@ try {
     }
     assert.equal(two.events.filter((e) => e.type === 'message.recalled').length, 0);
   });
-  await check('recall failures preserve messages and never publish a false recall', async () => {
+  test('recall failures preserve messages and never publish a false recall', async () => {
     for (const [id, status] of [['om_expired', 400], ['om_denied', 403], ['om_unsupported', 400], ['om_limited', 429], ['om_unconfirmed', 502]] as const) {
       messages.set(id, rawMessage(id, 'must survive failure', { sender: { id: 'cli_test_one', id_type: 'app_id', sender_type: 'app' } }));
       const response = await request(prefix + `/oc_1/messages/${id}`, { method: 'DELETE' });
@@ -216,16 +222,4 @@ try {
       messages.delete(id);
     }
   });
-  console.log(`${passed} Feishu chat API verification scenarios passed`);
-} finally { one.controller.abort(); two.controller.abort(); }
-
-if (process.argv.includes('--serve')) {
-  const file = join(tmpdir(), 'dogebot-chat-fixture.json');
-  writeFileSync(file, JSON.stringify({ baseUrl, token: tokens[0], dataDir: process.env.DOGEBOT_DATA_DIR }));
-  writeFileSync(join(tmpdir(), 'dogebot-chat-fixture.png'), fixturePng);
-  setInterval(() => publishChatEvent(bot1, { type: 'bot.connection', botId: bot1.id, status: 'connected' }), 15_000).unref();
-  console.log(`Fixture running at ${baseUrl}; session in ${file}`);
-} else {
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  globalThis.fetch = originalFetch;
-}
+});

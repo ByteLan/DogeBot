@@ -37,4 +37,6 @@
 
 「从不自动收取」的构建、模拟请求与交互、Linux Electron 检查见[手动收取验证记录](../docs/2026-10-17/feishu-chat-manual-receive-plan.md#实现与验证记录)。
 
+聊天缓存、编辑状态与 Vitest 回归的本轮修复及验证范围见[审查修复记录](../docs/2026-10-17/chat-review-fixes-and-vitest.md)。
+
 开发规范见 [AGENTS.md](../AGENTS.md)；详细接口与部署见 [server README](../apps/server/README.md)，桌面使用与打包见 [desktop README](../apps/desktop/README.md)。

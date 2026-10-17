@@ -1,23 +1,16 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { after, test } from 'node:test';
+import { databaseFixture } from './database-fixture.js';
+import { afterAll, afterEach, test, vi } from 'vitest';
 import type { Request, Response as ExpressResponse } from 'express';
 import type { FeishuBot, StyleStickerCardState } from '../src/types.js';
 import { renderByteStyle, renderScaleNewHeights, renderStyleStickerImage } from '../src/styleStickers.js';
 
 // Card modules import the database; keep all test data away from a running bot.
-const previousDataDir = process.env.DOGEBOT_DATA_DIR;
-const dataDir = mkdtempSync(join(tmpdir(), 'dogebot-hdr-test-'));
-process.env.DOGEBOT_DATA_DIR = dataDir;
+const releaseDatabase = databaseFixture('dogebot-hdr-test-');
 const { buildStyleStickerCard, buildStyleStickerHdrLink } = await import('../src/feishu/cards/style-sticker-card.js');
 const { handleFeishuCardAction } = await import('../src/feishu/card-action.js');
-after(() => {
-  if (previousDataDir === undefined) delete process.env.DOGEBOT_DATA_DIR;
-  else process.env.DOGEBOT_DATA_DIR = previousDataDir;
-  rmSync(dataDir, { recursive: true, force: true });
-});
+afterEach(() => vi.restoreAllMocks());
+afterAll(releaseDatabase);
 
 const colors = { color1: '#123268', color2: '#9dacc5' };
 
@@ -49,12 +42,20 @@ test('HTTP HDR boundaries match the JPEG gain map and invalid values disable HDR
 
 function cardHdrValues(card: ReturnType<typeof buildStyleStickerCard>) {
   const form = card.body.elements.find((element) => element.tag === 'form')!;
-  const columns = form.elements!.find((element) => element.tag === 'column_set' && element.flex_mode === 'bisect')!;
-  const input = columns.columns![1].elements[0] as { default_value: string; label: { content: string } };
-  const button = form.elements!.find((element) => element.tag === 'button')!;
-  const link = new URL(button.behaviors![0].default_url);
-  const palette = form.elements!.find((element) => element.tag === 'column_set' && element.flex_mode !== 'bisect')!;
-  return { input, link, colorSelects: palette.columns!.map(column => column.elements[0]) };
+  const columns = form.elements!.find((element) => 'flex_mode' in element && element.flex_mode === 'bisect');
+  assert.ok(columns && 'columns' in columns);
+  const input = columns.columns[1].elements[0] as { default_value: string; label: { content: string } };
+  const button = form.elements!.find((element) => element.tag === 'button');
+  assert.ok(button && 'behaviors' in button && button.behaviors);
+  const link = new URL(button.behaviors[0].default_url);
+  const palette = form.elements!.find((element) => 'flex_mode' in element && element.flex_mode !== 'bisect');
+  assert.ok(palette && 'columns' in palette);
+  const colorSelects = palette.columns.map(column => {
+    const select = column.elements[0];
+    assert.ok('options' in select && 'initial_option' in select);
+    return select;
+  });
+  return { input, link, colorSelects };
 }
 
 test('cards normalize EV values and keep their displayed value and HDR link consistent', () => {
@@ -82,10 +83,11 @@ test('cards normalize EV values and keep their displayed value and HDR link cons
   }
 });
 
-test('submitted card EV values are normalized before updating the card', async (context) => {
+test('submitted card EV values are normalized before updating the card', async () => {
   const cards: ReturnType<typeof buildStyleStickerCard>[] = [];
   // Every network request is intercepted; this test never sends to Feishu.
-  context.mock.method(globalThis, 'fetch', async (url: string, init?: RequestInit) => {
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    const url = String(input);
     if (url.endsWith('/tenant_access_token/internal')) {
       return Response.json({ tenant_access_token: 'test-token', expire: 7200 });
     }
