@@ -7,7 +7,7 @@ DogeBot 仓库当前包含一个 Node.js 服务端和一个 Electron 桌面客�
 ## 文档导航
 
 - [产品规格](product-spec/README.md)：按功能模块介绍当前能力、交互、默认值和边界。
-- [开发协作规范](AGENTS.md)：组件、构建、文档维护和验证约定；`CLAUDE.md` 软链接指向该文件。
+- [开发协作规范](AGENTS.md)：组件、构建、文档维护和验证约定；普通文件 `CLAUDE.md` 通过 `@AGENTS.md` 导入，供 Windows、Linux 和 macOS 共用。
 - [方案与调研](docs/)：按日期保存设计取舍与实施记录。
 - [server 文档](apps/server/README.md) / [desktop 文档](apps/desktop/README.md)：安装、部署、接口和打包。
 
