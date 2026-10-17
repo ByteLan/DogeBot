@@ -1,8 +1,15 @@
 # DogeBot
 
-DogeBot 仓库当前包含一个 Node.js 服务端和一个 Electron 桌面客户端。两者按独立项目管理，各自有自己的 `package.json`、`pnpm-lock.yaml` 和 `node_modules`；服务端负责用户登录、SQLite 数据持久化、飞书机器人绑定，以及为每个已绑定机器人维护独立的飞书长连接；桌面客户端用于登录服务端并管理飞书机器人绑定。
+DogeBot 仓库当前包含一个 Node.js 服务端和一个 Electron 桌面客户端。两者按独立项目管理，各自有自己的 `package.json`、`pnpm-lock.yaml` 和 `node_modules`；服务端负责用户登录、SQLite 数据持久化、飞书机器人绑定，以及为每个已绑定机器人维护独立的飞书长连接；桌面客户端提供机器人管理、群聊、抖音监控和设备设置工作区。
 
-服务端安装、构建和运行需要 Node.js `24` 及以上版本，与 `@syru/byted-sticker-generator@1.0.0` 的运行要求保持一致。
+服务端安装、构建和运行需要 Node.js `24` 及以上版本，与当前 `@syru/byted-sticker-generator` 的运行要求保持一致。
+
+## 文档导航
+
+- [产品规格](product-spec/README.md)：按功能模块介绍当前能力、交互、默认值和边界。
+- [开发协作规范](AGENTS.md)：组件、构建、文档维护和验证约定；`CLAUDE.md` 软链接指向该文件。
+- [方案与调研](docs/)：按日期保存设计取舍与实施记录。
+- [server 文档](apps/server/README.md) / [desktop 文档](apps/desktop/README.md)：安装、部署、接口和打包。
 
 ## 项目结构
 
@@ -23,7 +30,7 @@ DogeBot/
 
 ## 快速开始
 
-安装、构建和运行服务端推荐使用 Node.js `22.x`（至少 `22.13.0`）或 `24` 及以上版本。若使用 Node.js `23.x`，至少需要 `23.4.0`，以确保原生 `node:sqlite` 模块无需实验参数即可加载。
+安装、构建和运行服务端使用 Node.js `24` 及以上版本。虽然当前 `package.json` 的 engines 仍允许部分 `22.x` / `23.x`，贴纸生成依赖要求 Node.js `>=24.0.0`。
 
 安装并启动服务端：
 
@@ -143,7 +150,7 @@ DOGEBOT_DATA_DIR=/home/Code/DogeBot-data pnpm add-user admin 'change-me'
 - 启动文件：`dist/src/index.js`
 - 启动命令：`node dist/src/index.js`
 - 运行端口：`3000`，或自定义后同步设置 `PORT`
-- Node 版本：推荐 `22.x`（至少 `22.13.0`）或 `24` 及以上；`23.x` 至少需 `23.4.0`。宝塔 / PM2 的运行版本也必须满足此要求。
+- Node 版本：`24` 及以上；宝塔 / PM2 使用的实际运行版本也必须满足贴纸依赖要求。
 - 环境变量：`PORT=3000`
 - 环境变量：`DOGEBOT_DATA_DIR=/home/Code/DogeBot-data`
 - 环境变量：`DOGEBOT_AUTH_SECRET=<一段足够长的随机字符串>`
@@ -231,7 +238,7 @@ pnpm package:win
 
 ## desktop 飞书群聊
 
-桌面端新增「机器人管理 / 群聊 / 抖音监控」工作区。群聊通过 server 主动读取飞书历史，用已有飞书长连接接收消息，再通过 SSE 推送到桌面端；支持群列表、历史翻页、话题、文本/图片发送与引用回复。
+桌面端提供「机器人 / 群聊 / 抖音监控 / 设置」工作区。群聊通过 server 主动读取飞书历史，用已有飞书长连接接收消息，再通过 SSE 推送到桌面端；支持群列表、历史翻页、话题、文本/图片发送与引用回复。
 
 消息不写入数据库。desktop 仅在当前 renderer 内存中保留最近访问的 10 个会话，每群最多 300 条历史消息；所有群合计 16 MiB 的消息正文预算、16 MiB 的图片 Blob 预算。退出登录或真正退出应用后清空，不提供离线浏览和消息关键词搜索。
 
