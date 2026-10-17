@@ -4,20 +4,32 @@ export const MAX_CACHED_CHATS = 10;
 export const MAX_MESSAGES_PER_CHAT = 300;
 export const MAX_MESSAGE_CACHE_BYTES = 16 * 1024 * 1024;
 export const MAX_MEDIA_CACHE_BYTES = 16 * 1024 * 1024;
+export const MAX_ATTACHMENT_CACHE_BYTES = 16 * 1024 * 1024;
+export const MAX_CACHED_THREADS_PER_CHAT = 10;
+
+export type ComposerState = {
+  draft: string;
+  file?: File;
+  reply?: SendMessageInput['reply'];
+  submitting: boolean;
+};
 
 export type CachedPage = { ids: string[]; nextPageToken?: string; hasMore: boolean };
 export type Timeline = {
   pages: CachedPage[];
   head: string[];
+  deferredHead: string[];
   generation: number;
   loading: boolean;
   error: string;
   snapshotEndTimeSeconds?: string;
   newerTruncated: boolean;
+  olderTruncated: boolean;
   needsResync: boolean;
   viewMode: 'live' | 'history';
+  composer: ComposerState;
 };
-export type PendingSend = { input: SendMessageInput; status: 'sending' | 'failed' | 'unknown'; error?: string };
+export type PendingSend = { input: SendMessageInput; composerKey: string; status: 'sending' | 'failed' | 'unknown'; error?: string };
 export type ChatEntry = {
   key: string; chat: ChatSummary; generation: number; lastVisited: number;
   messages: Map<string, ChatMessage>;
@@ -30,14 +42,15 @@ export type ChatEntry = {
   controllers: Set<AbortController>;
   needsResync: boolean; lastValidatedAt: number; revision: number;
   viewMode: 'live' | 'history'; newMessages: number;
-  draft: string; pending: Map<string, PendingSend>;
-  reply?: { messageId: string; mode: 'chat' | 'thread' };
+  pending: Map<string, PendingSend>;
   detailIds: string[];
   memberNames: Map<string, string>;
   scrollAnchors: Map<string, { id: string; offset: number }>;
 };
 export type RequestTicket = { key: string; generation: number; queryGeneration: number; revision: number; controller: AbortController; timeline: Timeline };
-const timeline = (): Timeline => ({ pages: [], head: [], generation: 0, loading: false, error: '', newerTruncated: false, needsResync: false, viewMode: 'live' });
+const composer = (): ComposerState => ({ draft: '', submitting: false });
+const timeline = (): Timeline => ({ pages: [], head: [], deferredHead: [], generation: 0, loading: false, error: '', newerTruncated: false,
+  olderTruncated: false, needsResync: false, viewMode: 'live', composer: composer() });
 export const chatKey = (botId: number, chatId: string) => `${botId}:${chatId}`;
 export const isThreadReply = (m: ChatMessage) => Boolean(m.threadId && m.parentId && m.rootId !== m.messageId);
 const encode = new TextEncoder();
@@ -61,7 +74,7 @@ export class ChatCache {
     if (!entry) {
       entry = { key, chat, generation: ++this.nextGeneration, lastVisited: 0, messages: new Map(), revisions: new Map(), tombstones: new Map(), unverifiedIds: new Set(),
         main: timeline(), threads: new Map(), controllers: new Set(), needsResync: false, lastValidatedAt: 0,
-        revision: 0, viewMode: 'live', newMessages: 0, draft: '', pending: new Map(), detailIds: [], memberNames: new Map(), scrollAnchors: new Map() };
+        revision: 0, viewMode: 'live', newMessages: 0, pending: new Map(), detailIds: [], memberNames: new Map(), scrollAnchors: new Map() };
       this.entries.set(key, entry);
     }
     entry.lastVisited = ++this.visits;
@@ -73,12 +86,33 @@ export class ChatCache {
   view(entry: ChatEntry, threadId?: string) {
     if (!threadId) return entry.main;
     let value = entry.threads.get(threadId);
-    if (!value) { value = timeline(); entry.threads.set(threadId, value); }
+    if (!value) {
+      if (entry.threads.size >= MAX_CACHED_THREADS_PER_CHAT) {
+        const victim = [...entry.threads].find(([id, view]) => id !== entry.openedThread?.threadId && !view.composer.submitting
+          && ![...entry.pending.values()].some((pending) => pending.composerKey === id));
+        if (victim) {
+          victim[1].generation++;
+          Object.assign(victim[1].composer, composer(), { file: undefined, reply: undefined });
+          entry.threads.delete(victim[0]); entry.scrollAnchors.delete(victim[0]);
+          this.collect(entry);
+        }
+      }
+      value = timeline(); entry.threads.set(threadId, value);
+    }
+    // Map order tracks accesses so closed thread editors have a bounded LRU.
+    entry.threads.delete(threadId); entry.threads.set(threadId, value);
     return value;
   }
-  ids(view: Timeline) { return [...new Set([...view.pages.flatMap((page) => page.ids), ...view.head])]; }
+  setAttachment(entry: ChatEntry, state: ComposerState, file?: File) {
+    if (!this.current(entry)) return false;
+    const bytes = [...this.entries.values()].flatMap((e) => [e.main, ...e.threads.values()])
+      .reduce((total, view) => total + (view.composer === state ? 0 : view.composer.file?.size ?? 0), file?.size ?? 0);
+    if (bytes > MAX_ATTACHMENT_CACHE_BYTES) return false;
+    state.file = file; this.changed(); return true;
+  }
+  ids(view: Timeline) { return [...new Set([...view.pages.flatMap((page) => page.ids), ...view.head, ...view.deferredHead])]; }
   messages(entry: ChatEntry, view = entry.main) {
-    const ids = view.newerTruncated ? [...new Set(view.pages.flatMap((p) => p.ids))] : this.ids(view);
+    const ids = [...new Set([...view.pages.flatMap((p) => p.ids), ...(view.newerTruncated ? [] : view.head)])];
     return ids.map((id) => entry.messages.get(id)).filter((m): m is ChatMessage => Boolean(m))
       .sort((a, b) => a.createTimeMs - b.createTimeMs || a.messageId.localeCompare(b.messageId));
   }
@@ -149,7 +183,9 @@ export class ChatCache {
     else if (mode === 'replace') {
       view.pages = [page];
       view.head = arrived.filter((id) => !page.ids.includes(id));
+      view.deferredHead = [];
       view.newerTruncated = false;
+      view.olderTruncated = false;
       view.snapshotEndTimeSeconds = result.snapshotEndTimeSeconds;
     } else {
       const oldest = Math.min(...this.messages(entry, view).map((m) => m.createTimeMs));
@@ -172,9 +208,12 @@ export class ChatCache {
       if (root && !root.threadId) this.merge(entry, { ...root, threadId: message.threadId });
     }
     const view = isThreadReply(message) ? entry.threads.get(message.threadId!) : entry.main;
-    if (view && (!view.newerTruncated || view.loading || existing || requestId)) {
+    if (view && ((!view.newerTruncated && !view.needsResync) || view.loading || existing || requestId)) {
       this.merge(entry, message);
-      if (!this.ids(view).includes(message.messageId)) view.head.push(message.messageId);
+      if (!this.ids(view).includes(message.messageId)) {
+        const deferred = !view.loading && (view.needsResync || view.newerTruncated);
+        (deferred ? view.deferredHead : view.head).push(message.messageId);
+      }
       this.trim(entry, view, false);
     }
     if (!existing && (entry.key !== this.activeKey || entry.viewMode === 'history' || !view)) entry.newMessages = Math.min(999, entry.newMessages + 1);
@@ -184,7 +223,9 @@ export class ChatCache {
     for (const entry of this.entries.values()) {
       if (entry.chat.botId !== botId || (chatId ? entry.chat.chatId !== chatId : !entry.messages.has(id))) continue;
       this.releaseMedia(entry.key, id);
-      if (entry.reply?.messageId === id) entry.reply = undefined;
+      for (const view of [entry.main, ...entry.threads.values()]) {
+        if (view.composer.reply?.messageId === id) view.composer.reply = undefined;
+      }
       if (!entry.messages.has(id) && !entry.controllers.size) continue;
       entry.tombstones.set(id, time);
       if (entry.tombstones.size > 300) {
@@ -210,7 +251,7 @@ export class ChatCache {
       entry.needsResync = true;
       for (const id of entry.messages.keys()) entry.unverifiedIds.add(id);
       for (const view of [entry.main, ...entry.threads.values()]) {
-        view.generation++; view.loading = false; view.needsResync = true; view.newerTruncated = true;
+        view.generation++; view.loading = false; view.needsResync = true;
       }
     }
     this.changed();
@@ -223,8 +264,8 @@ export class ChatCache {
     this.changed();
   }
   private collect(entry: ChatEntry) {
-    const keep = new Set([...[entry.main, ...entry.threads.values()].flatMap((v) => this.ids(v)), ...entry.detailIds,
-      entry.openedThread?.rootMessageId ?? '', entry.reply?.messageId ?? '']);
+    const keep = new Set([...[entry.main, ...entry.threads.values()].flatMap((v) => [...this.ids(v), v.composer.reply?.messageId ?? '']), ...entry.detailIds,
+      entry.openedThread?.rootMessageId ?? '']);
     for (const id of entry.messages.keys()) if (!keep.has(id)) {
       entry.messages.delete(id); entry.revisions.delete(id); entry.unverifiedIds.delete(id); this.releaseMedia(entry.key, id);
     }
@@ -233,26 +274,43 @@ export class ChatCache {
     this.collect(entry);
     const views = [entry.main, ...entry.threads.values()];
     while (entry.messages.size > MAX_MESSAGES_PER_CHAT) {
+      const deferred = views.find((view) => view.deferredHead.length > 0);
+      if (deferred) { deferred.deferredHead.shift(); this.collect(entry); continue; }
       const opened = entry.openedThread ? entry.threads.get(entry.openedThread.threadId) : undefined;
       const victim = views.find((v) => v !== preferred && v !== entry.main && v !== opened && v.pages.length > 0)
         ?? views.find((v) => v !== preferred && v.pages.length > 1) ?? views.find((v) => v.pages.length > 1);
       if (victim) {
         if (victim === preferred && older) { victim.pages.shift(); victim.head = []; victim.newerTruncated = true; }
-        else victim.pages.pop();
+        else {
+          victim.pages.pop();
+          if (!victim.pages.length && victim.head.length) { victim.olderTruncated = true; victim.generation++; victim.loading = false; }
+        }
       } else {
         const head = views.find((v) => v.head.length > 0);
-        if (head) head.head.shift();
+        if (head) this.trimOldest(entry, head, 1);
         else if (entry.detailIds.length) entry.detailIds.shift();
         else break;
       }
       this.collect(entry);
     }
-    for (const [id, value] of entry.threads) if (id !== entry.openedThread?.threadId && !this.ids(value).length) {
+    for (const [id, value] of entry.threads) if (id !== entry.openedThread?.threadId && !this.ids(value).length
+      && !value.composer.draft && !value.composer.file && !value.composer.reply && !value.composer.submitting
+      && ![...entry.pending.values()].some((pending) => pending.composerKey === id)) {
       entry.threads.delete(id); entry.scrollAnchors.delete(id);
     }
   }
+  private trimOldest(entry: ChatEntry, view: Timeline, count: number) {
+    if (view.newerTruncated && view.pages.length) { view.head.splice(0, count); return; }
+    // Once the original page is clipped its cursor no longer describes this window.
+    // Keep a continuous suffix and require an explicit history reload for a new chain.
+    const ids = this.ids(view).sort((a, b) => (entry.messages.get(a)?.createTimeMs ?? 0) - (entry.messages.get(b)?.createTimeMs ?? 0) || a.localeCompare(b));
+    view.pages = []; view.head = ids.slice(count);
+    view.olderTruncated = true; view.snapshotEndTimeSeconds = undefined;
+    view.generation++; view.loading = false;
+  }
   private size(entry: ChatEntry) {
-    return encode.encode(JSON.stringify([...entry.messages.values()])).byteLength + entry.draft.length * 2
+    return encode.encode(JSON.stringify([...entry.messages.values()])).byteLength
+      + encode.encode(JSON.stringify([entry.main, ...entry.threads.values()].map((v) => ({ draft: v.composer.draft, reply: v.composer.reply })))).byteLength
       + encode.encode(JSON.stringify([...entry.pending.values()])).byteLength + entry.tombstones.size * 100;
   }
   private enforce() {
@@ -264,16 +322,21 @@ export class ChatCache {
         const active = this.entries.get(this.activeKey);
         if (!active || this.size(active) <= MAX_MESSAGE_CACHE_BYTES) break;
         const views = [active.main, ...active.threads.values()];
+        const deferred = views.find((view) => view.deferredHead.length > 0);
+        if (deferred) { deferred.deferredHead.splice(0, 50); this.collect(active); continue; }
         const opened = active.openedThread ? active.threads.get(active.openedThread.threadId) : undefined;
         const victim = views.find((v) => v !== active.main && v !== opened && v.pages.length > 0) ?? views.find((v) => v.pages.length > 1);
         if (victim) {
           if (victim === active.main && active.viewMode === 'history') { victim.pages.shift(); victim.head = []; victim.newerTruncated = true; }
-          else victim.pages.pop();
+          else {
+            victim.pages.pop();
+            if (!victim.pages.length && victim.head.length) { victim.olderTruncated = true; victim.generation++; victim.loading = false; }
+          }
           this.collect(active);
           continue;
         }
         const head = views.find((v) => v.head.length > 50);
-        if (head) { head.head.splice(0, 50); this.collect(active); continue; }
+        if (head) { this.trimOldest(active, head, 50); this.collect(active); continue; }
         for (const [id, m] of active.messages) active.messages.set(id, { ...m, content: {}, contentState: 'summary' });
         this.releaseMedia(active.key);
         break;
@@ -314,9 +377,12 @@ export class ChatCache {
     this.entries.delete(key);
     // Async closures can retain the entry until a write finishes. Release its data now.
     entry.messages.clear(); entry.revisions.clear(); entry.tombstones.clear(); entry.unverifiedIds.clear();
-    for (const view of [entry.main, ...entry.threads.values()]) { view.pages = []; view.head = []; }
+    for (const view of [entry.main, ...entry.threads.values()]) {
+      view.pages = []; view.head = []; view.deferredHead = [];
+      Object.assign(view.composer, composer(), { file: undefined, reply: undefined });
+    }
     entry.threads.clear(); entry.controllers.clear(); entry.pending.clear(); entry.memberNames.clear(); entry.scrollAnchors.clear();
-    entry.detailIds = []; entry.draft = ''; entry.reply = undefined; entry.openedThread = undefined;
+    entry.detailIds = []; entry.openedThread = undefined;
     if (this.activeKey === key) this.activeKey = '';
   }
   removeBot(botId: number) { for (const e of this.entries.values()) if (e.chat.botId === botId) this.remove(e.key); this.changed(); }

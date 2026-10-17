@@ -31,6 +31,6 @@
 - HTTP、飞书命令、随机生图和卡片共用渲染限流：默认并发 2、等待队列 20、任务超时 20 秒；内部结果缓存默认 60 秒、最多 20 项。
 - 默认使用 `@syru/byted-sticker-generator`，字体随 assets 部署；保留环境变量切换旧渲染管线的兼容入口。渲染参数以 `config.ts` 为准，注意与上游包默认值的区别。
 
-验收关注：两风格及中英文、引用/话题目标、颜色覆盖、卡片预览与发送、EV 边界与图片元数据、无文案错误、并发与超时。已有 `pnpm test:sticker-hdr` 检查 HDR 边界和卡片一致性。
+验收关注：两风格及中英文、引用/话题目标、颜色覆盖、卡片预览与发送、EV 边界与图片元数据、无文案错误、并发与超时。server 的 `pnpm test` 包含 Vitest HDR 回归，也可用 `pnpm test:sticker-hdr` 单独检查 HDR 边界和卡片一致性。
 
 代码：[HTTP 与渲染](../../apps/server/src/styleStickers.ts)、[配置](../../apps/server/src/config.ts)、[卡片](../../apps/server/src/feishu/cards/style-sticker-card.ts)、[动作](../../apps/server/src/feishu/card-action.ts)、[HDR 验证](../../apps/server/tests/style-sticker-hdr.test.ts)。

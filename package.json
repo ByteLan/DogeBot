@@ -9,6 +9,7 @@
   "description": "DogeBot repository root. Server and desktop apps are installed independently.",
   "scripts": {
     "rush": "rush",
+    "test": "pnpm --dir apps/server test && pnpm --dir apps/desktop test",
     "rush:update": "rush update",
     "rush:build": "rush build"
   },

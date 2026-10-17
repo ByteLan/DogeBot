@@ -89,7 +89,8 @@ pnpm add-user <用户名> <密码>
 - `/open-api/v1/byte-style` 与 `/open-api/v1/scale-new-heights` 通过 `@syru/byted-sticker-generator` 在服务端出图；DogeBot 负责传入字体资源，以及 HTTP、飞书发送、并发限流与短缓存。
 - `DOGEBOT_STYLE_STICKER_LEGACY_RENDERER`：设为 `1` 时回退到旧版 `@napi-rs/canvas` 直接渲染管线（`styleStickerLegacy.ts` + `styleStickerCore.ts` + `utils/ultraHdr.ts`），不使用 `@syru/byted-sticker-generator` 包。用于新包出现兼容性问题时快速回退。
 - HDR 参数 `ev` 支持 `0 < ev <= 5`（允许小数）；省略、非法或超出范围时返回普通 PNG。飞书卡片中的无效 EV 会回退到 `4`，并同步更新输入框和 HDR 链接。
-- `pnpm test:sticker-hdr`：验证 HDR 参数边界、响应头和图片元数据，以及飞书卡片输入与链接的一致性；测试只使用临时数据库并模拟飞书请求。
+- `pnpm test`：类型检查并用 Vitest 执行聊天 API 与贴纸 HDR 回归；测试只使用临时数据库并模拟飞书请求。
+- `pnpm test:sticker-hdr`：通过 Vitest 单独验证 HDR 参数边界、响应头和图片元数据，以及飞书卡片输入与链接的一致性。
 - `DOGEBOT_STYLE_STICKER_RENDER_CONCURRENCY`：字节范/勇攀高峰生图的全局并发数，默认 `2`；`/open-api/v1/byte-style`、`/open-api/v1/scale-new-heights`、飞书命令生图、随机生图、卡片预览共用这一组并发额度。
 - `DOGEBOT_STYLE_STICKER_RENDER_QUEUE_MAX`：字节范/勇攀高峰生图的等待队列上限，默认 `20`；超过后新任务会立即抛出 `QUEUE_FULL` 错误，避免请求堆积占用内存。
 - `DOGEBOT_STYLE_STICKER_RENDER_TIMEOUT_MS`：单个字节范/勇攀高峰生图任务的最大执行时间（毫秒），默认 `20000`；超时后会立即释放并发额度并抛出 `TASK_TIMEOUT` 错误，避免卡死后续任务。
@@ -337,10 +338,10 @@ pm2 restart dogebot-server --update-env
 验证（临时数据库、模拟飞书响应，不访问真实租户）：
 
 ```bash
-node --import tsx scripts/verify-feishu-chat.ts
+pnpm test
 ```
 
-加 `--serve` 可保留本地模拟服务用于界面联调，临时会话信息写入系统临时目录的 `dogebot-chat-fixture.json`。勿将模拟服务用于生产。
+原聊天验证脚本已迁移到 `tests/feishu-chat.test.ts`，由 Vitest 管理模拟服务、SSE 和临时数据库的创建与释放；不启动长期运行的模拟服务。
 
 完整方案见 [设计文档](../../docs/2026-10-16/feishu-desktop-chat-implementation-plan.md)。
 

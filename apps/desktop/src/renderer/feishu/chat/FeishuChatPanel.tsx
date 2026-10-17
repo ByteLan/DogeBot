@@ -72,11 +72,6 @@ function timeLabel(time: number) {
   return `${day} ${date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })}`;
 }
 
-function threadReply(entry: ChatEntry, reply: SendMessageInput['reply']) {
-  return reply?.mode === 'thread' && Boolean(entry.openedThread && (reply.messageId === entry.openedThread.rootMessageId
-    || entry.messages.get(reply.messageId)?.threadId === entry.openedThread.threadId));
-}
-
 function MessageImage({ controller, entry, message, imageKey }: { controller: ChatController; entry: ChatEntry; message: ChatMessage; imageKey: string }) {
   const key = `${entry.key}:${message.messageId}:${imageKey}`;
   const [loading, setLoading] = useState(false);
@@ -135,11 +130,16 @@ function MessageItem({ controller, entry, message, bot, onReference, onRecall, o
   const quote = async (mode: 'chat' | 'thread') => {
     const current = await controller.ensureMessage(entry, message.messageId);
     if (!current) return;
-    entry.reply = { messageId: current.messageId, mode };
+    let view = controller.cache.view(entry, inThread ? entry.openedThread?.threadId : undefined);
     if (mode === 'thread') {
-      if (current.threadId) await controller.openThread(entry, current);
+      if (current.threadId) {
+        await controller.openThread(entry, current);
+        if (!controller.cache.current(entry)) return;
+        view = controller.cache.view(entry, current.threadId);
+      }
       else entry.openedThread = undefined;
     }
+    view.composer.reply = { messageId: current.messageId, mode };
     controller.cache.changed();
   };
   const copy = async () => {
@@ -272,6 +272,7 @@ function MessageList({ controller, entry, view, bot, onRecall, ownMessageAlignme
       if (changed) controller.cache.changed();
     }}>
       <div className="chat-history-action">
+        {view.olderTruncated && <Button type="text" size="mini" disabled={view.loading} onClick={() => controller.latest(entry, view)}>历史缓存已裁剪，重新加载历史</Button>}
         {last?.hasMore && <Button type="text" size="mini" onClick={older} disabled={view.loading || !last.nextPageToken}>加载更早消息</Button>}
         {view.loading && <Spin size={14} tip="正在读取消息" />}
         {!view.loading && view.pages.length > 0 && !last?.hasMore && <span>已到可读取的最早消息</span>}
@@ -295,59 +296,63 @@ function MessageList({ controller, entry, view, bot, onRecall, ownMessageAlignme
 }
 
 function Composer({ controller, entry, bot, thread = false }: { controller: ChatController; entry: ChatEntry; bot?: Bot; thread?: boolean }) {
-  const [file, setFile] = useState<File>();
-  const [uploading, setUploading] = useState(false);
+  const composerKey = thread ? entry.openedThread!.threadId : 'main';
+  const editor = controller.cache.view(entry, thread ? composerKey : undefined).composer;
+  const { file, draft, reply, submitting: uploading } = editor;
   const [preview, setPreview] = useState<string>();
-  const [threadDraft, setThreadDraft] = useState('');
   const input = useRef<RefTextAreaType>(null);
   const fileInput = useRef<HTMLInputElement>(null);
-  const uploadingController = useRef<AbortController | undefined>(undefined);
   const mounted = useRef(true);
-  const draft = thread ? threadDraft : entry.draft;
-  const reply = entry.reply && (thread ? threadReply(entry, entry.reply) : !threadReply(entry, entry.reply)) ? entry.reply : undefined;
   useEffect(() => { if (reply) input.current?.focus(); }, [reply?.messageId, reply?.mode]);
   useEffect(() => {
     if (!file) { setPreview(undefined); return; }
     const url = URL.createObjectURL(file); setPreview(url);
     return () => URL.revokeObjectURL(url);
   }, [file]);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; uploadingController.current?.abort(); }; }, []);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const choose = (chosen: File | undefined) => {
     if (!chosen) return;
     if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(chosen.type) || chosen.size > 10 * 1024 * 1024) {
       controller.setNotice('请选择 10 MiB 以内的 PNG、JPEG、WebP 或 GIF 图片'); return;
     }
-    setFile(chosen);
+    if (!controller.cache.setAttachment(entry, editor, chosen)) controller.setNotice('待发送图片合计不能超过 16 MiB，请先发送或移除已有图片');
   };
   const submit = async () => {
-    if (uploading || entry.pending.size >= 3 || !draft.trim() && !file) return;
+    if (editor.submitting || entry.pending.size >= 3 || !draft.trim() && !file) return;
+    if ([entry.main, ...entry.threads.values()].filter((view) => view.composer.submitting).length >= 3) {
+      controller.setNotice('正在提交其他消息，请稍候'); return;
+    }
     const target = reply ?? (thread && entry.openedThread ? { messageId: entry.openedThread.rootMessageId, mode: 'thread' as const } : undefined);
-    const controllerAbort = new AbortController(); uploadingController.current = controllerAbort;
+    const controllerAbort = new AbortController();
     entry.controllers.add(controllerAbort);
     try {
-      setUploading(true);
+      editor.submitting = true; controller.cache.changed();
       const message: SendMessageInput['message'] = file
         ? { type: 'image', imageKey: (await controller.api.upload(entry.chat.botId, entry.chat.chatId, file, controllerAbort.signal)).imageKey }
         : { type: 'text', text: draft.trim() };
       if (!controller.cache.current(entry) || controllerAbort.signal.aborted) return;
       const input: SendMessageInput = { clientRequestId: crypto.randomUUID(), message, reply: target };
-      if (!file) { if (thread) setThreadDraft(''); else entry.draft = ''; }
-      setFile(undefined);
-      await controller.send(entry, input);
+      if (!file && editor.draft === draft) editor.draft = '';
+      if (editor.file === file) editor.file = undefined;
+      controller.cache.changed();
+      await controller.send(entry, input, composerKey);
     } catch (error) { if (!controllerAbort.signal.aborted) controller.report(error, entry); }
-    finally { entry.controllers.delete(controllerAbort); if (mounted.current) { setUploading(false); input.current?.focus(); } }
+    finally {
+      entry.controllers.delete(controllerAbort); editor.submitting = false;
+      controller.cache.changed(); if (mounted.current) input.current?.focus();
+    }
   };
-  const pending = [...entry.pending.entries()].filter(([, item]) => thread ? threadReply(entry, item.input.reply) : !threadReply(entry, item.input.reply));
+  const pending = [...entry.pending.entries()].filter(([, item]) => item.composerKey === composerKey);
   return <div className={`chat-composer ${thread ? 'chat-thread-composer' : ''}`} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); choose(event.dataTransfer.files[0]); }}>
     {reply && <div className="chat-reply-target"><IconReply /><div><strong>{reply.mode === 'thread' ? '回复话题' : '引用回复'}</strong><span>{entry.messages.get(reply.messageId) ? messageText(entry.messages.get(reply.messageId)!).slice(0, 100) : '引用的消息'}</span></div>
-      <Button type="text" size="mini" icon={<IconClose />} aria-label="取消回复" onClick={() => { entry.reply = undefined; controller.cache.changed(); }} /></div>}
-    {preview && <div className="chat-attachment"><img src={preview} alt="待发送图片" /><span>{file?.name}<small>图片单独发送，文字保留为草稿</small></span><Button type="text" size="mini" icon={<IconClose />} aria-label="移除图片" onClick={() => setFile(undefined)} /></div>}
+      <Button type="text" size="mini" icon={<IconClose />} aria-label="取消回复" onClick={() => { editor.reply = undefined; controller.cache.changed(); }} /></div>}
+    {preview && <div className="chat-attachment"><img src={preview} alt="待发送图片" /><span>{file?.name}<small>图片单独发送，文字保留为草稿</small></span><Button type="text" size="mini" icon={<IconClose />} aria-label="移除图片" onClick={() => controller.cache.setAttachment(entry, editor)} /></div>}
     <input ref={fileInput} className="chat-file-input" aria-label="上传聊天图片" type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={(event) => { choose(event.target.files?.[0]); event.target.value = ''; }} />
     <Input.TextArea ref={input} aria-label={thread ? '话题消息' : '聊天消息'} placeholder={thread ? '回复话题…' : `发送到 ${entry.chat.name}`} maxLength={4000} value={draft} autoSize={{ minRows: 2, maxRows: 5 }}
-      onChange={(value) => { if (thread) setThreadDraft(value); else { entry.draft = value; controller.cache.changed(); } }}
+      onChange={(value) => { editor.draft = value; controller.cache.changed(); }}
       onPaste={(event) => { const image = [...event.clipboardData.files].find((f) => f.type.startsWith('image/')); if (image) { event.preventDefault(); choose(image); } }}
       onKeyDown={(event) => {
-        if (event.key === 'Escape' && reply) { entry.reply = undefined; controller.cache.changed(); }
+        if (event.key === 'Escape' && reply) { editor.reply = undefined; controller.cache.changed(); }
         if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); void submit(); }
       }} />
     <div className="chat-composer-toolbar"><Tooltip content="发送图片 · 支持粘贴和拖拽"><Button className="chat-file-button" type="text" size="small" icon={<IconImage />} aria-label="选择聊天图片" onClick={() => fileInput.current?.click()} /></Tooltip>
@@ -357,7 +362,7 @@ function Composer({ controller, entry, bot, thread = false }: { controller: Chat
     </div>
     {pending.map(([id, pending]) => <div className={`chat-pending chat-pending-${pending.status}`} key={id}>
       <span>{pending.input.message.type === 'text' ? pending.input.message.text.slice(0, 80) : '[图片]'} · {pending.status === 'sending' ? '发送中' : pending.status === 'unknown' ? '发送结果待确认，请先刷新最新消息' : '发送失败'}{pending.error ? `：${pending.error}` : ''}</span>
-      {pending.status !== 'sending' && <><Button type="text" size="mini" onClick={() => controller.latest(entry)}>刷新消息</Button><Button type="text" size="mini" onClick={() => void controller.send(entry, pending.input)}>重试发送</Button>
+      {pending.status !== 'sending' && <><Button type="text" size="mini" onClick={() => controller.latest(entry, controller.cache.view(entry, thread ? composerKey : undefined))}>刷新消息</Button><Button type="text" size="mini" onClick={() => void controller.send(entry, pending.input, composerKey)}>重试发送</Button>
         <Button type="text" size="mini" icon={<IconClose />} aria-label="关闭发送提示" onClick={() => { entry.pending.delete(id); controller.cache.changed(); }} /></>}
     </div>)}
   </div>;
@@ -459,7 +464,7 @@ export function FeishuChatPanel({ serverUrl, token, bots, onUnauthorized, onMana
             const thread = entry.openedThread;
             if (thread) controller.latest(entry, cache.view(entry, thread.threadId));
           }} /></Tooltip>}
-          <Tooltip content="关闭话题"><Button type="text" size="mini" icon={<IconClose />} aria-label="关闭话题" onClick={() => { entry.openedThread = undefined; if (entry.reply?.mode === 'thread') entry.reply = undefined; cache.changed(); }} /></Tooltip></div>
+          <Tooltip content="关闭话题"><Button type="text" size="mini" icon={<IconClose />} aria-label="关闭话题" onClick={() => { entry.openedThread = undefined; cache.changed(); }} /></Tooltip></div>
           <MessageList key={entry.openedThread.threadId} controller={controller} entry={entry} view={cache.view(entry, entry.openedThread.threadId)} bot={bot} onRecall={requestRecall} ownMessageAlignment={ownMessageAlignment} thread />
           <Composer key={entry.openedThread.threadId} controller={controller} entry={entry} bot={bot} thread />
         </aside>}

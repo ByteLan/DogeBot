@@ -38,7 +38,7 @@
 ## 验证与提交
 
 - 改 server 代码后必须通过 `cd apps/server && npx tsc -p tsconfig.json --noEmit`；涉及产物时执行该应用 `pnpm build`。改 desktop 代码后执行 `apps/desktop` 内的 `pnpm build`。
-- 复用已有最小验证脚本和 Node 原生测试：聊天相关检查为各应用的 `node --import tsx scripts/verify-feishu-chat.ts`，贴纸 HDR 为 server 的 `pnpm test:sticker-hdr`。按改动范围选择，不凭空引入 Jest/Vitest 等新测试框架。
+- 回归验证统一使用 Vitest，分别进入各应用运行 `pnpm test`（包含测试及相关源码类型检查）；贴纸 HDR 可单独运行 server 的 `pnpm test:sticker-hdr`。复用已有场景，按改动范围补充缓存、组件或模拟接口测试，不重复维护独立验证脚本。
 - 纯文档改动检查路径、链接和描述一致性即可。验证结论写明模拟/真实环境及平台，未实测内容如实说明。
 - 保留工作区已有改动，不夹带无关重构、生成产物、敏感配置或全仓换行符变化。
 - 使用 Conventional Commits，如 `feat(chat): ...`、`fix(desktop): ...`；**仅在用户明确要求时提交或推送**，提交只包含当前授权范围。
