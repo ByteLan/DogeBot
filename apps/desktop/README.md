@@ -42,6 +42,8 @@ pnpm dev
 
 安装依赖并启动 Electron 客户端。
 
+仓库声明使用 pnpm 11.3.0。Windows 与 WSL 使用不同的 `node_modules`：Windows 工作副本只从 Windows 终端安装依赖；需要 WSL 测试时，在 Linux 文件系统内使用独立副本。不要直接在 `/mnt/c` 的同一依赖目录中交替安装。若已经混用并出现 `.ignored` 路径的 EPERM，应先从 WSL 移开旧 `node_modules`，再回到 Windows 执行 `pnpm.cmd install --frozen-lockfile`。处理记录见[Windows 安装修复](../../docs/2026-10-17/windows-pnpm-install-repair.md)。
+
 ```bash
 pnpm build
 ```
