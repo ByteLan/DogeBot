@@ -122,6 +122,21 @@ db.exec(`
     UNIQUE(bot_id, at_by, at_who)
   );
 
+  CREATE TABLE IF NOT EXISTS feishu_users_copy_requests (
+    id TEXT PRIMARY KEY,
+    bot_id INTEGER NOT NULL REFERENCES feishu_bots(id) ON DELETE CASCADE,
+    chat_id TEXT NOT NULL,
+    message_id TEXT NOT NULL DEFAULT '',
+    at_by TEXT NOT NULL,
+    at_by_name TEXT NOT NULL,
+    source_at_by TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'confirmed', 'withdrawn')),
+    copied_count INTEGER NOT NULL DEFAULT 0,
+    added_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
   CREATE TABLE IF NOT EXISTS douyin_aweme_records (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -280,6 +295,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires_at ON auth_sessions(expires_at);
   CREATE INDEX IF NOT EXISTS idx_feishu_bots_user_id ON feishu_bots(user_id);
   CREATE INDEX IF NOT EXISTS idx_at_users_record_lookup ON at_users_record(bot_id, at_by, deleted_at, sort_order, created_at);
+  CREATE INDEX IF NOT EXISTS idx_feishu_users_copy_requests_bot ON feishu_users_copy_requests(bot_id);
   CREATE INDEX IF NOT EXISTS idx_douyin_aweme_records_lookup ON douyin_aweme_records(user_id, click_text);
   CREATE INDEX IF NOT EXISTS idx_douyin_aweme_records_user_aweme_status ON douyin_aweme_records(user_id, aweme_id, status);
   CREATE INDEX IF NOT EXISTS idx_feishu_chat_cron_tasks_due ON feishu_chat_cron_tasks(enabled, next_run_at);

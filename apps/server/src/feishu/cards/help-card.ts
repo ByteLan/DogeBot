@@ -98,8 +98,8 @@ const HELP_COMMAND_ROWS: HelpCommandRow[] = [
   },
   {
     command: '/users',
-    params: '@用户...、delete [@用户...]、top @用户、new n',
-    description: '记录和查看当前发起人 at 过的用户；支持删除、置顶和只看最新 n 个。'
+    params: '@用户...、delete [@用户...]、top @用户、new n、--copy-from @用户',
+    description: '记录和查看当前发起人 at 过的用户；支持删除、置顶、只看最新 n 个，以及确认复制其他用户的名单。'
   },
   {
     command: '/douyin',

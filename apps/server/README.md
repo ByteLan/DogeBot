@@ -191,6 +191,7 @@ pm2 restart dogebot-server --update-env
 - `users`：本地登录用户。
 - `feishu_bots`：飞书 bot 绑定信息，包含 `user_id`，用于隔离不同用户的 bot。
 - `at_users_record`：`/users` 命令记录，按 `bot_id + at_by + at_who` 唯一记录，支持 `sort_order` 排序和 `deleted_at` 软删除。
+- `feishu_users_copy_requests`：个人 @ 名单复制请求，绑定 bot、会话、卡片消息及触发人；处理状态与名单合并在同一事务中保存，避免重复确认，删除 bot 时级联删除。
 - `douyin_aweme_records`：抖音收藏记录，支持通过 `status = 'delete'` 和 `deleted_at` 软删除；随机读取会排除删除状态。
 - `feishu_douyin_subscriptions`：飞书会话级抖音订阅，按 `bot_id + chat_id + click_text` 记录当前群聊或单聊订阅了哪些模拟点击文案；订阅触发条件是对应 `click_text` 下有新的 `aweme_id` 成功入库。
 - `feishu_bot_default_commands`：每个 bot 的默认兜底指令，以及首次设置 `/set-default` 的飞书用户管理员。
@@ -250,6 +251,7 @@ pm2 restart dogebot-server --update-env
 - `/users delete @Alice`：软删除指定用户。
 - `/users top @Alice`：将指定用户排到卡片最前。
 - `/users new 3`：只返回最新加入的 3 个用户。
+- `/users --copy-from @Alice`：回复只有人数和「撤回」「确认」按钮的卡片，只有命令触发人可操作。确认时将 Alice 在当前 bot 下的有效名单合并到自己的列表，已有人员去重，已软删除的对应关系恢复；不复制来源的置顶及时间信息。结果卡片也只显示数量，查看完整名单需另发 `/users`。必须使用真实飞书 @，一次一个来源，不能与其他参数混用，也不能复制自己、当前 bot 或 @所有人。
 
 ## `/douyin` 命令
 

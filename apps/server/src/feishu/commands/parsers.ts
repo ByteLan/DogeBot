@@ -26,8 +26,20 @@ export function parseUsersCommand(text: string): UsersCommand {
     isUsers: true,
     shouldDelete: args.includes('delete'),
     shouldTop: args.includes('top'),
+    copyFrom: args.includes('--copy-from'),
     newCount: parsedNewCount && parsedNewCount > 0 ? Math.floor(parsedNewCount) : undefined
   };
+}
+
+export function parseUsersCopySource(text: string, mentions: Array<{ token: string; id: string }>, botOpenId: string | null) {
+  const commandIndex = text.indexOf('/users');
+  if (commandIndex < 0) return undefined;
+  const mentionIds = new Map(mentions.map((mention) => [mention.token, mention.id]));
+  const args = text.slice(commandIndex + '/users'.length).trim().split(/\s+/).filter(Boolean)
+    .filter((arg) => !botOpenId || mentionIds.get(arg) !== botOpenId);
+  if (args.length !== 2 || args[0] !== '--copy-from') return undefined;
+  const id = mentionIds.get(args[1]);
+  return id && id !== 'all' && id !== 'unknown' && id !== botOpenId ? id : undefined;
 }
 
 export function parseDouyinCommand(text: string): DouyinCommand {

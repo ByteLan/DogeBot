@@ -216,6 +216,49 @@ export function mentionedUsers(bot: FeishuBot, message: any) {
   });
 }
 
+// Keep real mention tokens for identity-sensitive command arguments. Display names
+// can contain spaces or coincide; never resolve a copy source from a rendered name.
+export function usersCopyCommandInput(message: unknown) {
+  const isRecord = (value: unknown): value is Record<string, unknown> =>
+    Boolean(value && typeof value === 'object' && !Array.isArray(value));
+  const mentions: Array<{ token: string; id: string }> = [];
+  if (!isRecord(message)) return { text: '', mentions };
+  let content: unknown;
+  try {
+    content = JSON.parse(typeof message.content === 'string' ? message.content : '{}');
+  } catch {
+    return { text: '', mentions };
+  }
+  if (!isRecord(content)) return { text: '', mentions };
+  if (message.message_type === 'text') {
+    for (const mention of Array.isArray(message.mentions) ? message.mentions : []) {
+      if (!isRecord(mention) || typeof mention.key !== 'string' || !mention.key) continue;
+      const id = idFromFeishuObject(mention.id);
+      if (id) mentions.push({ token: mention.key, id });
+    }
+    return { text: typeof content.text === 'string' ? content.text : '', mentions };
+  }
+  if (message.message_type !== 'post') return { text: '', mentions };
+  const parts: string[] = typeof content.title === 'string' ? [content.title] : [];
+  for (const paragraph of Array.isArray(content.content) ? content.content : []) {
+    if (!Array.isArray(paragraph)) continue;
+    for (const block of paragraph) {
+      if (!isRecord(block)) continue;
+      if (block.tag === 'at') {
+        const id = idFromFeishuObject(block.user_id);
+        const token = `@_dogebot_copy_${mentions.length}`;
+        if (id) {
+          mentions.push({ token, id });
+          parts.push(token);
+        }
+      } else if ((block.tag === 'text' || block.tag === 'a' || block.tag === 'md') && typeof block.text === 'string') {
+        parts.push(block.text);
+      }
+    }
+  }
+  return { text: parts.join(' '), mentions };
+}
+
 export function referencedMessageIds(message: any) {
   return [...new Set([
     String(message?.parent_id || '').trim(),

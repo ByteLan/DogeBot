@@ -1,10 +1,11 @@
 import type { FeishuBot, ParsedFeishuMessage, RevertCommand } from '../../types.js';
 import { passiveInteractionConfig } from '../../config.js';
 import { replyText, replyMedia, replyCard, fetchMessageById, uploadImage, deleteMessage } from '../api.js';
-import { parseFeishuMessage, messageChatId, isThreadMessage, senderIdentity, referencedMessageIds, debugFeishu, mentionedUsers, isManualReverseCommand } from '../message-parser.js';
-import { parseUsersCommand, parseDouyinCommand, parseSetDefaultCommand, parseAdminCommand, parseRevertCommand, isHelpCommand, parseAddCronCommand, parsePassiveToggleCommand, parseStyleStickerCommand } from './parsers.js';
+import { parseFeishuMessage, messageChatId, isThreadMessage, senderIdentity, referencedMessageIds, debugFeishu, mentionedUsers, isManualReverseCommand, usersCopyCommandInput } from '../message-parser.js';
+import { parseUsersCommand, parseUsersCopySource, parseDouyinCommand, parseSetDefaultCommand, parseAdminCommand, parseRevertCommand, isHelpCommand, parseAddCronCommand, parsePassiveToggleCommand, parseStyleStickerCommand } from './parsers.js';
 import { sendDouyinMessages, getDefaultCommandRecord, getDefaultCommand, setDefaultCommand, addDouyinSubscription, removeDouyinSubscription } from './douyin.js';
 import { replyUsersCard, softDeleteMentions, upsertMentions, topMentions, listMentions } from './users.js';
+import { replyUsersCopyCard } from './users-copy.js';
 import { getPassiveFeatureSetting, setPassiveFeatureSetting, getStyleStickerSetting, setStyleStickerSetting, getBotPassiveEnabled, setBotPassiveEnabled, passiveFeatureUsage, styleStickerUsage, describePassiveFeatureSetting, describeStyleStickerSetting, formatRatePercent, maxRateForDefault, defaultRateForFeature } from '../passive/settings.js';
 import { resolveAwemeIdFromMessage, botAdminUserId } from '../douyin-guard.js';
 import { searchDouyinByTitle, searchDouyinByTitleRandom, checkDouyinAwemeValidityCached, SEARCH_RESULT_COUNT } from '../../douyin.js';
@@ -584,6 +585,24 @@ export async function handleFeishuCommand(bot: FeishuBot, event: any, messageId:
   }
 
   const atBy = senderIdentity(event);
+  if (command.copyFrom) {
+    const input = usersCopyCommandInput(message);
+    const sourceAtBy = parseUsersCopySource(input.text, input.mentions, bot.bot_open_id);
+    if (!sourceAtBy) {
+      await replyText(bot, messageId, '用法：/users --copy-from @一位成员（请选择真实的飞书人员，不能混用其他参数）');
+      return true;
+    }
+    if (atBy.id === 'unknown' || !chatId) {
+      await replyText(bot, messageId, '无法识别命令触发人或当前会话，请重新发送命令。');
+      return true;
+    }
+    if (sourceAtBy === atBy.id) {
+      await replyText(bot, messageId, '不能复制自己的 /users 列表，请 @ 另一位成员。');
+      return true;
+    }
+    await replyUsersCopyCard(bot, messageId, chatId, atBy, sourceAtBy);
+    return true;
+  }
   const mentions = mentionedUsers(bot, message);
   const atWhos = mentions.map((mention) => mention.id);
   debugFeishu('users.command', {

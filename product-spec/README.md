@@ -10,7 +10,7 @@
 | [feishu-bots](feishu-bots/README.md) | 机器人绑定、扫码创建、连接与管理员 | server `feishu/`；desktop 机器人页 |
 | [chat](chat/README.md) | 群聊、历史、话题、发送、撤回 | server `feishu/chat/`；desktop `feishu/chat/` |
 | [douyin](douyin/README.md) | 收藏监听、内容库、分发、有效性检测 | desktop `main/douyin/`；server `douyin*` |
-| [bot-interactions](bot-interactions/README.md) | 飞书命令、会话配置、定时任务、被动互动 | server `feishu/commands/`、`passive/`、`cards/` |
+| [bot-interactions](bot-interactions/README.md) | 飞书命令、个人 @ 名单与确认复制、会话配置、定时任务、被动互动 | server `feishu/commands/`、`passive/`、`cards/` |
 | [stickers](stickers/README.md) | 字节范与勇攀高峰贴纸、交互卡片、HDR | server `styleStickers.ts`、`cards/style-sticker-card.ts` |
 | [desktop](desktop/README.md) | 工作区、窗口、托盘、设备设置 | desktop `main/`、`renderer/App.tsx` |
 

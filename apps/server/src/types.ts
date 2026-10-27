@@ -38,6 +38,7 @@ export type UsersCommand = {
   isUsers: boolean;
   shouldDelete: boolean;
   shouldTop: boolean;
+  copyFrom?: boolean;
   newCount?: number;
 };
 

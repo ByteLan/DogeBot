@@ -26,6 +26,7 @@
 /users delete @Alice
 /users top @Alice
 /users new 3
+/users --copy-from @Alice
 ```
 
 ### 参数说明
@@ -36,6 +37,7 @@
 - `/users delete @Alice`：只软删除 Alice。
 - `/users top @Alice`：记录 Alice，并把 Alice 排到返回卡片的最前面。
 - `/users new 3`：只返回最新加入的 3 个 `at_who`。
+- `/users --copy-from @Alice`：发送仅展示来源有效名单人数的确认卡片，包含「撤回」「确认」，只有触发人可操作。确认时合并 Alice 在同一 bot 下当前有效的全部名单，保留自己的已有人员，重复关系去重，已软删除关系恢复；结果只显示数量。一次只能 @ 一个真实人员，不能与其他参数混用，也不能复制自己、当前 bot 或 @所有人。
 
 飞书卡片中的 at 用户格式为：
 

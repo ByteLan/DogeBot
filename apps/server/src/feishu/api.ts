@@ -203,12 +203,13 @@ export async function addReaction(bot: FeishuBot, messageId: string, reactionTyp
 
 export async function replyCard(bot: FeishuBot, messageId: string, card: object, replyInThread = false) {
   const token = await tenantAccessToken(bot);
-  const result = await feishuJson(`${openBase(bot.domain)}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reply`, {
+  const result = await feishuJson<{ data?: { message_id?: string } }>(`${openBase(bot.domain)}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reply`, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body: JSON.stringify({ msg_type: 'interactive', content: JSON.stringify(card), reply_in_thread: replyInThread })
   });
   publishMessageResult(bot, result);
+  return String(result.data?.message_id || '').trim();
 }
 
 export async function updateInteractiveMessage(bot: FeishuBot, messageId: string, card: object) {

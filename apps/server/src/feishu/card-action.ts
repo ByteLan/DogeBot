@@ -12,6 +12,8 @@ import { addCronTask, listChatCronTasks, deleteCronTaskById } from './cron.js';
 import { fallbackMentionCandidates, fallbackMentionCardEnabled, setFallbackMentionCardEnabled } from './fallback-mentions.js';
 import { FALLBACK_MENTION_CARD_KIND, FALLBACK_MENTION_FORM_FIELD, FALLBACK_MENTION_SEND_TO_GROUP_FORM_FIELD, isFallbackMentionCardAction, replyFallbackMentionOperatorCard } from './cards/fallback-mention-card.js';
 import { listMentions, replyUsersCard, sendUsersCardToChat, upsertMentions } from './commands/users.js';
+import { USERS_COPY_CARD_KIND } from './cards/users-copy-card.js';
+import { handleUsersCopyCardAction } from './commands/users-copy.js';
 import { DOUYIN_INVALID_CARD_KIND, isDouyinInvalidCardAction, renderDouyinCardState, type DouyinCardContext, type DouyinCardVariant } from './cards/douyin-invalid-card.js';
 import { softDeleteAweme, softRestoreAweme } from './douyin-guard.js';
 
@@ -345,6 +347,20 @@ async function resolveReplyTargetFromCardMessage(bot: FeishuBot, cardMessageId: 
 }
 
 export async function handleFeishuCardAction(bot: FeishuBot, payload: any) {
+  const copyContext = parseCardActionContext(payload);
+  const copyValue: unknown = copyContext?.event?.action?.value;
+  if (copyContext && isRecord(copyValue) && copyValue.kind === USERS_COPY_CARD_KIND) {
+    if (typeof copyValue.requestId !== 'string' || !copyValue.requestId ||
+      (copyValue.action !== 'withdraw' && copyValue.action !== 'confirm')) return;
+    await handleUsersCopyCardAction(bot, {
+      requestId: copyValue.requestId,
+      action: copyValue.action,
+      messageId: copyContext.messageId,
+      chatId: copyContext.chatId,
+      operatorId: copyContext.operatorId
+    });
+    return;
+  }
   const douyinInvalidParsed = parseDouyinInvalidCardActionPayload(payload);
   if (douyinInvalidParsed) {
     if (douyinInvalidParsed.eventId && !rememberFeishuEventKey(`card:${douyinInvalidParsed.eventId}`)) return;
