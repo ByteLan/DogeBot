@@ -109,6 +109,8 @@ pnpm add-user <用户名> <密码>
 - `DOGEBOT_DOUYIN_SEARCH_COUNT`：`/douyin --search` 和 `--search-random` 返回的最大结果数，默认 `2`；`--search-random` 的候选池最小值为该值的两倍。
 - `DOGEBOT_FEISHU_STYLE_STICKER_MAX_CHARS`：`/byte-style`、`/字节范`、`/scale-new-heights` 与 `/勇攀高峰` 在当前会话未显式设置 `--max` 时的默认最大处理字符数，默认 `10`。
 - `DOGEBOT_FEISHU_STYLE_STICKER_MAX_CHARS_LIMIT`：随机生图允许处理的绝对字符上限。即使会话里配置了更大的 `--max`，或者 `DOGEBOT_FEISHU_STYLE_STICKER_MAX_CHARS` 更大，实际处理长度也不会超过这个值；未配置时默认 `150`。
+- `DOGEBOT_FEISHU_USERS_CARD_MAX_RECORDS`：`/users` 人员卡片单张最多展示的人数（正整数），未配置或非法时默认 `200`；超出后剩余人员会拆分成后续卡片并在首张人员卡片的话题下回复（`reply_in_thread`）。
+- `DOGEBOT_FEISHU_USERS_CARD_CHUNK_SIZE`（兼容别名 `DOGEBOT_FEISHU_USERS_CARD_PERSON_LIST_CHUNK_SIZE`）：`/users` 单张卡片内部分块人数（正整数），未配置或非法时默认 `100`；若单卡上限小于等于分块大小，实际分块大小会自动收敛为单卡上限（每张卡仅 1 个组件块，不插入分割线也不触发额外追加请求）。
 - 飞书里直接发送 `/byte-style`、`/字节范`、`/scale-new-heights` 或 `/勇攀高峰` 且不带其他参数时，如果当前消息不在话题里且引用消息里有文字，会直接用引用文字生图；否则会回复一个交互卡片：顶部展示随机颜色和随机渐变角度生成的预览图，下方可编辑文案、通过下拉选择两个常用色，也可填写自定义 `#RRGGBB` 色值，并填写渐变角度；通过“预览”刷新卡片，通过“发送”会先撤回卡片，再回复触发这张卡片的原始消息发送图片，或通过“撤回”只撤回卡片。
 
 ## 宝塔面板长期运行
@@ -252,6 +254,7 @@ pm2 restart dogebot-server --update-env
 - `/users top @Alice`：将指定用户排到卡片最前。
 - `/users new 3`：只返回最新加入的 3 个用户。
 - `/users --copy-from @Alice`：回复只有人数和「撤回」「确认」按钮的卡片，只有命令触发人可操作。确认时将 Alice 在当前 bot 下的有效名单合并到自己的列表，已有人员去重，已软删除的对应关系恢复；不复制来源的置顶及时间信息。结果卡片也只显示数量，查看完整名单需另发 `/users`。必须使用真实飞书 @，一次一个来源，不能与其他参数混用，也不能复制自己、当前 bot 或 @所有人。
+- 单张人员卡片默认最多展示 `200` 人（可通过 `DOGEBOT_FEISHU_USERS_CARD_MAX_RECORDS` 配置），卡片内部默认按每 `100` 人分块追加（可通过 `DOGEBOT_FEISHU_USERS_CARD_CHUNK_SIZE` 配置）；超出单卡上限拆分的后续卡片会通过 `reply_in_thread` 回复在首张人员卡片的话题下。
 
 ## `/douyin` 命令
 

@@ -23,7 +23,7 @@ DogeBot 绑定账号负责库存与应用归属，飞书用户身份负责命令
 | 贴纸命令 | 手动文案、引用生图及交互卡片，见[贴纸规格](../stickers/README.md) |
 | 会话能力开关 | `--enable` / `--disable` / `--rate` 等按 bot + 会话配置，见[被动互动](passive.md) |
 
-`/users` 的成员列表与 Markdown 卡片保留现有分开发送/话题展示策略，不将两种展示合成一条消息。引用和原消息关系应保留，不能因 UI 整理改变飞书侧回复位置。
+`/users` 的成员列表与 Markdown 卡片保留现有分开发送/话题展示策略，不将两种展示合成一条消息。引用和原消息关系应保留，不能因 UI 整理改变飞书侧回复位置。单张卡片默认最多展示 `200` 人（可通过 `DOGEBOT_FEISHU_USERS_CARD_MAX_RECORDS` 配置），卡片内部默认按每 `100` 人分块追加（可通过 `DOGEBOT_FEISHU_USERS_CARD_CHUNK_SIZE` 配置，兼容别名 `DOGEBOT_FEISHU_USERS_CARD_PERSON_LIST_CHUNK_SIZE`）；当单卡上限小于等于分块大小时，实际分块大小自动按单卡上限收敛（单卡仅单个组件块、无分割线与追加请求）；超出单卡上限的后续人员列表卡片与 Markdown 卡片均在首张人员卡片的话题下回复（`reply_in_thread`）。
 
 ### 复制个人 @ 名单
 
