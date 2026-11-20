@@ -121,3 +121,16 @@ export const stickerRenderConfig = {
   /** 描边厚度 px，legacy 统一 20，包对 bs 默认 14 */
   outlineStrokeWidth: parsePositiveInt(process.env.DOGEBOT_STYLE_STICKER_OUTLINE_STROKE_WIDTH, 14)
 };
+
+/** `/users` 人员卡片的单卡上限与内部分块大小配置；分块大小不会超过单卡上限。 */
+export function usersCardConfig() {
+  const maxRecords = parsePositiveInt(process.env.DOGEBOT_FEISHU_USERS_CARD_MAX_RECORDS, 200);
+  const rawChunkSize = parsePositiveInt(
+    envString('DOGEBOT_FEISHU_USERS_CARD_CHUNK_SIZE', 'DOGEBOT_FEISHU_USERS_CARD_PERSON_LIST_CHUNK_SIZE'),
+    100
+  );
+  return {
+    maxRecords,
+    chunkSize: Math.min(rawChunkSize, maxRecords)
+  };
+}

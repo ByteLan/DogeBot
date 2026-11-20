@@ -4,7 +4,9 @@ import type { FeishuBot } from '../src/types.js';
 
 const releaseDatabase = databaseFixture('dogebot-users-test-');
 const { db } = await import('../src/db.js');
+const config = await import('../src/config.js');
 const api = await import('../src/feishu/api.js');
+const feishuClient = await import('../src/feishu/client.js');
 const users = await import('../src/feishu/commands/users.js');
 const { handleFeishuCommand } = await import('../src/feishu/commands/index.js');
 const { handleFeishuCardAction } = await import('../src/feishu/card-action.js');
@@ -263,4 +265,207 @@ test('pending and completed requests survive module reloads, and deleting a bot 
   expect(status()).toBe('confirmed');
   db.prepare('DELETE FROM feishu_bots WHERE id = 1').run();
   expect(db.prepare('SELECT * FROM feishu_users_copy_requests').all()).toHaveLength(0);
+});
+
+async function withUsersCardEnv(
+  env: Partial<Record<'DOGEBOT_FEISHU_USERS_CARD_MAX_RECORDS' | 'DOGEBOT_FEISHU_USERS_CARD_CHUNK_SIZE' | 'DOGEBOT_FEISHU_USERS_CARD_PERSON_LIST_CHUNK_SIZE', string | undefined>>,
+  run: () => Promise<void> | void
+) {
+  const keys = [
+    'DOGEBOT_FEISHU_USERS_CARD_MAX_RECORDS',
+    'DOGEBOT_FEISHU_USERS_CARD_CHUNK_SIZE',
+    'DOGEBOT_FEISHU_USERS_CARD_PERSON_LIST_CHUNK_SIZE'
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]])) as Record<(typeof keys)[number], string | undefined>;
+  for (const key of keys) {
+    if (key in env) {
+      const next = env[key];
+      if (next === undefined) delete process.env[key];
+      else process.env[key] = next;
+    }
+  }
+  try {
+    await run();
+  } finally {
+    for (const key of keys) {
+      if (previous[key] === undefined) delete process.env[key];
+      else process.env[key] = previous[key];
+    }
+  }
+}
+
+function mockUsersSdkClient() {
+  let cardSeq = 0;
+  let replySeq = 0;
+  const createdCards: Array<{ cardId: string; card: { body: { elements: Array<Record<string, any>> } } }> = [];
+  const replies: Array<{ targetMessageId: string; cardId: string; replyInThread: boolean; messageId: string }> = [];
+  const appendedElements: Array<{ cardId: string; sequence: number; elements: Array<Record<string, any>> }> = [];
+
+  const client = {
+    cardkit: {
+      v1: {
+        card: {
+          create: vi.fn(async (input: { data: { data: string } }) => {
+            cardSeq += 1;
+            const cardId = `card_${cardSeq}`;
+            createdCards.push({ cardId, card: JSON.parse(input.data.data) });
+            return { data: { card_id: cardId } };
+          })
+        },
+        cardElement: {
+          create: vi.fn(async (input: { path: { card_id: string }; data: { sequence: number; elements: string } }) => {
+            appendedElements.push({
+              cardId: input.path.card_id,
+              sequence: input.data.sequence,
+              elements: JSON.parse(input.data.elements)
+            });
+            return {};
+          })
+        }
+      }
+    },
+    im: {
+      v1: {
+        message: {
+          reply: vi.fn(async (input: { path: { message_id: string }; data: { content: string; reply_in_thread: boolean } }) => {
+            replySeq += 1;
+            const messageId = `om_reply_${replySeq}`;
+            const cardId = (JSON.parse(input.data.content) as { data: { card_id: string } }).data.card_id;
+            replies.push({
+              targetMessageId: input.path.message_id,
+              cardId,
+              replyInThread: input.data.reply_in_thread,
+              messageId
+            });
+            return { data: { message_id: messageId } };
+          })
+        }
+      }
+    }
+  };
+
+  vi.spyOn(feishuClient, 'feishuSdkClient').mockResolvedValue(client as never);
+  return { createdCards, replies, appendedElements };
+}
+
+async function runWithFakeTimers<T>(fn: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers();
+  try {
+    const promise = fn();
+    await vi.runAllTimersAsync();
+    return await promise;
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+function makeRecords(count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    at_who: `ou_member_${index}`,
+    at_who_name: `成员${index}`
+  }));
+}
+
+test('replyUsersCard defaults to 200 records per card with 100-record chunks and replies overflow cards in thread', async () => {
+  vi.mocked(users.replyUsersCard).mockRestore();
+  await withUsersCardEnv(
+    {
+      DOGEBOT_FEISHU_USERS_CARD_MAX_RECORDS: undefined,
+      DOGEBOT_FEISHU_USERS_CARD_CHUNK_SIZE: undefined,
+      DOGEBOT_FEISHU_USERS_CARD_PERSON_LIST_CHUNK_SIZE: undefined
+    },
+    async () => {
+      expect(config.usersCardConfig()).toEqual({ maxRecords: 200, chunkSize: 100 });
+      const sdk = mockUsersSdkClient();
+      await runWithFakeTimers(() => users.replyUsersCard(bot, 'om_command', makeRecords(250)));
+
+      expect(sdk.createdCards).toHaveLength(4);
+      expect(sdk.createdCards[0].card.body.elements[0].persons).toHaveLength(100);
+      expect(sdk.createdCards[1].card.body.elements[0].persons).toHaveLength(50);
+      expect(sdk.createdCards[2].card.body.elements[0].content.match(/<at id=/g)).toHaveLength(100);
+      expect(sdk.createdCards[3].card.body.elements[0].content.match(/<at id=/g)).toHaveLength(50);
+
+      expect(sdk.replies).toEqual([
+        { targetMessageId: 'om_command', cardId: 'card_1', replyInThread: false, messageId: 'om_reply_1' },
+        { targetMessageId: 'om_reply_1', cardId: 'card_2', replyInThread: true, messageId: 'om_reply_2' },
+        { targetMessageId: 'om_reply_1', cardId: 'card_3', replyInThread: true, messageId: 'om_reply_3' },
+        { targetMessageId: 'om_reply_1', cardId: 'card_4', replyInThread: true, messageId: 'om_reply_4' }
+      ]);
+
+      expect(sdk.appendedElements).toHaveLength(2);
+      expect(sdk.appendedElements[0].cardId).toBe('card_1');
+      expect(sdk.appendedElements[0].elements.map((el) => el.tag)).toEqual(['hr', 'person_list']);
+      expect(sdk.appendedElements[0].elements[1].persons).toHaveLength(100);
+      expect(sdk.appendedElements[1].cardId).toBe('card_3');
+      expect(sdk.appendedElements[1].elements[0].content.match(/<at id=/g)).toHaveLength(100);
+    }
+  );
+});
+
+test('usersCardConfig clamps chunkSize to maxRecords and avoids extra appends when maxRecords <= chunkSize', async () => {
+  vi.mocked(users.replyUsersCard).mockRestore();
+
+  await withUsersCardEnv(
+    {
+      DOGEBOT_FEISHU_USERS_CARD_MAX_RECORDS: '0',
+      DOGEBOT_FEISHU_USERS_CARD_CHUNK_SIZE: '-5',
+      DOGEBOT_FEISHU_USERS_CARD_PERSON_LIST_CHUNK_SIZE: undefined
+    },
+    () => {
+      expect(config.usersCardConfig()).toEqual({ maxRecords: 200, chunkSize: 100 });
+    }
+  );
+
+  await withUsersCardEnv(
+    {
+      DOGEBOT_FEISHU_USERS_CARD_MAX_RECORDS: '80',
+      DOGEBOT_FEISHU_USERS_CARD_CHUNK_SIZE: '80',
+      DOGEBOT_FEISHU_USERS_CARD_PERSON_LIST_CHUNK_SIZE: undefined
+    },
+    async () => {
+      expect(config.usersCardConfig()).toEqual({ maxRecords: 80, chunkSize: 80 });
+      const sdk = mockUsersSdkClient();
+      vi.spyOn(api, 'createChatMessage').mockResolvedValue('om_chat_pl_1');
+
+      const sent = await runWithFakeTimers(() => users.sendUsersCardToChat(bot, 'oc_test', makeRecords(130)));
+      expect(sent).toEqual({ personListMessageId: 'om_chat_pl_1', markdownMessageId: 'om_reply_2' });
+      expect(sdk.createdCards).toHaveLength(4);
+      expect(sdk.createdCards[0].card.body.elements[0].persons).toHaveLength(80);
+      expect(sdk.createdCards[1].card.body.elements[0].persons).toHaveLength(50);
+      expect(sdk.createdCards[2].card.body.elements[0].content.match(/<at id=/g)).toHaveLength(80);
+      expect(sdk.createdCards[3].card.body.elements[0].content.match(/<at id=/g)).toHaveLength(50);
+      expect(sdk.appendedElements).toHaveLength(0);
+      expect(sdk.replies).toEqual([
+        { targetMessageId: 'om_chat_pl_1', cardId: 'card_2', replyInThread: true, messageId: 'om_reply_1' },
+        { targetMessageId: 'om_chat_pl_1', cardId: 'card_3', replyInThread: true, messageId: 'om_reply_2' },
+        { targetMessageId: 'om_chat_pl_1', cardId: 'card_4', replyInThread: true, messageId: 'om_reply_3' }
+      ]);
+    }
+  );
+
+  await withUsersCardEnv(
+    {
+      DOGEBOT_FEISHU_USERS_CARD_MAX_RECORDS: '50',
+      DOGEBOT_FEISHU_USERS_CARD_CHUNK_SIZE: '100',
+      DOGEBOT_FEISHU_USERS_CARD_PERSON_LIST_CHUNK_SIZE: undefined
+    },
+    async () => {
+      expect(config.usersCardConfig()).toEqual({ maxRecords: 50, chunkSize: 50 });
+      const sdk = mockUsersSdkClient();
+      await runWithFakeTimers(() => users.replyUsersCard(bot, 'om_command', makeRecords(120)));
+
+      expect(sdk.createdCards).toHaveLength(6);
+      expect(sdk.createdCards.slice(0, 3).map((item) => item.card.body.elements[0].persons.length)).toEqual([50, 50, 20]);
+      expect(sdk.createdCards.slice(3, 6).map((item) => item.card.body.elements[0].content.match(/<at id=/g)?.length)).toEqual([50, 50, 20]);
+      expect(sdk.appendedElements).toHaveLength(0);
+      expect(sdk.replies.map((r) => [r.targetMessageId, r.replyInThread])).toEqual([
+        ['om_command', false],
+        ['om_reply_1', true],
+        ['om_reply_1', true],
+        ['om_reply_1', true],
+        ['om_reply_1', true],
+        ['om_reply_1', true]
+      ]);
+    }
+  );
 });

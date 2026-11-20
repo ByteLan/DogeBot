@@ -1,4 +1,5 @@
 import type { FeishuBot, AtRecord } from '../../types.js';
+import { usersCardConfig } from '../../config.js';
 import { db } from '../../db.js';
 import { feishuSdkClient } from '../client.js';
 import { createChatMessage } from '../api.js';
@@ -12,8 +13,6 @@ function rememberCard(client: object, cardId: string, bot: FeishuBot, messageId:
   cardMessages.set(client, cards);
 }
 
-const USERS_CARD_PERSON_LIST_CHUNK_SIZE = 100;
-const USERS_CARD_MAX_RECORDS = 1000;
 const CARD_REFERENCE_READY_DELAY_MS = 1000;
 
 function sleep(ms: number) {
@@ -79,8 +78,8 @@ export function listMentions(botId: number, atBy: string, newCount?: number) {
   `).all(...(newCount ? [botId, atBy, newCount] : [botId, atBy])) as AtRecord[];
 }
 
-function usersPersonListCard(records: AtRecord[]) {
-  const firstChunk = records.slice(0, USERS_CARD_PERSON_LIST_CHUNK_SIZE);
+function usersPersonListCard(records: AtRecord[], chunkSize = usersCardConfig().chunkSize) {
+  const firstChunk = records.slice(0, chunkSize);
   const elements: object[] = firstChunk.length > 0
     ? [usersPersonListElement(firstChunk, 0)]
     : [{ tag: 'markdown', content: '暂无已记录用户', element_id: 'users_empty' }];
@@ -90,8 +89,8 @@ function usersPersonListCard(records: AtRecord[]) {
   };
 }
 
-function usersMarkdownCard(records: AtRecord[]) {
-  const firstChunk = records.slice(0, USERS_CARD_PERSON_LIST_CHUNK_SIZE);
+function usersMarkdownCard(records: AtRecord[], chunkSize = usersCardConfig().chunkSize) {
+  const firstChunk = records.slice(0, chunkSize);
   const elements: object[] = firstChunk.length > 0
     ? [usersMarkdownElement(firstChunk, 0)]
     : [{ tag: 'markdown', content: '暂无已记录用户', element_id: 'users_markdown_empty' }];
@@ -127,20 +126,20 @@ function usersDividerElement(index: number) {
   };
 }
 
-function chunkUsersRecords(records: AtRecord[]) {
+function chunkUsersRecords(records: AtRecord[], chunkSize = usersCardConfig().chunkSize) {
   const chunks: AtRecord[][] = [];
-  for (let index = 0; index < records.length; index += USERS_CARD_PERSON_LIST_CHUNK_SIZE) {
-    chunks.push(records.slice(index, index + USERS_CARD_PERSON_LIST_CHUNK_SIZE));
+  for (let index = 0; index < records.length; index += chunkSize) {
+    chunks.push(records.slice(index, index + chunkSize));
   }
   return chunks;
 }
 
-/** 按每张卡片最多 USERS_CARD_MAX_RECORDS 条拆成多组,至少返回一组(空记录时返回 `[[]]`) */
-function splitIntoCardGroups(records: AtRecord[]): AtRecord[][] {
+/** 按每张卡片最多 maxRecords 条拆成多组,至少返回一组(空记录时返回 `[[]]`) */
+function splitIntoCardGroups(records: AtRecord[], maxRecords = usersCardConfig().maxRecords): AtRecord[][] {
   if (records.length === 0) return [[]];
   const groups: AtRecord[][] = [];
-  for (let i = 0; i < records.length; i += USERS_CARD_MAX_RECORDS) {
-    groups.push(records.slice(i, i + USERS_CARD_MAX_RECORDS));
+  for (let i = 0; i < records.length; i += maxRecords) {
+    groups.push(records.slice(i, i + maxRecords));
   }
   return groups;
 }
@@ -204,11 +203,12 @@ export async function replyUsersCard(
   replyMarkdownInThread = true
 ) {
   const client = await feishuSdkClient(bot);
-  const cardGroups = splitIntoCardGroups(records);
+  const { maxRecords, chunkSize } = usersCardConfig();
+  const cardGroups = splitIntoCardGroups(records, maxRecords);
 
   // --- Person List 卡片 ---
-  const firstPlChunks = chunkUsersRecords(cardGroups[0]);
-  const personListCardId = await createCardEntity(client, usersPersonListCard(cardGroups[0]));
+  const firstPlChunks = chunkUsersRecords(cardGroups[0], chunkSize);
+  const personListCardId = await createCardEntity(client, usersPersonListCard(cardGroups[0], chunkSize));
   const personListReply = await replyCardReference(bot, client, messageId, personListCardId, replyInThread);
   await appendUsersCardElements(client, personListCardId, firstPlChunks, (chunk, index) => [
     usersDividerElement(index),
@@ -218,10 +218,10 @@ export async function replyUsersCard(
   const personListMessageId = personListReply.data?.message_id;
   if (!personListMessageId) throw new Error('failed to get person list message id');
 
-  // 超出 1000 条的 person list 卡片 → reply in thread
+  // 超出单张卡片人数上限的 person list 卡片 → reply in thread
   for (let g = 1; g < cardGroups.length; g++) {
-    const chunks = chunkUsersRecords(cardGroups[g]);
-    const cardId = await createCardEntity(client, usersPersonListCard(cardGroups[g]));
+    const chunks = chunkUsersRecords(cardGroups[g], chunkSize);
+    const cardId = await createCardEntity(client, usersPersonListCard(cardGroups[g], chunkSize));
     await replyCardReference(bot, client, personListMessageId, cardId, true);
     await appendUsersCardElements(client, cardId, chunks, (chunk, index) => [
       usersDividerElement(index),
@@ -230,8 +230,8 @@ export async function replyUsersCard(
   }
 
   // --- Markdown 卡片 ---
-  const firstMdChunks = chunkUsersRecords(cardGroups[0]);
-  const markdownCardId = await createCardEntity(client, usersMarkdownCard(cardGroups[0]));
+  const firstMdChunks = chunkUsersRecords(cardGroups[0], chunkSize);
+  const markdownCardId = await createCardEntity(client, usersMarkdownCard(cardGroups[0], chunkSize));
   await replyCardReference(
     bot, client,
     replyMarkdownInThread ? personListMessageId : messageId,
@@ -240,10 +240,10 @@ export async function replyUsersCard(
   );
   await appendUsersCardElements(client, markdownCardId, firstMdChunks, (chunk, index) => [usersMarkdownElement(chunk, index)]);
 
-  // 超出 1000 条的 markdown 卡片 → reply in thread
+  // 超出单张卡片人数上限的 markdown 卡片 → reply in thread
   for (let g = 1; g < cardGroups.length; g++) {
-    const chunks = chunkUsersRecords(cardGroups[g]);
-    const cardId = await createCardEntity(client, usersMarkdownCard(cardGroups[g]));
+    const chunks = chunkUsersRecords(cardGroups[g], chunkSize);
+    const cardId = await createCardEntity(client, usersMarkdownCard(cardGroups[g], chunkSize));
     await replyCardReference(bot, client, personListMessageId, cardId, true);
     await appendUsersCardElements(client, cardId, chunks, (chunk, index) => [usersMarkdownElement(chunk, index)]);
   }
@@ -251,21 +251,22 @@ export async function replyUsersCard(
 
 export async function sendUsersCardToChat(bot: FeishuBot, chatId: string, records: AtRecord[]) {
   const client = await feishuSdkClient(bot);
-  const cardGroups = splitIntoCardGroups(records);
+  const { maxRecords, chunkSize } = usersCardConfig();
+  const cardGroups = splitIntoCardGroups(records, maxRecords);
 
   // --- Person List 卡片 ---
-  const personListCardId = await createCardEntity(client, usersPersonListCard(cardGroups[0]));
+  const personListCardId = await createCardEntity(client, usersPersonListCard(cardGroups[0], chunkSize));
   const personListMessageId = await sendCardReferenceToChat(bot, client, chatId, personListCardId);
-  const firstPlChunks = chunkUsersRecords(cardGroups[0]);
+  const firstPlChunks = chunkUsersRecords(cardGroups[0], chunkSize);
   await appendUsersCardElements(client, personListCardId, firstPlChunks, (chunk, index) => [
     usersDividerElement(index),
     usersPersonListElement(chunk, index)
   ]);
 
-  // 超出 1000 条的 person list 卡片 → reply in thread
+  // 超出单张卡片人数上限的 person list 卡片 → reply in thread
   for (let g = 1; g < cardGroups.length; g++) {
-    const chunks = chunkUsersRecords(cardGroups[g]);
-    const cardId = await createCardEntity(client, usersPersonListCard(cardGroups[g]));
+    const chunks = chunkUsersRecords(cardGroups[g], chunkSize);
+    const cardId = await createCardEntity(client, usersPersonListCard(cardGroups[g], chunkSize));
     await replyCardReference(bot, client, personListMessageId, cardId, true);
     await appendUsersCardElements(client, cardId, chunks, (chunk, index) => [
       usersDividerElement(index),
@@ -274,15 +275,15 @@ export async function sendUsersCardToChat(bot: FeishuBot, chatId: string, record
   }
 
   // --- Markdown 卡片 ---
-  const markdownCardId = await createCardEntity(client, usersMarkdownCard(cardGroups[0]));
+  const markdownCardId = await createCardEntity(client, usersMarkdownCard(cardGroups[0], chunkSize));
   const markdownReply = await replyCardReference(bot, client, personListMessageId, markdownCardId, true);
-  const firstMdChunks = chunkUsersRecords(cardGroups[0]);
+  const firstMdChunks = chunkUsersRecords(cardGroups[0], chunkSize);
   await appendUsersCardElements(client, markdownCardId, firstMdChunks, (chunk, index) => [usersMarkdownElement(chunk, index)]);
 
-  // 超出 1000 条的 markdown 卡片 → reply in thread
+  // 超出单张卡片人数上限的 markdown 卡片 → reply in thread
   for (let g = 1; g < cardGroups.length; g++) {
-    const chunks = chunkUsersRecords(cardGroups[g]);
-    const cardId = await createCardEntity(client, usersMarkdownCard(cardGroups[g]));
+    const chunks = chunkUsersRecords(cardGroups[g], chunkSize);
+    const cardId = await createCardEntity(client, usersMarkdownCard(cardGroups[g], chunkSize));
     await replyCardReference(bot, client, personListMessageId, cardId, true);
     await appendUsersCardElements(client, cardId, chunks, (chunk, index) => [usersMarkdownElement(chunk, index)]);
   }
